@@ -6,8 +6,7 @@ A canonical market data management platform built with Next.js. It acts as a cen
 
 - **Stores and manages canonical market reference data**: exchanges (MIC-based), listings, cryptocurrencies, fiat/crypto currencies, countries, cities, time zones, blockchain networks, and trading hours (including holidays and early closes).
 - **Serves a versioned public API** (`/search`, `/get`, `/update`) with API key authentication, per-key rate limiting, and usage-based billing integration with TradingGoose Studio.
-- **Provides an admin UI** for browsing, creating, editing, exporting, and uploading icons for every entity type.
-- **Supports bulk data ingestion** from normalized JSON files via loader scripts that populate the database.
+- **Provides an admin UI** for browsing, creating, editing, exporting, and uploading icons for every entity type, plus team management.
 
 ## Tech stack
 
@@ -26,8 +25,19 @@ A canonical market data management platform built with Next.js. It acts as a cen
 ```
 app/
   (auth)/           Login and signup pages
-  admin/            Admin UI (listings, exchanges, currencies, cryptos, countries,
-                    cities, timezones, chains, markets, market-hours)
+  (landing)/        Landing page
+  admin/            Admin UI pages
+    listings/       Manage listings
+    exchanges/      Manage exchanges
+    cryptos/        Manage cryptocurrencies
+    currencies/     Manage currencies
+    countries/      Manage countries
+    cities/         Manage cities
+    timezones/      Manage time zones
+    chains/         Manage blockchain networks
+    markets/        Manage market groups
+    market-hours/   Manage trading hours
+    team/           Team management (admin-only)
   api/
     auth/           Better Auth handler
     health/         Health check endpoint
@@ -46,13 +56,15 @@ app/
     markets/        Admin CRUD + export
     market-hours/   Admin CRUD + export
     time-zones/     Admin CRUD + export
-lib/market-api/
-  core/             Auth, rate limiting, billing outbox, request pipeline
-  v1/               Versioned handlers for search, get, update
+lib/
+  auth/             Better Auth server and client config
+  db/               Database client utilities
+  market-api/
+    core/           Auth, rate limiting, billing outbox, request pipeline
+    v1/             Versioned handlers for search, get, update
+  ui/               UI utilities
 packages/
   db/               Drizzle schema, client, migrations
-  market-data/      Data loaders and raw JSON datasets
-  market-logo/      Logo provider integrations (Logo.dev, TradingView, flag icons)
 uploads/            Storage abstraction (local, Azure Blob, Vercel Blob)
 ```
 
@@ -71,11 +83,11 @@ Set these in `.env`:
 
 ```bash
 DATABASE_URL=postgres://postgres:password@localhost:5432/tradinggoose
-BETTER_AUTH_SECRET=<openssl rand -hex 32>
+BETTER_AUTH_SECRET=your_secret_key          # Use: openssl rand -hex 32
 BETTER_AUTH_URL=http://localhost:3000
 NEXT_PUBLIC_APP_URL=http://localhost:3000
-INTERNAL_API_SECRET=<openssl rand -hex 32>
-OFFICIAL_TG_URL=http://localhost:3000
+INTERNAL_API_SECRET=your_internal_secret    # Use: openssl rand -hex 32
+OFFICIAL_TG_URL=http://localhost:3000       # TradingGoose Studio URL for billing
 ```
 
 Need a local database? Run PostgreSQL via Docker:
@@ -103,7 +115,7 @@ The first user to sign up becomes the admin. After that, signup is disabled.
 
 ## Public API
 
-All public API routes are accessed via `/search`, `/get`, and `/update` paths. They require an API key (created in the admin UI) and are versioned (`v1`).
+The public API is accessed via `/search`, `/get`, and `/update` paths. All routes require an API key (created in the admin UI) and are versioned (`v1`).
 
 ### Search
 
@@ -132,12 +144,12 @@ All public API routes are accessed via `/search`, `/get`, and `/update` paths. T
 | Endpoint | Description |
 |---|---|
 | `POST /update/listing-rank` | Update listing rank (also `/decay` variant) |
-| `POST /update/listing-logo` | Fetch and update listing logo from external sources |
+| `POST /update/listing-logo` | Update listing logo |
 | `POST /update/crypto-rank` | Update crypto rank (also `/decay` variant) |
-| `POST /update/crypto-logo` | Fetch and update crypto logo |
+| `POST /update/crypto-logo` | Update crypto logo |
 | `POST /update/currency-rank` | Update currency rank (also `/decay` variant) |
-| `POST /update/currency-logo` | Fetch and update currency logo |
-| `POST /update/country-logo` | Fetch and update country logo |
+| `POST /update/currency-logo` | Update currency logo |
+| `POST /update/country-logo` | Update country logo |
 
 Rate limits: 50 req/s per user key, 1,000 req/s for internal service keys.
 
@@ -153,22 +165,6 @@ Each entity (listings, cryptos, currencies, exchanges, countries, cities, chains
 | `PATCH` | `/api/{entity}/{id}` | Update |
 | `DELETE` | `/api/{entity}/{id}` | Delete |
 | `GET` | `/api/{entity}/export` | Export all as JSON |
-
-## Data ingestion
-
-Normalized JSON data files go in `packages/market-data/raw/generated/`. The loader scripts in `packages/market-data/scripts/load/` ingest them into the database:
-
-| Script | Data |
-|---|---|
-| `load-locations.ts` | Time zones, countries, cities |
-| `load-mics.ts` | Exchanges (MIC codes) |
-| `load-currencies.ts` | Currencies |
-| `load-chains.ts` | Blockchain networks |
-| `load-cryptos.ts` | Cryptocurrencies with contract addresses |
-| `load-markets.ts` | Market groups |
-| `load-listings.ts` | Canonical listings |
-| `load-market-hours.ts` | Trading sessions, holidays, early closes |
-| `run-load-all.ts` | Runs all loaders in the correct order |
 
 ## Scripts
 
