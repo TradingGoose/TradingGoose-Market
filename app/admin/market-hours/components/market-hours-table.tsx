@@ -27,6 +27,7 @@ import { DataTable } from '@/components/tables/data-table'
 import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -46,6 +47,7 @@ type MarketHoursApiResponse = {
 }
 
 export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<MarketHourRow[]>(data ?? [])
@@ -420,10 +422,12 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Market Hours
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Market Hours
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -462,19 +466,23 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
           />
         </div>
       </div>
-      <MarketHoursEditDialog
-        row={editingRow}
-        open={isEditorOpen}
-        onOpenChange={setIsEditorOpen}
-        onSave={handleMarketHoursUpdated}
-      />
-      <MarketHoursEditDialog
-        row={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleMarketHoursCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <MarketHoursEditDialog
+          row={editingRow}
+          open={isEditorOpen}
+          onOpenChange={setIsEditorOpen}
+          onSave={handleMarketHoursUpdated}
+        />
+      )}
+      {canEdit && (
+        <MarketHoursEditDialog
+          row={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleMarketHoursCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

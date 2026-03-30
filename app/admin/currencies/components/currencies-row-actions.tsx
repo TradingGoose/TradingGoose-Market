@@ -4,6 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from '@/components/ui/button'
 import { EllipsisVerticalIcon } from 'lucide-react'
 import { CurrencyRow } from './types'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 type CurrencyRowActionsProps = {
   currency: CurrencyRow
@@ -12,6 +13,9 @@ type CurrencyRowActionsProps = {
 }
 
 export function CurrencyRowActions({ currency, onEdit, onDelete }: CurrencyRowActionsProps) {
+  const canEdit = useCanEdit()
+  if (!canEdit) return null
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { db, schema } from "@tradinggoose/db";
 import { fetchExchangesFromDb, type ExchangesQuery } from "./lib";
+import { apiRequireEditor } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 
@@ -124,6 +125,9 @@ const createExchangeSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const auth = await apiRequireEditor();
+  if (auth.error) return auth.error;
+
   if (!db) {
     return NextResponse.json(
       { error: "Database connection is not configured." },

@@ -4,6 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from '@/components/ui/button'
 import { EllipsisVerticalIcon } from 'lucide-react'
 import { MarketRow } from './types'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 type MarketRowActionsProps = {
   market: MarketRow
@@ -12,6 +13,9 @@ type MarketRowActionsProps = {
 }
 
 export function MarketRowActions({ market, onEdit, onDelete }: MarketRowActionsProps) {
+  const canEdit = useCanEdit()
+  if (!canEdit) return null
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

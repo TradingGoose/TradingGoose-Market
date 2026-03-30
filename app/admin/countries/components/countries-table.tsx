@@ -26,6 +26,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildCountryColumns } from './countries-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -45,6 +46,7 @@ type CountriesApiResponse = {
 }
 
 export function CountriesTable({ data, totalCount }: CountriesTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<CountryRow[]>(data ?? [])
@@ -266,10 +268,12 @@ export function CountriesTable({ data, totalCount }: CountriesTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Country
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Country
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -308,19 +312,23 @@ export function CountriesTable({ data, totalCount }: CountriesTableProps = {}) {
           />
         </div>
       </div>
-      <CountryEditDialog
-        country={editingCountry}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleCountryUpdated}
-      />
-      <CountryEditDialog
-        country={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleCountryCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <CountryEditDialog
+          country={editingCountry}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleCountryUpdated}
+        />
+      )}
+      {canEdit && (
+        <CountryEditDialog
+          country={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleCountryCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

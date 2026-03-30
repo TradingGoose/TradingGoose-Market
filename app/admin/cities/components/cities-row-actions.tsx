@@ -4,6 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from '@/components/ui/button'
 import { EllipsisVerticalIcon } from 'lucide-react'
 import { CityRow } from './types'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 type CityRowActionsProps = {
   city: CityRow
@@ -12,6 +13,9 @@ type CityRowActionsProps = {
 }
 
 export function CityRowActions({ city, onEdit, onDelete }: CityRowActionsProps) {
+  const canEdit = useCanEdit()
+  if (!canEdit) return null
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

@@ -22,6 +22,13 @@
       "when": 1774831041207,
       "tag": "0002_salty_gravity",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1774832619585,
+      "tag": "0003_new_dorian_gray",
+      "breakpoints": true
     }
   ]
 }

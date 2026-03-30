@@ -31,6 +31,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildListingColumns } from './listings-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -50,6 +51,7 @@ type ListingsApiResponse = {
 }
 
 export function ListingsTable({ data, totalCount }: ListingsTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<ListingRow[]>(data ?? [])
@@ -443,10 +445,12 @@ export function ListingsTable({ data, totalCount }: ListingsTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Listing
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Listing
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -485,19 +489,23 @@ export function ListingsTable({ data, totalCount }: ListingsTableProps = {}) {
           />
         </div>
       </div>
-      <ListingEditDialog
-        listing={editingListing}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleListingUpdated}
-      />
-      <ListingEditDialog
-        listing={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleListingCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <ListingEditDialog
+          listing={editingListing}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleListingUpdated}
+        />
+      )}
+      {canEdit && (
+        <ListingEditDialog
+          listing={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleListingCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

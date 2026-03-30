@@ -6,23 +6,8 @@ import { getDbStatus } from "@/lib/db/status";
 
 export const runtime = "nodejs";
 
-function formatDatabaseLabel(connectionString?: string) {
-  if (!connectionString) return "Not configured";
-  try {
-    const url = new URL(connectionString);
-    const dbName = url.pathname.replace(/^\//, "") || "(database)";
-    const host = url.port ? `${url.hostname}:${url.port}` : url.hostname;
-    return `${host} · ${dbName}`;
-  } catch {
-    return "Invalid database URL";
-  }
-}
-
 export default async function HomePage() {
   const status = await getDbStatus();
-  const dbLabel = formatDatabaseLabel(
-    process.env.DATABASE_POOL_URL ?? process.env.DATABASE_URL
-  );
 
   return (
     <main className="container flex min-h-0 flex-col gap-20 pt-12">
@@ -93,8 +78,7 @@ export default async function HomePage() {
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between rounded-lg border px-3 py-2">
               <div>
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Target</p>
-                <p className="text-sm font-medium text-foreground">{dbLabel}</p>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
               </div>
               <div className="flex items-center gap-2 text-sm">
                 {status.ok ? (

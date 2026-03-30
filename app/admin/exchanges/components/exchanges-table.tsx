@@ -31,6 +31,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildExchangeColumns } from './exchanges-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -50,6 +51,7 @@ type ExchangesApiResponse = {
 }
 
 export function ExchangesTable({ data, totalCount }: ExchangesTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<ExchangeRow[]>(data ?? [])
@@ -450,10 +452,12 @@ export function ExchangesTable({ data, totalCount }: ExchangesTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add exchange
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add exchange
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -492,19 +496,23 @@ export function ExchangesTable({ data, totalCount }: ExchangesTableProps = {}) {
           />
         </div>
       </div>
-      <ExchangeEditDialog
-        exchange={editingExchange}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleExchangeUpdated}
-      />
-      <ExchangeEditDialog
-        exchange={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleExchangeCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <ExchangeEditDialog
+          exchange={editingExchange}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleExchangeUpdated}
+        />
+      )}
+      {canEdit && (
+        <ExchangeEditDialog
+          exchange={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleExchangeCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { db, schema } from "@tradinggoose/db";
 import { fetchTimeZonesFromDb } from "../lib";
+import { apiRequireEditor } from "@/lib/auth/session";
 
 const updateTimeZoneSchema = z
   .object({
@@ -20,6 +21,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
+  const auth = await apiRequireEditor();
+  if (auth.error) return auth.error;
+
   if (!db) {
     return NextResponse.json(
       { error: "Database connection is not configured." },
@@ -114,6 +118,9 @@ export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
+  const auth = await apiRequireEditor();
+  if (auth.error) return auth.error;
+
   if (!db) {
     return NextResponse.json(
       { error: "Database connection is not configured." },

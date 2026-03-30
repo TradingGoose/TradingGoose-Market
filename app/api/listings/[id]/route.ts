@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { deleteFile, extractStorageKey } from "@uploads/core/storage-client";
 import { fetchListingsFromDb } from "../lib";
+import { apiRequireEditor } from "@/lib/auth/session";
 
 const iconUrlSchema = z.union([
   z.string().trim().url(),
@@ -122,6 +123,9 @@ async function resolveExchIds(values: string[]) {
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await apiRequireEditor();
+  if (auth.error) return auth.error;
+
   const { id: listingId } = await params;
   if (!db) {
     return NextResponse.json(
@@ -323,6 +327,9 @@ export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
+  const auth = await apiRequireEditor();
+  if (auth.error) return auth.error;
+
   if (!db) {
     return NextResponse.json(
       { error: "Database connection is not configured." },

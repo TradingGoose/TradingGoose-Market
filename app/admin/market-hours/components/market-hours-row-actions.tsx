@@ -4,6 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from '@/components/ui/button'
 import { EllipsisVerticalIcon } from 'lucide-react'
 import { MarketHourRow } from './types'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 type MarketHourRowActionsProps = {
   row: MarketHourRow
@@ -12,6 +13,9 @@ type MarketHourRowActionsProps = {
 }
 
 export function MarketHourRowActions({ row, onEdit, onDelete }: MarketHourRowActionsProps) {
+  const canEdit = useCanEdit()
+  if (!canEdit) return null
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

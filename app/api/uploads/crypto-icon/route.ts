@@ -4,6 +4,7 @@ import mime from "mime";
 
 import { db, schema } from "@tradinggoose/db";
 import { deleteFile, extractStorageKey, uploadFileWithKey } from "@uploads/core/storage-client";
+import { apiRequireEditor } from "@/lib/auth/session";
 
 const MAX_SIZE_BYTES = 512 * 1024; // 512 KB
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"];
@@ -11,6 +12,9 @@ const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "im
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  const auth = await apiRequireEditor();
+  if (auth.error) return auth.error;
+
   if (!db) {
     return NextResponse.json({ error: "Database not configured." }, { status: 503 });
   }

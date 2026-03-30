@@ -27,6 +27,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildMarketColumns } from './markets-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -46,6 +47,7 @@ type MarketsApiResponse = {
 }
 
 export function MarketsTable({ data, totalCount }: MarketsTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<MarketRow[]>(data ?? [])
@@ -499,10 +501,12 @@ export function MarketsTable({ data, totalCount }: MarketsTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Market
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Market
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -541,19 +545,23 @@ export function MarketsTable({ data, totalCount }: MarketsTableProps = {}) {
           />
         </div>
       </div>
-      <MarketEditDialog
-        market={editingMarket}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleMarketUpdated}
-      />
-      <MarketEditDialog
-        market={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleMarketCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <MarketEditDialog
+          market={editingMarket}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleMarketUpdated}
+        />
+      )}
+      {canEdit && (
+        <MarketEditDialog
+          market={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleMarketCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

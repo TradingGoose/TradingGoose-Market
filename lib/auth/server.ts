@@ -1,3 +1,4 @@
+import { eq, and } from "drizzle-orm";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
@@ -44,13 +45,44 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true
   },
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => {
+          // First user ever created becomes admin
+          if (!(await hasExistingUsers())) {
+            return { data: { ...user, role: "admin" } };
+          }
+        }
+      }
+    }
+  },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
       const path = ctx.path?.startsWith("/") ? ctx.path : `/${ctx.path ?? ""}`;
       if (!path.startsWith("/sign-up")) return;
-      if (await hasExistingUsers()) {
-        throw new Error("Sign up is disabled.");
+
+      // First user can always sign up
+      if (!(await hasExistingUsers())) return;
+
+      // Allow signup if there's a valid pending invitation for this email
+      const body = ctx.body as { email?: string } | undefined;
+      if (body?.email) {
+        const [inv] = await database
+          .select({ id: schema.invitation.id })
+          .from(schema.invitation)
+          .where(
+            and(
+              eq(schema.invitation.email, body.email),
+              eq(schema.invitation.status, "pending")
+            )
+          )
+          .limit(1);
+
+        if (inv) return; // Allow signup for invited users
       }
+
+      throw new Error("Sign up is disabled.");
     })
   },
   plugins: [

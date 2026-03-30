@@ -24,6 +24,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildChainColumns } from './chains-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -43,6 +44,7 @@ type ChainsApiResponse = {
 }
 
 export function ChainsTable({ data, totalCount }: ChainsTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<ChainRow[]>(data ?? [])
@@ -264,10 +266,12 @@ export function ChainsTable({ data, totalCount }: ChainsTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-            <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-              <PlusIcon className='h-4 w-4' />
-              Add Chain
-            </Button>
+            {canEdit && (
+              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                <PlusIcon className='h-4 w-4' />
+                Add Chain
+              </Button>
+            )}
             </div>
           </div>
           <DataTable
@@ -306,19 +310,23 @@ export function ChainsTable({ data, totalCount }: ChainsTableProps = {}) {
           />
         </div>
       </div>
-      <ChainEditDialog
-        chain={editingChain}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleChainUpdated}
-      />
-      <ChainEditDialog
-        chain={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleChainCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <ChainEditDialog
+          chain={editingChain}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleChainUpdated}
+        />
+      )}
+      {canEdit && (
+        <ChainEditDialog
+          chain={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleChainCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

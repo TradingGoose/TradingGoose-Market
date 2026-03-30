@@ -24,6 +24,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildCryptoColumns } from './cryptos-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -43,6 +44,7 @@ type CryptosApiResponse = {
 }
 
 export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<CryptoRow[]>(data ?? [])
@@ -325,10 +327,12 @@ export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Crypto
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Crypto
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -367,19 +371,23 @@ export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
           />
         </div>
       </div>
-      <CryptoEditDialog
-        crypto={editingCrypto}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleCryptoUpdated}
-      />
-      <CryptoEditDialog
-        crypto={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleCryptoCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <CryptoEditDialog
+          crypto={editingCrypto}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleCryptoUpdated}
+        />
+      )}
+      {canEdit && (
+        <CryptoEditDialog
+          crypto={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleCryptoCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

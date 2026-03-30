@@ -24,6 +24,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildTimeZoneColumns } from './timezones-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -43,6 +44,7 @@ type TimeZonesApiResponse = {
 }
 
 export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<TimeZoneRow[]>(data ?? [])
@@ -264,10 +266,12 @@ export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Time Zone
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Time Zone
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -306,19 +310,23 @@ export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
           />
         </div>
       </div>
-      <TimeZoneEditDialog
-        timeZone={editingTimeZone}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleTimeZoneUpdated}
-      />
-      <TimeZoneEditDialog
-        timeZone={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleTimeZoneCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <TimeZoneEditDialog
+          timeZone={editingTimeZone}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleTimeZoneUpdated}
+        />
+      )}
+      {canEdit && (
+        <TimeZoneEditDialog
+          timeZone={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleTimeZoneCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

@@ -27,6 +27,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildCityColumns } from './cities-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -46,6 +47,7 @@ type CitiesApiResponse = {
 }
 
 export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<CityRow[]>(data ?? [])
@@ -432,10 +434,12 @@ export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add City
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add City
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -474,19 +478,23 @@ export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
           />
         </div>
       </div>
-      <CityEditDialog
-        city={editingCity}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleCityUpdated}
-      />
-      <CityEditDialog
-        city={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleCityCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <CityEditDialog
+          city={editingCity}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleCityUpdated}
+        />
+      )}
+      {canEdit && (
+        <CityEditDialog
+          city={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleCityCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

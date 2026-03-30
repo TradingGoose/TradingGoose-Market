@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@azure/storage-blob": "^12.27.0",
-    "@vercel/blob": "^2.0.0",
     "@hookform/resolvers": "^4.1.1",
     "@radix-ui/react-avatar": "^1.0.4",
     "@radix-ui/react-checkbox": "^1.0.5",
@@ -28,7 +27,9 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-switch": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@react-email/components": "1.0.10",
     "@tanstack/react-table": "^8.20.5",
+    "@vercel/blob": "^2.0.0",
     "better-auth": "^1.4.7",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -53,6 +54,7 @@
     "react-dom": "18.2.0",
     "react-hook-form": "^7.54.2",
     "react-simple-code-editor": "^0.14.1",
+    "resend": "6.9.4",
     "tailwind-merge": "^3.4.0",
     "xlsx": "^0.18.5",
     "zod": "^3.23.8"

@@ -10,23 +10,23 @@ import {
   Sun,
   Users
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { authClient } from "@/lib/auth/client";
+import type { SettingsSection } from "@/components/settings-dialog/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import {
   SidebarMenu,
   SidebarMenuButton,
-  SidebarMenuItem,
-  useSidebar
+  SidebarMenuItem
 } from "@/components/ui/sidebar";
 
 export type UserMenuUser = {
@@ -46,16 +46,35 @@ function getInitials(name: string): string {
     .toUpperCase();
 }
 
-const THEME_ITEMS = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "system", label: "System", icon: Monitor },
-  { value: "dark", label: "Dark", icon: Moon }
-] as const;
+type ThemeOption = {
+  value: "light" | "system" | "dark";
+  label: string;
+  Icon: LucideIcon;
+};
 
-export function UserMenu({ user }: { user: UserMenuUser }) {
-  const { isMobile } = useSidebar();
+const THEME_OPTIONS: ThemeOption[] = [
+  { value: "light", label: "Light", Icon: Sun },
+  { value: "system", label: "System", Icon: Monitor },
+  { value: "dark", label: "Dark", Icon: Moon }
+];
+
+const THEME_ITEM_BASE =
+  "relative flex h-9 flex-1 items-center justify-center gap-0 rounded-md border px-0 py-0 text-sm transition-colors focus:bg-accent focus:text-accent-foreground";
+const THEME_ITEM_ACTIVE = "border-border bg-accent text-accent-foreground shadow-sm";
+const THEME_ITEM_INACTIVE =
+  "border-transparent text-muted-foreground hover:bg-card hover:text-foreground";
+
+interface UserMenuProps {
+  user: UserMenuUser;
+  onOpenSettings?: (section: SettingsSection) => void;
+}
+
+export function UserMenu({ user, onOpenSettings }: UserMenuProps) {
   const { theme, setTheme } = useTheme();
   const [isSigningOut, setIsSigningOut] = useState(false);
+
+  const currentThemeLabel =
+    THEME_OPTIONS.find((o) => o.value === theme)?.label ?? "Theme";
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
@@ -78,88 +97,83 @@ export function UserMenu({ user }: { user: UserMenuUser }) {
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
-              <Avatar className="h-8 w-8 rounded-lg">
+              <Avatar className="h-8 w-8 rounded-md">
                 {user.image && <AvatarImage src={user.image} alt={user.name} />}
-                <AvatarFallback className="rounded-lg text-xs">
+                <AvatarFallback className="rounded-md text-xs">
                   {getInitials(user.name)}
                 </AvatarFallback>
               </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+              <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">{user.name}</span>
-                <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                <span className="truncate text-xs">{user.email}</span>
               </div>
-              <ChevronsUpDown className="ml-auto size-4 group-data-[collapsible=icon]:hidden" />
+              <ChevronsUpDown className="ml-auto size-4" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
-            side={isMobile ? "bottom" : "right"}
-            align="end"
             sideOffset={4}
+            align="start"
           >
-            <DropdownMenuLabel className="p-0 font-normal">
-              <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                <Avatar className="h-8 w-8 rounded-lg">
-                  {user.image && <AvatarImage src={user.image} alt={user.name} />}
-                  <AvatarFallback className="rounded-lg text-xs">
-                    {getInitials(user.name)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">{user.name}</span>
-                  <span className="truncate text-xs text-muted-foreground">{user.email}</span>
-                </div>
-              </div>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
+            {/* Theme toggle row */}
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="text-xs text-muted-foreground">
-                Theme
-              </DropdownMenuLabel>
-              <div className="flex items-center gap-1 px-2 py-1">
-                {THEME_ITEMS.map((item) => (
-                  <button
-                    key={item.value}
-                    onClick={() => setTheme(item.value)}
-                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors ${
-                      theme === item.value
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    }`}
-                  >
-                    <item.icon className="size-3.5" />
-                    {item.label}
-                  </button>
-                ))}
+              <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5">
+                <DropdownMenuItem className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  {currentThemeLabel}
+                </DropdownMenuItem>
+                {THEME_OPTIONS.map(({ value, label, Icon }) => {
+                  const isActive = theme === value;
+                  return (
+                    <DropdownMenuItem
+                      key={value}
+                      aria-label={`${label} theme`}
+                      className={`${THEME_ITEM_BASE} ${isActive ? THEME_ITEM_ACTIVE : THEME_ITEM_INACTIVE}`}
+                      onSelect={(e) => {
+                        if (isActive) {
+                          e.preventDefault();
+                          return;
+                        }
+                        setTheme(value);
+                      }}
+                      title={label}
+                    >
+                      <Icon className="size-4" />
+                    </DropdownMenuItem>
+                  );
+                })}
               </div>
             </DropdownMenuGroup>
-            {isAdmin && (
+
+            {/* Team management (admin only) */}
+            {isAdmin && onOpenSettings && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     onSelect={(e) => {
                       e.preventDefault();
-                      window.location.assign("/admin/team");
+                      onOpenSettings("team");
                     }}
                   >
-                    <Users className="mr-2 size-4" />
+                    <Users />
                     Team Management
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </>
             )}
+
+            {/* Logout */}
             <DropdownMenuSeparator />
             <DropdownMenuItem
+              disabled={isSigningOut}
               onSelect={(e) => {
                 e.preventDefault();
                 handleSignOut();
               }}
-              disabled={isSigningOut}
               className="text-destructive focus:text-destructive"
             >
-              <LogOut className="mr-2 size-4" />
-              {isSigningOut ? "Signing out..." : "Log out"}
+              <LogOut className="text-destructive" />
+              {isSigningOut ? "Logging out..." : "Log out"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

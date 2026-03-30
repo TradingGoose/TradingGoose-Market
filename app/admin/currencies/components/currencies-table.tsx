@@ -24,6 +24,7 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildCurrencyColumns } from './currencies-columns'
 import { usePagination } from '@/hooks/use-pagination'
+import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -43,6 +44,7 @@ type CurrenciesApiResponse = {
 }
 
 export function CurrenciesTable({ data, totalCount }: CurrenciesTableProps = {}) {
+  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<CurrencyRow[]>(data ?? [])
@@ -264,10 +266,12 @@ export function CurrenciesTable({ data, totalCount }: CurrenciesTableProps = {})
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                <PlusIcon className='h-4 w-4' />
-                Add Currency
-              </Button>
+              {canEdit && (
+                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                  <PlusIcon className='h-4 w-4' />
+                  Add Currency
+                </Button>
+              )}
             </div>
           </div>
           <DataTable
@@ -306,19 +310,23 @@ export function CurrenciesTable({ data, totalCount }: CurrenciesTableProps = {})
           />
         </div>
       </div>
-      <CurrencyEditDialog
-        currency={editingCurrency}
-        open={isEditorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onSave={handleCurrencyUpdated}
-      />
-      <CurrencyEditDialog
-        currency={null}
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onSave={handleCurrencyCreated}
-        mode='create'
-      />
+      {canEdit && (
+        <CurrencyEditDialog
+          currency={editingCurrency}
+          open={isEditorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onSave={handleCurrencyUpdated}
+        />
+      )}
+      {canEdit && (
+        <CurrencyEditDialog
+          currency={null}
+          open={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          onSave={handleCurrencyCreated}
+          mode='create'
+        />
+      )}
     </>
   )
 }

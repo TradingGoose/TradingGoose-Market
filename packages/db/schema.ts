@@ -108,6 +108,28 @@ export const verification = pgTable(
   })
 );
 
+export const invitation = pgTable(
+  "invitation",
+  {
+    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
+    email: text("email").notNull(),
+    role: text("role").notNull().default("viewer"),
+    token: text("token").notNull().unique(),
+    invitedBy: text("invited_by")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`)
+  },
+  (table) => ({
+    tokenIdx: uniqueIndex("invitation_token_idx").on(table.token),
+    emailIdx: index("invitation_email_idx").on(table.email),
+    statusIdx: index("invitation_status_idx").on(table.status)
+  })
+);
+
 export const timeZones = pgTable(
   "time_zones",
   {
