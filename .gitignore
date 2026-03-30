@@ -1,0 +1,13 @@
+node_modules
+.next
+.env
+uploads/.turbo
+.vercel
+.env*.local
+*/*/.turbo
+/.turbo
+*/*/dist
+/uploads/dist
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+.env.local.vercel

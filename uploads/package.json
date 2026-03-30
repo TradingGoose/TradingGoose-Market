@@ -1,0 +1,28 @@
+{
+  "name": "@tradinggoose/market-uploads",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core/storage-client": {
+      "types": "./dist/core/storage-client.d.ts",
+      "default": "./dist/core/storage-client.js"
+    },
+    "./core/serve": {
+      "types": "./dist/core/serve.d.ts",
+      "default": "./dist/core/serve.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@azure/storage-blob": "^12.27.0",
+    "@vercel/blob": "^2.0.0"
+  }
+}

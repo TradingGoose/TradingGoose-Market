@@ -1,0 +1,153 @@
+import { NextResponse } from "next/server";
+import { sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
+
+import { db, schema } from "@tradinggoose/db";
+import { fetchCountriesFromDb, type CountriesQuery } from "./lib";
+
+export const runtime = "nodejs";
+
+type CountryOptionRow = {
+  id: string;
+  code: string;
+  name: string;
+  iconUrl: string | null;
+};
+
+function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const normalized = Math.max(Math.floor(parsed), 1);
+  if (typeof max === "number") return Math.min(normalized, max);
+  return normalized;
+}
+
+export async function GET(request: Request) {
+  try {
+    if (!db) {
+      return NextResponse.json(
+        { data: [], error: "Database connection is not configured." },
+        { status: 503 }
+      );
+    }
+
+    const { searchParams } = new URL(request.url);
+    const pageParam = searchParams.get("page");
+    const pageSizeParam = searchParams.get("pageSize");
+    const isTableRequest = pageParam !== null || pageSizeParam !== null;
+
+    // Option mode for selects
+    if (!isTableRequest) {
+      const query = searchParams.get("query")?.trim();
+      const limit = Math.min(Math.max(Number(searchParams.get("limit") ?? "200"), 1), 500);
+
+      const filters: SQL[] = [];
+      if (query) {
+        filters.push(sql`(code ILIKE ${`%${query}%`} OR name ILIKE ${`%${query}%`})`);
+      }
+
+      const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
+
+      const rows = (await db.execute(sql`
+        SELECT id, code, name, icon_url AS "iconUrl"
+        FROM countries
+        ${whereClause}
+        ORDER BY name ASC
+        LIMIT ${limit}
+      `)) as CountryOptionRow[];
+
+      return NextResponse.json({ data: rows });
+    }
+
+    // Table (paginated) mode
+    const page = parsePositiveInt(pageParam, 1);
+    const pageSize = parsePositiveInt(pageSizeParam, 10, 100);
+    const id = searchParams.get("id")?.trim();
+    const code = searchParams.get("code")?.trim();
+    const name = searchParams.get("name")?.trim();
+
+    const query: CountriesQuery = {
+      page,
+      pageSize,
+      id,
+      code,
+      name
+    };
+
+    const payload = await fetchCountriesFromDb(query);
+
+    return NextResponse.json(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[countries] API error:", message);
+    return NextResponse.json({ data: [], total: 0, error: message }, { status: 500 });
+  }
+}
+
+const createCountrySchema = z.object({
+  code: z.string().trim().min(2).max(10),
+  name: z.string().trim().min(1).max(255),
+  iconUrl: z.union([z.string().url().trim(), z.literal(""), z.null()]).optional()
+});
+
+export async function POST(request: Request) {
+  if (!db) {
+    return NextResponse.json(
+      { error: "Database connection is not configured." },
+      { status: 503 }
+    );
+  }
+
+  let payload: z.infer<typeof createCountrySchema>;
+  try {
+    const body = await request.json();
+    if (body && typeof body === "object" && "iconUrl" in body) {
+      const iconUrl = (body as { iconUrl?: unknown }).iconUrl;
+      if (typeof iconUrl === "string" ? iconUrl.trim().length > 0 : iconUrl != null) {
+        return NextResponse.json(
+          { error: "iconUrl can only be set via the upload endpoint." },
+          { status: 400 }
+        );
+      }
+    }
+    payload = createCountrySchema.parse(body);
+  } catch (error) {
+    const message = error instanceof z.ZodError ? error.errors[0]?.message ?? "Invalid payload." : "Invalid payload.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+
+  const code = payload.code.trim().toUpperCase();
+  const name = payload.name.trim();
+  const iconUrl = null;
+
+  let newId: string | null = null;
+  try {
+    const result = await db
+      .insert(schema.countries)
+      .values({ code, name, iconUrl })
+      .returning({ id: schema.countries.id });
+
+    newId = result[0]?.id ?? null;
+  } catch (error: any) {
+    if (error?.code === "23505") {
+      return NextResponse.json({ error: "Country already exists." }, { status: 409 });
+    }
+    const message = error instanceof Error ? error.message : "Failed to create country.";
+    console.error("[countries:create] API error:", message);
+    return NextResponse.json({ error: "Failed to create country." }, { status: 500 });
+  }
+
+  if (!newId) {
+    return NextResponse.json({ error: "Failed to create country." }, { status: 500 });
+  }
+
+  const refreshed = await fetchCountriesFromDb({
+    page: 1,
+    pageSize: 1,
+    id: newId
+  });
+
+  const createdCountry = refreshed.data.find(row => row.id === newId) ?? null;
+
+  return NextResponse.json({ data: createdCountry }, { status: 201 });
+}

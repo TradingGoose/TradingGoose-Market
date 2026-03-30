@@ -1,0 +1,280 @@
+'use client'
+
+import type { ReactElement } from 'react'
+import { useEffect, useRef, useState } from 'react'
+
+import { highlight, languages } from 'prismjs'
+import 'prismjs/components/prism-javascript'
+import 'prismjs/components/prism-json'
+import 'prismjs/themes/prism.css'
+import { Wand2 } from 'lucide-react'
+import Editor from 'react-simple-code-editor'
+
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/ui/utils'
+
+export type CodeEditorProps = {
+  value: string
+  onChange: (value: string) => void
+  language: 'javascript' | 'json'
+  placeholder?: string
+  className?: string
+  minHeight?: string
+  highlightVariables?: boolean
+  onKeyDown?: (event: React.KeyboardEvent) => void
+  disabled?: boolean
+  schemaParameters?: Array<{ name: string; type: string; description: string; required: boolean }>
+  showWandButton?: boolean
+  onWandClick?: () => void
+  wandButtonDisabled?: boolean
+}
+
+export function CodeEditor({
+  value,
+  onChange,
+  language,
+  placeholder = '',
+  className = '',
+  minHeight = '360px',
+  highlightVariables = true,
+  onKeyDown,
+  disabled = false,
+  schemaParameters = [],
+  showWandButton = false,
+  onWandClick,
+  wandButtonDisabled = false
+}: CodeEditorProps) {
+  const [code, setCode] = useState(value)
+  const [visualLineHeights, setVisualLineHeights] = useState<number[]>([])
+  const [isCollapsed, setIsCollapsed] = useState(false)
+
+  const editorRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setCode(value)
+  }, [value])
+
+  useEffect(() => {
+    if (!editorRef.current) return
+
+    const calculateVisualLines = () => {
+      const preElement = editorRef.current?.querySelector('pre')
+      if (!preElement) return
+
+      const lines = code.split('\n')
+      const newVisualLineHeights: number[] = []
+
+      const container = document.createElement('div')
+      container.style.cssText = `
+        position: absolute;
+        visibility: hidden;
+        width: ${preElement.clientWidth}px;
+        font-family: ${window.getComputedStyle(preElement).fontFamily};
+        font-size: ${window.getComputedStyle(preElement).fontSize};
+        padding: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      `
+      document.body.appendChild(container)
+
+      lines.forEach(line => {
+        const lineDiv = document.createElement('div')
+        lineDiv.textContent = line || ' '
+        container.appendChild(lineDiv)
+        const actualHeight = lineDiv.getBoundingClientRect().height
+        const lineUnits = Math.ceil(actualHeight / 21)
+        newVisualLineHeights.push(lineUnits)
+        container.removeChild(lineDiv)
+      })
+
+      document.body.removeChild(container)
+      setVisualLineHeights(newVisualLineHeights)
+    }
+
+    const resizeObserver = new ResizeObserver(calculateVisualLines)
+    resizeObserver.observe(editorRef.current)
+
+    return () => resizeObserver.disconnect()
+  }, [code])
+
+  const lineCount = code.split('\n').length
+  const gutterWidth = lineCount >= 100 ? '40px' : lineCount >= 10 ? '35px' : '30px'
+
+  const renderLineNumbers = () => {
+    const numbers: ReactElement[] = []
+    let lineNumber = 1
+
+    visualLineHeights.forEach(height => {
+      for (let i = 0; i < height; i++) {
+        numbers.push(
+          <div
+            key={`${lineNumber}-${i}`}
+            className={cn('text-muted-foreground text-xs leading-[21px]', i > 0 && 'invisible')}
+          >
+            {lineNumber}
+          </div>
+        )
+      }
+      lineNumber++
+    })
+
+    return numbers
+  }
+
+  const customHighlight = (code: string) => {
+    if (!highlightVariables || language !== 'javascript') {
+      return highlight(code, languages[language], language)
+    }
+
+    let highlighted = highlight(code, languages[language], language)
+
+    type SyntaxHighlight = {
+      start: number
+      end: number
+      replacement: string
+    }
+    const highlights: SyntaxHighlight[] = []
+
+    let match
+    const envVarRegex = /\{\{([^}]+)\}\}/g
+    while ((match = envVarRegex.exec(highlighted)) !== null) {
+      highlights.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        replacement: `<span class="text-blue-500">${match[0]}</span>`
+      })
+    }
+
+    if (!language.includes('html')) {
+      const tagRegex = /<([^>\s/]+)>/g
+      while ((match = tagRegex.exec(highlighted)) !== null) {
+        if (!match[0].startsWith('<!--') && !match[0].includes('</')) {
+          const escaped = `&lt;${match[1]}&gt;`
+          highlights.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            replacement: `<span class="text-blue-500">${escaped}</span>`
+          })
+        }
+      }
+    }
+
+    if (schemaParameters.length > 0) {
+      schemaParameters.forEach(param => {
+        const escapedName = param.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const paramRegex = new RegExp(`\\b(${escapedName})\\b`, 'g')
+        while ((match = paramRegex.exec(highlighted)) !== null) {
+          let insideTag = false
+          let pos = match.index - 1
+          while (pos >= 0) {
+            if (highlighted[pos] === '>') break
+            if (highlighted[pos] === '<') {
+              insideTag = true
+              break
+            }
+            pos--
+          }
+
+          if (!insideTag) {
+            highlights.push({
+              start: match.index,
+              end: match.index + match[0].length,
+              replacement: `<span class="text-green-600 font-medium">${match[0]}</span>`
+            })
+          }
+        }
+      })
+    }
+
+    highlights.sort((a, b) => b.start - a.start)
+
+    highlights.forEach(({ start, end, replacement }) => {
+      highlighted = highlighted.slice(0, start) + replacement + highlighted.slice(end)
+    })
+
+    return highlighted
+  }
+
+  return (
+    <div className={cn('group relative min-h-100 rounded-md border bg-background font-mono text-sm', className)}>
+      {showWandButton && onWandClick && (
+        <Button
+          variant='ghost'
+          size='icon'
+          onClick={onWandClick}
+          disabled={wandButtonDisabled}
+          aria-label='Generate with AI'
+          className='absolute right-3 top-2 z-10 h-8 w-8 rounded-full border border-transparent bg-muted/80 text-muted-foreground opacity-0 shadow-sm transition-all duration-200 hover:border-primary/20 hover:bg-card hover:text-foreground hover:shadow group-hover:opacity-100'
+        >
+          <Wand2 className='h-4 w-4' />
+        </Button>
+      )}
+
+      {!showWandButton && code.split('\n').length > 5 && (
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className={cn(
+            'absolute right-2 top-2 z-10 rounded-md p-1.5',
+            'bg-accent text-muted-foreground hover:bg-card hover:text-foreground',
+            'opacity-0 transition-opacity group-hover:opacity-100',
+            'font-medium text-xs'
+          )}
+        >
+          {isCollapsed ? 'Expand' : 'Collapse'}
+        </button>
+      )}
+
+      <div
+        className='absolute bottom-0 left-0 top-0 flex select-none flex-col items-end overflow-hidden bg-muted/30 pt-3 pr-3'
+        aria-hidden='true'
+        style={{ width: gutterWidth }}
+      >
+        {renderLineNumbers()}
+      </div>
+
+      <div
+        className={cn('relative mt-0 pt-0', isCollapsed && 'max-h-[126px] overflow-hidden')}
+        ref={editorRef}
+        style={{
+          minHeight,
+          paddingLeft: gutterWidth
+        }}
+      >
+        {code.length === 0 && placeholder && (
+          <pre
+            className='pointer-events-none absolute top-[12px] select-none overflow-visible whitespace-pre-wrap text-muted-foreground/50'
+            style={{ left: `calc(${gutterWidth} + 12px)`, fontFamily: 'inherit', margin: 0 }}
+          >
+            {placeholder}
+          </pre>
+        )}
+
+        <Editor
+          value={code}
+          onValueChange={newCode => {
+            if (!isCollapsed) {
+              setCode(newCode)
+              onChange(newCode)
+            }
+          }}
+          onKeyDown={onKeyDown}
+          highlight={codeValue => customHighlight(codeValue)}
+          padding={12}
+          disabled={disabled}
+          style={{
+            fontFamily: 'inherit',
+            minHeight,
+            lineHeight: '21px',
+            height: '100%'
+          }}
+          className={cn('h-full focus:outline-none', isCollapsed && 'pointer-events-none select-none')}
+          textareaClassName={cn(
+            'focus:outline-none focus:ring-0 bg-transparent',
+            '!min-h-full !h-full resize-none !block',
+            (isCollapsed || disabled) && 'pointer-events-none'
+          )}
+        />
+      </div>
+    </div>
+  )
+}

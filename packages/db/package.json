@@ -1,0 +1,31 @@
+{
+  "name": "@tradinggoose/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "db:generate": "bunx drizzle-kit generate --config=./drizzle.config.ts",
+    "db:migrate": "bunx drizzle-kit migrate --config=./drizzle.config.ts",
+    "db:studio": "bunx drizzle-kit studio --config=./drizzle.config.ts",
+    "type-check": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.44.5",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

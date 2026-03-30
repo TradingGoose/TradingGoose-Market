@@ -1,0 +1,12 @@
+# Bun Configuration File
+
+[install]
+exact = true
+registry = "https://registry.npmjs.org/"
+cache = true
+strict = false
+frozen = false
+linker = "hoisted"
+
+[build]
+minify = true

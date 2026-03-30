@@ -1,0 +1,286 @@
+import { NextResponse } from "next/server";
+import { sql } from "drizzle-orm";
+import { z } from "zod";
+
+import { db, schema } from "@tradinggoose/db";
+import { fetchListingsFromDb, type ListingsQuery } from "./lib";
+
+export const runtime = "nodejs";
+
+function parseBoolean(value?: string | null) {
+  if (!value) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
+function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const normalized = Math.max(Math.floor(parsed), 1);
+  if (typeof max === "number") return Math.min(normalized, max);
+  return normalized;
+}
+
+function normalizeNullableString(value: string | null | undefined) {
+  if (value === undefined) return undefined;
+  if (value === "") return null;
+  return value;
+}
+
+function extractPgErrorCode(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  const anyError = error as { code?: string; cause?: { code?: string } };
+  return anyError.code ?? anyError.cause?.code ?? null;
+}
+
+function extractPgConstraint(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  const anyError = error as { constraint?: string; cause?: { constraint?: string } };
+  return anyError.constraint ?? anyError.cause?.constraint ?? null;
+}
+
+async function resolveCurrencyId(value: string | null) {
+  if (!db) return null;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const result = (await db.execute(sql`
+    SELECT id FROM currencies
+    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
+    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
+    LIMIT 1
+  `)) as { id: string }[];
+
+  return result[0]?.id ?? null;
+}
+
+async function resolveExchId(value: string | null) {
+  if (!db) return null;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const rows = (await db.execute(sql`
+    SELECT id
+    FROM exchanges
+    WHERE id = ${trimmed}
+    LIMIT 1
+  `)) as { id: string }[];
+
+  return rows[0]?.id ?? null;
+}
+
+async function resolveMarketId(value: string | null) {
+  if (!db) return null;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const rows = (await db.execute(sql`
+    SELECT id
+    FROM markets
+    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
+    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
+    LIMIT 1
+  `)) as { id: string }[];
+
+  return rows[0]?.id ?? null;
+}
+
+async function resolveExchIds(values: string[]) {
+  if (!db) return [] as string[];
+  const tokens = Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  );
+  if (!tokens.length) return [] as string[];
+
+  const rows = (await db.execute(sql`
+    SELECT id
+    FROM exchanges
+    WHERE id IN (${sql.join(tokens.map((token) => sql`${token}`), sql`, `)})
+  `)) as { id: string }[];
+
+  const idSet = new Set(rows.map((row) => row.id));
+  return tokens.filter((token) => idSet.has(token));
+}
+
+const iconUrlSchema = z.union([
+  z.string().trim().url(),
+  z.string().trim().regex(/^\/|^api\/files\/serve\/|^icons\//i),
+  z.literal(""),
+  z.null()
+]);
+
+const createListingSchema = z.object({
+  base: z.string().trim().min(1).max(64),
+  quote: z.union([z.string().trim().max(32), z.literal(""), z.null()]).optional(),
+  name: z.union([z.string().trim().max(255), z.literal(""), z.null()]).optional(),
+  marketId: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional(),
+  primaryExchId: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional(),
+  secondaryExchIds: z.array(z.string().trim().min(1)).max(50).optional(),
+  active: z.boolean().optional(),
+  assetClass: z
+    .enum(["stock", "etf", "indice", "mutualfund", "future"])
+    .optional(),
+  iconUrl: iconUrlSchema.optional()
+});
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+
+    if (!db) {
+      return NextResponse.json(
+        { data: [], total: 0, error: "Database connection is not configured." },
+        { status: 503 }
+      );
+    }
+
+    const page = parsePositiveInt(searchParams.get("page"), 1);
+    const pageSize = parsePositiveInt(searchParams.get("pageSize"), 10, 100);
+
+    const id = searchParams.get("id")?.trim();
+    const assetClass = searchParams.get("assetClass")?.trim().toLowerCase();
+    const base = searchParams.get("base")?.toLowerCase().trim();
+    const quoteParam = searchParams.get("quote")?.trim();
+    const marketIdParam = searchParams.get("marketId")?.trim();
+    const primaryExchIdParam = searchParams.get("primaryExchId")?.trim();
+    const countryIdParam = searchParams.get("countryId")?.trim();
+    const quote = quoteParam === "__null__" ? null : quoteParam || undefined;
+    const marketId = marketIdParam === "__null__" ? null : marketIdParam || undefined;
+    const primaryExchId = primaryExchIdParam === "__null__" ? null : primaryExchIdParam || undefined;
+    const countryId = countryIdParam === "__null__" ? null : countryIdParam || undefined;
+    const active = parseBoolean(searchParams.get("active"));
+
+    const query: ListingsQuery = {
+      page,
+      pageSize,
+      id,
+      assetClass,
+      base,
+      quote,
+      marketId,
+      primaryExchId,
+      countryId,
+      active
+    };
+
+    const payload = await fetchListingsFromDb(query);
+
+    return NextResponse.json(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[listings] API error:", error);
+    return NextResponse.json({ data: [], total: 0, error: message }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  if (!db) {
+    return NextResponse.json(
+      { error: "Database connection is not configured." },
+      { status: 503 }
+    );
+  }
+
+  let payload: z.infer<typeof createListingSchema>;
+  try {
+    const body = await request.json();
+    if (body && typeof body === "object" && "iconUrl" in body) {
+      const iconUrl = (body as { iconUrl?: unknown }).iconUrl;
+      if (typeof iconUrl === "string" ? iconUrl.trim().length > 0 : iconUrl != null) {
+        return NextResponse.json(
+          { error: "iconUrl can only be set via the upload endpoint." },
+          { status: 400 }
+        );
+      }
+    }
+    payload = createListingSchema.parse(body);
+  } catch (error) {
+    const message =
+      error instanceof z.ZodError ? error.errors[0]?.message ?? "Invalid payload." : "Invalid payload.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+
+  const base = payload.base.trim();
+  const quote = normalizeNullableString(payload.quote) ?? null;
+  const name = normalizeNullableString(payload.name) ?? null;
+  const marketInput = normalizeNullableString(payload.marketId) ?? null;
+  const primaryExchInput = normalizeNullableString(payload.primaryExchId) ?? null;
+  const secondaryExchInputs = Array.from(new Set(payload.secondaryExchIds ?? []));
+  const active = payload.active ?? true;
+  const assetClass = payload.assetClass ?? "stock";
+  const iconUrl = null;
+
+  const resolvedQuoteId = await resolveCurrencyId(quote);
+  if (quote && !resolvedQuoteId) {
+    return NextResponse.json({ error: "Quote currency not found." }, { status: 400 });
+  }
+
+  const resolvedMarketId = await resolveMarketId(marketInput);
+  if (marketInput && !resolvedMarketId) {
+    return NextResponse.json({ error: "Market not found." }, { status: 400 });
+  }
+
+  const resolvedPrimaryExchId = await resolveExchId(primaryExchInput);
+  if (primaryExchInput && !resolvedPrimaryExchId) {
+    return NextResponse.json({ error: "Primary exchange not found." }, { status: 400 });
+  }
+
+  const resolvedSecondaryExchIds = await resolveExchIds(secondaryExchInputs);
+  if (secondaryExchInputs.length && resolvedSecondaryExchIds.length !== secondaryExchInputs.length) {
+    return NextResponse.json({ error: "One or more secondary exchanges were not found." }, { status: 400 });
+  }
+
+  let newId: string | null = null;
+  try {
+    const result = await db
+      .insert(schema.listings)
+      .values({
+        base,
+        quote: resolvedQuoteId,
+        name,
+        marketId: resolvedMarketId,
+        primaryExchId: resolvedPrimaryExchId,
+        secondaryExchIds: resolvedSecondaryExchIds.length ? resolvedSecondaryExchIds : null,
+        active,
+        assetClass,
+        iconUrl
+      })
+      .returning({ id: schema.listings.id });
+
+    newId = result[0]?.id ?? null;
+  } catch (error: any) {
+    const code = extractPgErrorCode(error);
+    const constraint = extractPgConstraint(error);
+    if (code === "23505" || constraint === "listings_base_quote_primary_exch_idx") {
+      return NextResponse.json(
+        { error: "Listing already exists for the same base, quote, primary exchange, asset class, and market." },
+        { status: 409 }
+      );
+    }
+    const message = error instanceof Error ? error.message : "Failed to create listing.";
+    console.error("[listings:create] API error:", error);
+    return NextResponse.json({ error: "Failed to create listing." }, { status: 500 });
+  }
+
+  if (!newId) {
+    return NextResponse.json({ error: "Failed to create listing." }, { status: 500 });
+  }
+
+  const refreshed = await fetchListingsFromDb({
+    page: 1,
+    pageSize: 1,
+    id: newId
+  });
+
+  const createdListing = refreshed.data.find((row) => row.id === newId) ?? null;
+
+  return NextResponse.json({ data: createdListing }, { status: 201 });
+}
