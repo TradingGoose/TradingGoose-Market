@@ -2,6 +2,17 @@
 
 A canonical market data management platform built with Next.js. It acts as a centralized authority for financial market reference data — managing exchanges, listings, cryptocurrencies, currencies, market hours, and more — with a full admin UI and a versioned public API for programmatic access.
 
+
+<picture>
+  <!-- Image for Light Mode -->
+  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/94f9af3c-0fc4-4bbc-9a19-fe6fa0314b24">
+  <!-- Image for Dark Mode -->
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/b5ce6a54-6986-4a6a-afa7-df341bb35bdf">
+  <!-- Fallback Image (shown if the browser doesn't support themes) -->
+  <img alt="Project Screenshot" src="https://github.com/user-attachments/assets/94f9af3c-0fc4-4bbc-9a19-fe6fa0314b24" width="2559">
+</picture>
+
+
 ## What it does
 
 - **Stores and manages canonical market reference data**: exchanges (MIC-based), listings, cryptocurrencies, fiat/crypto currencies, countries, cities, time zones, blockchain networks, and trading hours (including holidays and early closes).
