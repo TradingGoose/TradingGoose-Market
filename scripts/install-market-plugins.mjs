@@ -1,5 +1,3 @@
-import "dotenv/config";
-
 import { spawn } from "node:child_process";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -16,6 +14,74 @@ const GENERATED_PLUGIN_VENDOR_ROOT = path.join(
   "lib/market-api/plugins/vendor"
 );
 const SHOULD_INSTALL = process.argv.includes("--install");
+const INITIAL_ENV_KEYS = new Set(Object.keys(process.env));
+
+function parseEnvLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+
+  const withoutExport = trimmed.startsWith("export ")
+    ? trimmed.slice("export ".length).trim()
+    : trimmed;
+  const separatorIndex = withoutExport.indexOf("=");
+  if (separatorIndex <= 0) return null;
+
+  const key = withoutExport.slice(0, separatorIndex).trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return null;
+
+  let value = withoutExport.slice(separatorIndex + 1).trim();
+  if (
+    (value.startsWith("\"") && value.endsWith("\"")) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    const quote = value[0];
+    value = value.slice(1, -1);
+    if (quote === "\"") {
+      value = value
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "\r")
+        .replace(/\\t/g, "\t")
+        .replace(/\\"/g, "\"")
+        .replace(/\\\\/g, "\\");
+    }
+  } else {
+    const commentIndex = value.indexOf(" #");
+    if (commentIndex >= 0) {
+      value = value.slice(0, commentIndex).trimEnd();
+    }
+  }
+
+  return { key, value };
+}
+
+async function loadEnvFile(relativePath) {
+  const filePath = path.join(process.cwd(), relativePath);
+  let contents;
+  try {
+    contents = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  for (const line of contents.split(/\r?\n/)) {
+    const parsed = parseEnvLine(line);
+    if (!parsed) continue;
+
+    if (INITIAL_ENV_KEYS.has(parsed.key)) {
+      continue;
+    }
+
+    process.env[parsed.key] = parsed.value;
+  }
+}
+
+async function loadLocalEnvFiles() {
+  await loadEnvFile(".env");
+  await loadEnvFile(".env.local");
+}
 
 function parseMarketPluginModules(value) {
   if (!value) return [];
@@ -226,6 +292,8 @@ async function runBunInstall() {
 }
 
 async function main() {
+  await loadLocalEnvFiles();
+
   const modules = parseMarketPluginModules(process.env[MARKET_PLUGIN_MODULES_ENV]);
   const sources = parseMarketPluginSources(process.env[MARKET_PLUGIN_SOURCES_ENV]);
   const missingSources = modules.filter((moduleName) => !sources[moduleName]);

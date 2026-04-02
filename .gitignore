@@ -12,3 +12,4 @@ tsconfig.tsbuildinfo
 *.tsbuildinfo
 .env.local.vercel
 lib/market-api/plugins/vendor
+lib/market-api/plugins/generated.ts
