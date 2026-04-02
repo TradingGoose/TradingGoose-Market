@@ -4,8 +4,18 @@ import { z } from "zod";
 
 import { db, schema } from "@tradinggoose/db";
 import { deleteFile, extractStorageKey } from "@uploads/core/storage-client";
-import { fetchListingsFromDb } from "../lib";
+import {
+  fetchListingsFromDb,
+  extractPgErrorCode,
+  extractPgConstraint,
+  resolveCurrencyId,
+  resolveExchId,
+  resolveMarketId,
+  resolveExchIds
+} from "../lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { normalizeNullableString } from "@/lib/api-utils";
+import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
 
 const iconUrlSchema = z.union([
   z.string().trim().url(),
@@ -33,94 +43,6 @@ const updateListingSchema = z
   });
 
 type UpdateListingInput = z.infer<typeof updateListingSchema>;
-
-function normalizeNullableString(value: UpdateListingInput[keyof UpdateListingInput]) {
-  if (value === undefined) return undefined;
-  if (value === "") return null;
-  return value as string | null;
-}
-
-function extractPgErrorCode(error: unknown) {
-  if (!error || typeof error !== "object") return null;
-  const anyError = error as { code?: string; cause?: { code?: string } };
-  return anyError.code ?? anyError.cause?.code ?? null;
-}
-
-function extractPgConstraint(error: unknown) {
-  if (!error || typeof error !== "object") return null;
-  const anyError = error as { constraint?: string; cause?: { constraint?: string } };
-  return anyError.constraint ?? anyError.cause?.constraint ?? null;
-}
-
-async function resolveCurrencyId(value: string | null) {
-  if (!db) return null;
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const result = (await db.execute(sql`
-    SELECT id FROM currencies
-    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
-    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
-    LIMIT 1
-  `)) as { id: string }[];
-
-  return result[0]?.id ?? null;
-}
-
-async function resolveExchId(value: string | null) {
-  if (!db) return null;
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const rows = (await db.execute(sql`
-    SELECT id
-    FROM exchanges
-    WHERE id = ${trimmed}
-    LIMIT 1
-  `)) as { id: string }[];
-
-  return rows[0]?.id ?? null;
-}
-
-async function resolveMarketId(value: string | null) {
-  if (!db) return null;
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const rows = (await db.execute(sql`
-    SELECT id
-    FROM markets
-    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
-    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
-    LIMIT 1
-  `)) as { id: string }[];
-
-  return rows[0]?.id ?? null;
-}
-
-async function resolveExchIds(values: string[]) {
-  if (!db) return [] as string[];
-  const tokens = Array.from(
-    new Set(
-      values
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0)
-    )
-  );
-  if (!tokens.length) return [] as string[];
-
-  const rows = (await db.execute(sql`
-    SELECT id
-    FROM exchanges
-    WHERE id IN (${sql.join(tokens.map((token) => sql`${token}`), sql`, `)})
-  `)) as { id: string }[];
-
-  const idSet = new Set(rows.map((row) => row.id));
-  return tokens.filter((token) => idSet.has(token));
-}
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await apiRequireEditor();
@@ -319,8 +241,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   });
 
   const updatedListing = refreshed.data.find((row) => row.id === listingId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "listing", updatedListing, auth.user.id);
 
-  return NextResponse.json({ data: updatedListing });
+  return NextResponse.json({ data });
 }
 
 export async function DELETE(

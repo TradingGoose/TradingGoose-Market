@@ -1,115 +1,25 @@
 import { NextResponse } from "next/server";
-import { sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { db, schema } from "@tradinggoose/db";
-import { fetchListingsFromDb, type ListingsQuery } from "./lib";
+import {
+  fetchListingsFromDb,
+  type ListingsQuery,
+  extractPgErrorCode,
+  extractPgConstraint,
+  resolveCurrencyId,
+  resolveExchId,
+  resolveMarketId,
+  resolveExchIds
+} from "./lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { parsePositiveInt, normalizeNullableString, parseBoolean } from "@/lib/api-utils";
+import {
+  runAppRouteAdminReadEnrichers,
+  runAppRouteAfterWriteEnricher
+} from "@/lib/market-api/plugins/app-routes";
 
 export const runtime = "nodejs";
-
-function parseBoolean(value?: string | null) {
-  if (!value) return undefined;
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return undefined;
-}
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
-function normalizeNullableString(value: string | null | undefined) {
-  if (value === undefined) return undefined;
-  if (value === "") return null;
-  return value;
-}
-
-function extractPgErrorCode(error: unknown) {
-  if (!error || typeof error !== "object") return null;
-  const anyError = error as { code?: string; cause?: { code?: string } };
-  return anyError.code ?? anyError.cause?.code ?? null;
-}
-
-function extractPgConstraint(error: unknown) {
-  if (!error || typeof error !== "object") return null;
-  const anyError = error as { constraint?: string; cause?: { constraint?: string } };
-  return anyError.constraint ?? anyError.cause?.constraint ?? null;
-}
-
-async function resolveCurrencyId(value: string | null) {
-  if (!db) return null;
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const result = (await db.execute(sql`
-    SELECT id FROM currencies
-    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
-    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
-    LIMIT 1
-  `)) as { id: string }[];
-
-  return result[0]?.id ?? null;
-}
-
-async function resolveExchId(value: string | null) {
-  if (!db) return null;
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const rows = (await db.execute(sql`
-    SELECT id
-    FROM exchanges
-    WHERE id = ${trimmed}
-    LIMIT 1
-  `)) as { id: string }[];
-
-  return rows[0]?.id ?? null;
-}
-
-async function resolveMarketId(value: string | null) {
-  if (!db) return null;
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const rows = (await db.execute(sql`
-    SELECT id
-    FROM markets
-    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
-    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
-    LIMIT 1
-  `)) as { id: string }[];
-
-  return rows[0]?.id ?? null;
-}
-
-async function resolveExchIds(values: string[]) {
-  if (!db) return [] as string[];
-  const tokens = Array.from(
-    new Set(
-      values
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0)
-    )
-  );
-  if (!tokens.length) return [] as string[];
-
-  const rows = (await db.execute(sql`
-    SELECT id
-    FROM exchanges
-    WHERE id IN (${sql.join(tokens.map((token) => sql`${token}`), sql`, `)})
-  `)) as { id: string }[];
-
-  const idSet = new Set(rows.map((row) => row.id));
-  return tokens.filter((token) => idSet.has(token));
-}
 
 const iconUrlSchema = z.union([
   z.string().trim().url(),
@@ -173,8 +83,9 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchListingsFromDb(query);
+    const data = await runAppRouteAdminReadEnrichers(request, "listing", payload.data);
 
-    return NextResponse.json(payload);
+    return NextResponse.json({ ...payload, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[listings] API error:", error);
@@ -285,6 +196,7 @@ export async function POST(request: Request) {
   });
 
   const createdListing = refreshed.data.find((row) => row.id === newId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "listing", createdListing, auth.user.id);
 
-  return NextResponse.json({ data: createdListing }, { status: 201 });
+  return NextResponse.json({ data }, { status: 201 });
 }

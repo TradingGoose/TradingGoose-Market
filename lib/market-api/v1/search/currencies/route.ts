@@ -1,5 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
+import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "../utils";
@@ -76,7 +78,7 @@ export async function fetchCurrenciesByIds(
   return new Map(resolved.map((row) => [row.id, row]));
 }
 
-export async function getSearchCurrencies(c: ApiContext) {
+export async function getSearchCurrencies(c: ApiContext, plugin?: PluginContext) {
   try {
     if (!db) {
       return c.json({ data: [], error: "Database connection is not configured." }, 503);
@@ -129,7 +131,11 @@ export async function getSearchCurrencies(c: ApiContext) {
       LIMIT ${limit}
     `)) as unknown as CurrencySearchRow[];
 
-    const data = rows.map((row) => ({
+    const enrichedRows = plugin
+      ? await runEntityEnrichers(plugin, "currency", "search", rows)
+      : rows;
+
+    const data = enrichedRows.map((row) => ({
       ...row,
       iconUrl: resolveIconUrl(request, row.iconUrl)
     }));

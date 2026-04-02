@@ -5,6 +5,11 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchCryptoOptions, fetchCryptosFromDb, type CryptosQuery } from "./lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { parsePositiveInt } from "@/lib/api-utils";
+import {
+  runAppRouteAdminReadEnrichers,
+  runAppRouteAfterWriteEnricher
+} from "@/lib/market-api/plugins/app-routes";
 
 export const runtime = "nodejs";
 
@@ -37,14 +42,6 @@ async function ensureChainsExist(chainIds: string[]) {
     .from(schema.chains)
     .where(inArray(schema.chains.id, uniqueIds));
   return rows.length === uniqueIds.length;
-}
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
 }
 
 export async function GET(request: Request) {
@@ -92,8 +89,9 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchCryptosFromDb(query);
+    const data = await runAppRouteAdminReadEnrichers(request, "crypto", payload.data);
 
-    return NextResponse.json(payload);
+    return NextResponse.json({ ...payload, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[cryptos] API error:", message);
@@ -185,6 +183,7 @@ export async function POST(request: Request) {
   });
 
   const createdCrypto = refreshed.data.find(row => row.id === newId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "crypto", createdCrypto, auth.user.id);
 
-  return NextResponse.json({ data: createdCrypto }, { status: 201 });
+  return NextResponse.json({ data }, { status: 201 });
 }

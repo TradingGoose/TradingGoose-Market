@@ -2,6 +2,92 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@tradinggoose/db";
 
+/* ------------------------------------------------------------------ */
+/*  Shared PG-error and resolution helpers (used by route.ts & [id])  */
+/* ------------------------------------------------------------------ */
+
+export function extractPgErrorCode(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  const anyError = error as { code?: string; cause?: { code?: string } };
+  return anyError.code ?? anyError.cause?.code ?? null;
+}
+
+export function extractPgConstraint(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  const anyError = error as { constraint?: string; cause?: { constraint?: string } };
+  return anyError.constraint ?? anyError.cause?.constraint ?? null;
+}
+
+export async function resolveCurrencyId(value: string | null) {
+  if (!db) return null;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const result = (await db.execute(sql`
+    SELECT id FROM currencies
+    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
+    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
+    LIMIT 1
+  `)) as { id: string }[];
+
+  return result[0]?.id ?? null;
+}
+
+export async function resolveExchId(value: string | null) {
+  if (!db) return null;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const rows = (await db.execute(sql`
+    SELECT id
+    FROM exchanges
+    WHERE id = ${trimmed}
+    LIMIT 1
+  `)) as { id: string }[];
+
+  return rows[0]?.id ?? null;
+}
+
+export async function resolveMarketId(value: string | null) {
+  if (!db) return null;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const rows = (await db.execute(sql`
+    SELECT id
+    FROM markets
+    WHERE id = ${trimmed} OR code ILIKE ${trimmed}
+    ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
+    LIMIT 1
+  `)) as { id: string }[];
+
+  return rows[0]?.id ?? null;
+}
+
+export async function resolveExchIds(values: string[]) {
+  if (!db) return [] as string[];
+  const tokens = Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  );
+  if (!tokens.length) return [] as string[];
+
+  const rows = (await db.execute(sql`
+    SELECT id
+    FROM exchanges
+    WHERE id IN (${sql.join(tokens.map((token) => sql`${token}`), sql`, `)})
+  `)) as { id: string }[];
+
+  const idSet = new Set(rows.map((row) => row.id));
+  return tokens.filter((token) => idSet.has(token));
+}
+
 export type SecondaryExchDetail = {
   id: string;
   mic: string | null;

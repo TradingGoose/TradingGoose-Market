@@ -2,11 +2,13 @@ import { createApiContext, type ApiContext } from "@/lib/market-api/core/context
 import { requireApiKey } from "@/lib/market-api/core/auth";
 import { billingConfig, validateUsageLimitCached, postMarketUsageDurable } from "@/lib/market-api/core/billing";
 import { enforceRateLimit } from "@/lib/market-api/core/rate-limit";
+import { createPluginContext } from "@/lib/market-api/plugins/context";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
 import { NextResponse } from "next/server";
 
 export async function handleMarketRequest(
   request: Request,
-  handler: (context: ApiContext) => Promise<Response>
+  handler: (context: ApiContext, plugin: PluginContext) => Promise<Response>
 ) {
   const authResult = await requireApiKey(request);
   if (authResult instanceof Response) return authResult;
@@ -38,7 +40,8 @@ export async function handleMarketRequest(
   }
 
   const context = createApiContext(request);
-  const response = await handler(context);
+  const pluginContext = createPluginContext(request, authResult.auth);
+  const response = await handler(context, pluginContext);
 
   // Post usage after successful response (fire-and-forget, outbox-backed)
   if (billingEnabled && response.ok) {

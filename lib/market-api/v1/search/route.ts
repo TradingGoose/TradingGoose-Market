@@ -1,4 +1,5 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
 
 import { db } from "@tradinggoose/db";
 import { buildCurrencyPairs } from "./currency";
@@ -23,7 +24,7 @@ type RankedListing = {
   rankValue: number;
 };
 
-export async function getSearch(c: ApiContext) {
+export async function getSearch(c: ApiContext, plugin?: PluginContext) {
   try {
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
@@ -154,7 +155,7 @@ export async function getSearch(c: ApiContext) {
 
     if (includeListing && hasListingCriteria) {
       tasks.push(
-        searchListingRows(request, listingParams).then((rows) => {
+        searchListingRows(request, listingParams, plugin).then((rows) => {
           results.listings = rows;
         })
       );
@@ -168,7 +169,7 @@ export async function getSearch(c: ApiContext) {
       cryptoQuoteNames.forEach((value) => cryptoParams.append("crypto_quote_name", value));
       chainTokens.forEach((value) => cryptoParams.append("chain", value));
       tasks.push(
-        searchCryptoPairs(request, cryptoParams, { preferCurrencyQuote: true }).then((rows) => {
+        searchCryptoPairs(request, cryptoParams, { preferCurrencyQuote: true }, plugin).then((rows) => {
           results.cryptos = rows;
         })
       );
@@ -186,7 +187,8 @@ export async function getSearch(c: ApiContext) {
             quoteCodes: currencyQuoteCodes,
             quoteNames: currencyQuoteNames
           },
-          groupLimit
+          groupLimit,
+          plugin
         ).then((rows) => {
           results.currencies = rows;
         })

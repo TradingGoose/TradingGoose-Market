@@ -5,6 +5,11 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchExchangesFromDb, type ExchangesQuery } from "./lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { parsePositiveInt, normalizeNullableString, parseBoolean } from "@/lib/api-utils";
+import {
+  runAppRouteAdminReadEnrichers,
+  runAppRouteAfterWriteEnricher
+} from "@/lib/market-api/plugins/app-routes";
 
 export const runtime = "nodejs";
 
@@ -13,27 +18,6 @@ type ExchangeOptionRow = {
   mic: string;
   name: string | null;
 };
-
-function parseBoolean(value?: string | null) {
-  if (!value) return undefined;
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return undefined;
-}
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
-function normalizeNullableString(value?: string | null) {
-  if (value === undefined) return undefined;
-  if (value === "") return null;
-  return value;
-}
 
 function parseOptionalDate(value?: string | null) {
   const normalized = normalizeNullableString(value);
@@ -101,8 +85,9 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchExchangesFromDb(query);
+    const data = await runAppRouteAdminReadEnrichers(request, "exchange", payload.data);
 
-    return NextResponse.json(payload);
+    return NextResponse.json({ ...payload, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[exchanges] API error:", message);
@@ -190,6 +175,7 @@ export async function POST(request: Request) {
   });
 
   const createdExchange = refreshed.data.find(row => row.id === newId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "exchange", createdExchange, auth.user.id);
 
-  return NextResponse.json({ data: createdExchange }, { status: 201 });
+  return NextResponse.json({ data }, { status: 201 });
 }

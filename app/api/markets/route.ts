@@ -5,6 +5,11 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchMarketsFromDb, type MarketsQuery } from "./lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { parsePositiveInt, normalizeNullableString } from "@/lib/api-utils";
+import {
+  runAppRouteAdminReadEnrichers,
+  runAppRouteAfterWriteEnricher
+} from "@/lib/market-api/plugins/app-routes";
 
 export const runtime = "nodejs";
 
@@ -13,14 +18,6 @@ type MarketOptionRow = {
   code: string;
   name: string | null;
 };
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
 
 export async function GET(request: Request) {
   try {
@@ -79,8 +76,9 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchMarketsFromDb(query);
+    const data = await runAppRouteAdminReadEnrichers(request, "market", payload.data);
 
-    return NextResponse.json(payload);
+    return NextResponse.json({ ...payload, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[markets] API error:", message);
@@ -96,12 +94,6 @@ const createMarketSchema = z.object({
   timeZoneId: z.union([z.string().trim(), z.literal(""), z.null()]).optional(),
   url: z.union([z.string().trim().max(2048), z.literal(""), z.null()]).optional()
 });
-
-function normalizeNullableString(value: string | null | undefined) {
-  if (value === undefined) return undefined;
-  if (value === "") return null;
-  return value;
-}
 
 export async function POST(request: Request) {
   const auth = await apiRequireEditor();
@@ -157,6 +149,7 @@ export async function POST(request: Request) {
   });
 
   const createdMarket = refreshed.data.find(row => row.id === newId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "market", createdMarket, auth.user.id);
 
-  return NextResponse.json({ data: createdMarket }, { status: 201 });
+  return NextResponse.json({ data }, { status: 201 });
 }

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchCryptosFromDb } from "../lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
 
 const contractAddressSchema = z.object({
   chainId: z.string().trim().min(1),
@@ -136,8 +137,9 @@ export async function PATCH(
   });
 
   const updatedCrypto = refreshed.data.find(row => row.id === cryptoId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "crypto", updatedCrypto, auth.user.id);
 
-  return NextResponse.json({ data: updatedCrypto });
+  return NextResponse.json({ data });
 }
 
 export async function DELETE(

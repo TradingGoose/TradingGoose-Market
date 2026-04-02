@@ -1,5 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
+import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "../utils";
@@ -244,7 +246,8 @@ export async function fetchCryptosByIds(
 export async function searchCryptoPairs(
   request: Request,
   searchParams: URLSearchParams,
-  options?: { preferCurrencyQuote?: boolean }
+  options?: { preferCurrencyQuote?: boolean },
+  plugin?: PluginContext
 ): Promise<CryptoPair[]> {
   if (!db) {
     throw new Error("Database connection is not configured.");
@@ -370,15 +373,37 @@ export async function searchCryptoPairs(
   const baseLimit = hasBaseFilters ? Math.min(limit, MAX_LIMIT) : Math.min(DEFAULT_BASE_LIMIT, limit);
   const quoteLimit = hasQuoteFilters ? Math.min(limit, MAX_LIMIT) : Math.min(DEFAULT_QUOTE_LIMIT, limit);
 
-  const baseCryptos = await fetchCryptos(baseFilters, baseLimit);
+  // Run all independent DB fetches concurrently
+  const baseCryptosPromise = fetchCryptos(baseFilters, baseLimit);
+  const quoteCryptoPromise = quoteType !== "currency"
+    ? fetchCryptos(quoteCryptoFilters, quoteLimit)
+    : Promise.resolve([] as CryptoRowMeta[]);
+  const quoteCurrencyPromise = quoteType !== "crypto"
+    ? fetchCurrencies(quoteCurrencyFilters, quoteLimit)
+    : Promise.resolve([] as CurrencyRow[]);
+
+  const [rawBaseCryptos, rawCryptoQuotes, rawCurrencyQuotes] = await Promise.all([
+    baseCryptosPromise,
+    quoteCryptoPromise,
+    quoteCurrencyPromise,
+  ]);
+
+  // Apply enrichers if plugin context is available
+  const baseCryptos = plugin
+    ? await runEntityEnrichers(plugin, "crypto", "search", rawBaseCryptos)
+    : rawBaseCryptos;
 
   const quoteCandidates: QuoteCandidate[] = [];
-  if (quoteType !== "currency") {
-    const cryptoQuotes = await fetchCryptos(quoteCryptoFilters, quoteLimit);
+  if (quoteType !== "currency" && rawCryptoQuotes.length) {
+    const cryptoQuotes = plugin
+      ? await runEntityEnrichers(plugin, "crypto", "search", rawCryptoQuotes)
+      : rawCryptoQuotes;
     cryptoQuotes.forEach((row) => quoteCandidates.push({ type: "crypto", ...row }));
   }
-  if (quoteType !== "crypto") {
-    const currencyQuotes = await fetchCurrencies(quoteCurrencyFilters, quoteLimit);
+  if (quoteType !== "crypto" && rawCurrencyQuotes.length) {
+    const currencyQuotes = plugin
+      ? await runEntityEnrichers(plugin, "currency", "search", rawCurrencyQuotes)
+      : rawCurrencyQuotes;
     currencyQuotes.forEach((row) => quoteCandidates.push({ type: "currency", ...row }));
   }
 
@@ -460,7 +485,7 @@ export async function searchCryptoPairs(
   }));
 }
 
-export async function getSearchCrypto(c: ApiContext) {
+export async function getSearchCrypto(c: ApiContext, plugin?: PluginContext) {
   try {
     if (!db) {
       return c.json({ data: [], error: "Database connection is not configured." }, 503);
@@ -475,7 +500,7 @@ export async function getSearchCrypto(c: ApiContext) {
         400
       );
     }
-    const data = await searchCryptoPairs(request, searchParams);
+    const data = await searchCryptoPairs(request, searchParams, undefined, plugin);
 
     return c.json({ data });
   } catch (error) {

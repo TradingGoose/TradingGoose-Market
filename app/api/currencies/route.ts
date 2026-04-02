@@ -5,6 +5,11 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchCurrenciesFromDb, type CurrenciesQuery } from "./lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { parsePositiveInt } from "@/lib/api-utils";
+import {
+  runAppRouteAdminReadEnrichers,
+  runAppRouteAfterWriteEnricher
+} from "@/lib/market-api/plugins/app-routes";
 
 export const runtime = "nodejs";
 
@@ -14,14 +19,6 @@ type CurrencyOptionRow = {
   name: string;
   iconUrl: string | null;
 };
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
 
 export async function GET(request: Request) {
   try {
@@ -76,8 +73,9 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchCurrenciesFromDb(query);
+    const data = await runAppRouteAdminReadEnrichers(request, "currency", payload.data);
 
-    return NextResponse.json(payload);
+    return NextResponse.json({ ...payload, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[currencies] API error:", message);
@@ -152,6 +150,7 @@ export async function POST(request: Request) {
   });
 
   const createdCurrency = refreshed.data.find(row => row.id === newId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "currency", createdCurrency, auth.user.id);
 
-  return NextResponse.json({ data: createdCurrency }, { status: 201 });
+  return NextResponse.json({ data }, { status: 201 });
 }

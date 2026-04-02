@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchCitiesFromDb, type CitiesQuery } from "./lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { parsePositiveInt, normalizeNullableString } from "@/lib/api-utils";
 
 export const runtime = "nodejs";
 
@@ -14,20 +15,6 @@ type CityOptionRow = {
   countryId: string;
   countryCode: string | null;
 };
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
-function normalizeNullableString(value: string | null | undefined) {
-  if (value === undefined) return undefined;
-  if (value === "") return null;
-  return value;
-}
 
 export async function GET(request: Request) {
   try {

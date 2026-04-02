@@ -1,6 +1,8 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { HttpStatusCode } from "@/lib/market-api/core/http";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
+import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "../utils";
@@ -171,6 +173,17 @@ function buildPublicListings(
   return rows.map((row) => toPublicListing(withIconUrl(request, row)));
 }
 
+async function buildSearchListings(
+  request: Request,
+  rows: ListingSearchResult[],
+  plugin?: PluginContext
+) {
+  const enrichedRows = plugin
+    ? await runEntityEnrichers(plugin, "listing", "search", rows)
+    : rows;
+  return buildPublicListings(request, enrichedRows);
+}
+
 async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?: string) {
   if (!db) return [] as ListingSearchResult[];
   if (!filters.length) return [] as ListingSearchResult[];
@@ -266,7 +279,8 @@ type ListingSearchResponse = {
 
 async function runListingSearch(
   request: Request,
-  searchParams: URLSearchParams
+  searchParams: URLSearchParams,
+  plugin?: PluginContext
 ): Promise<ListingSearchResponse> {
   if (!db) {
     return { data: [], error: "Database connection is not configured.", status: 503 };
@@ -459,7 +473,7 @@ async function runListingSearch(
     if (!rows.length) {
       return { data: [], status: 200 };
     }
-    return { data: buildPublicListings(request, rows), status: 200 };
+    return { data: await buildSearchListings(request, rows, plugin), status: 200 };
   }
 
   const orderByTerm = listingName ?? listingBase ?? undefined;
@@ -526,7 +540,7 @@ async function runListingSearch(
   for (const filters of rankedFilters) {
     const rows = await fetchListingsByFilters(filters, limit, orderByTerm);
     if (rows.length) {
-      return { data: buildPublicListings(request, rows), status: 200 };
+      return { data: await buildSearchListings(request, rows, plugin), status: 200 };
     }
   }
 
@@ -589,14 +603,14 @@ async function runListingSearch(
   }
 
   const rows = await fetchListingsByFilters(fallbackFilters, limit, listingName ?? undefined);
-  return { data: buildPublicListings(request, rows), status: 200 };
+  return { data: await buildSearchListings(request, rows, plugin), status: 200 };
 }
 
-export async function getSearchListings(c: ApiContext) {
+export async function getSearchListings(c: ApiContext, plugin?: PluginContext) {
   try {
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
-    const result = await runListingSearch(request, searchParams);
+    const result = await runListingSearch(request, searchParams, plugin);
     if (result.status >= 400) {
       return c.json({ data: result.data ?? [], error: result.error ?? "Unknown error" }, result.status);
     }
@@ -610,9 +624,10 @@ export async function getSearchListings(c: ApiContext) {
 
 export async function searchListingRows(
   request: Request,
-  searchParams: URLSearchParams
+  searchParams: URLSearchParams,
+  plugin?: PluginContext
 ): Promise<Listing[]> {
-  const result = await runListingSearch(request, searchParams);
+  const result = await runListingSearch(request, searchParams, plugin);
   if (result.status >= 400) {
     throw new Error(result.error ?? `Listing search failed with status ${result.status}`);
   }

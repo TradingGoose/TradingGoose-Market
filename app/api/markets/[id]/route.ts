@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, schema } from "@tradinggoose/db";
 import { fetchMarketsFromDb } from "../lib";
 import { apiRequireEditor } from "@/lib/auth/session";
+import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
 
 const updateMarketSchema = z
   .object({
@@ -89,8 +90,9 @@ export async function PATCH(
   });
 
   const updatedMarket = refreshed.data.find(row => row.id === marketId) ?? null;
+  const data = await runAppRouteAfterWriteEnricher(request, "market", updatedMarket, auth.user.id);
 
-  return NextResponse.json({ data: updatedMarket });
+  return NextResponse.json({ data });
 }
 
 export async function DELETE(

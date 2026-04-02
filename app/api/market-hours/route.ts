@@ -3,16 +3,10 @@ import { z } from "zod";
 
 import { db } from "@tradinggoose/db";
 import { fetchMarketHoursFromDb, type MarketHoursQuery } from "./lib";
+import { runAppRouteAdminReadEnrichers } from "@/lib/market-api/plugins/app-routes";
+import { parsePositiveInt } from "@/lib/api-utils";
 
 export const runtime = "nodejs";
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
 
 const assetClassEnum = z.enum(["stock", "etf", "indice", "mutualfund", "future", "crypto", "currency"]);
 
@@ -47,8 +41,9 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchMarketHoursFromDb(query);
+    const data = await runAppRouteAdminReadEnrichers(request, "market-hours", payload.data);
 
-    return NextResponse.json(payload);
+    return NextResponse.json({ ...payload, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[market-hours] API error:", message);
