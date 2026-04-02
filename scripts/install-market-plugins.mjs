@@ -24,14 +24,32 @@ function parseMarketPluginModules(value) {
 }
 
 function expandEnvironmentVariables(value, label) {
-  return value.replace(/\$\{([A-Z0-9_]+)\}/gi, (_, variableName) => {
-    const resolved = process.env[variableName];
-    if (typeof resolved !== "string" || !resolved.length) {
-      throw new Error(`${label} references \${${variableName}}, but that environment variable is not set.`);
+  let current = value;
+  const seen = new Set([current]);
+
+  for (let depth = 0; depth < 10; depth += 1) {
+    const next = current.replace(/\$\{([A-Z0-9_]+)\}/gi, (_, variableName) => {
+      const resolved = process.env[variableName];
+      if (typeof resolved !== "string" || !resolved.length) {
+        throw new Error(`${label} references \${${variableName}}, but that environment variable is not set.`);
+      }
+
+      return resolved;
+    });
+
+    if (next === current || !/\$\{([A-Z0-9_]+)\}/i.test(next)) {
+      return next;
     }
 
-    return resolved;
-  });
+    if (seen.has(next)) {
+      throw new Error(`${label} contains a cyclic environment-variable reference.`);
+    }
+
+    seen.add(next);
+    current = next;
+  }
+
+  throw new Error(`${label} exceeded the maximum nested environment-variable expansion depth.`);
 }
 
 function parseMarketPluginSources(value) {
