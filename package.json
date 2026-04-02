@@ -2,13 +2,17 @@
   "name": "tradinggoose-market",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["packages/*", "uploads"],
+  "workspaces": [
+    "packages/*",
+    "uploads"
+  ],
   "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "dotenv_config_path=.env node -r dotenv/config node_modules/next/dist/bin/next start",
     "lint": "next lint",
+    "install:with-plugins": "node scripts/install-market-plugins.mjs --install",
     "type-check": "tsc --noEmit",
     "db:generate": "cd ./packages/db/ && drizzle-kit generate --config=./drizzle.config.ts",
     "db:migrate": "cd ./packages/db/ && drizzle-kit migrate --config=./drizzle.config.ts"
@@ -55,6 +59,7 @@
     "react-hook-form": "^7.54.2",
     "react-simple-code-editor": "^0.14.1",
     "resend": "6.9.4",
+    "server-only": "^0.0.1",
     "tailwind-merge": "^3.4.0",
     "xlsx": "^0.18.5",
     "zod": "^3.23.8"

@@ -98,7 +98,6 @@ BETTER_AUTH_SECRET=your_secret_key          # Use: openssl rand -hex 32
 BETTER_AUTH_URL=http://localhost:3000
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 INTERNAL_API_SECRET=your_internal_secret    # Use: openssl rand -hex 32
-OFFICIAL_TG_URL=http://localhost:3000       # TradingGoose Studio URL for billing
 ```
 
 Need a local database? Run PostgreSQL via Docker:
@@ -123,6 +122,32 @@ bun run dev
 ```
 
 The first user to sign up becomes the admin. After that, signup is disabled.
+
+## Plugins
+
+Plugins are enabled with `MARKET_PLUGIN_MODULES`. Private plugin dependencies can be injected at install time without committing them to the public branch.
+
+The install-time injector lives at `scripts/install-market-plugins.mjs`.
+
+### Local development
+
+Add plugin settings to `.env`:
+
+```bash
+MARKET_PLUGIN_MODULES=@your-org/your-plugin
+MARKET_PLUGIN_SOURCES={"@your-org/your-plugin":"file:../your-plugin"}
+```
+
+Then install and run normally:
+
+```bash
+bun run install:with-plugins
+bun run dev
+```
+
+`bun run install:with-plugins` injects plugin dependencies for the install, writes the generated plugin loader, and restores `package.json` afterwards. Restart the local Next.js server after rerunning it so the latest vendored plugin code is picked up.
+
+Each plugin package must default export a `MarketPlugin` or `MarketPlugin[]`. Deployment-specific setup should live in each plugin package's own README.
 
 ## Public API
 

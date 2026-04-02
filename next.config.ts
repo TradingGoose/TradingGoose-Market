@@ -1,9 +1,13 @@
 import type { NextConfig } from "next";
+import { getConfiguredMarketPluginModules } from "./lib/market-api/plugins/config";
+
+const marketPluginModules = getConfiguredMarketPluginModules();
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   typedRoutes: true,
   output: undefined,
+  serverExternalPackages: marketPluginModules,
   async rewrites() {
     return [
       {
