@@ -276,24 +276,21 @@ function createGeneratedPluginModule(modules, generatedImportSpecifiers) {
 }
 
 function createGeneratedPluginDeclarations(modules, generatedImportSpecifiers) {
-  const lines = [
-    'import type { MarketPlugin } from "@/lib/market-api/plugins/types";',
-    ""
-  ];
+  const lines = [];
 
   const externalSpecifiers = modules
     .map((moduleName) => generatedImportSpecifiers.get(moduleName) ?? moduleName)
     .filter((specifier) => !specifier.startsWith("."));
 
   if (!externalSpecifiers.length) {
-    lines.push("export {};", "");
+    lines.push("// No external market plugin modules are currently installed.", "");
     return lines.join("\n");
   }
 
   for (const specifier of externalSpecifiers) {
     lines.push(
       `declare module ${JSON.stringify(specifier)} {`,
-      "  const plugin: MarketPlugin | MarketPlugin[];",
+      '  const plugin: import("@/lib/market-api/plugins/types").MarketPlugin | import("@/lib/market-api/plugins/types").MarketPlugin[];',
       "  export default plugin;",
       "}",
       ""
