@@ -9,6 +9,10 @@ const GENERATED_PLUGIN_FILE_PATH = path.join(
   process.cwd(),
   "lib/market-api/plugins/generated.ts"
 );
+const GENERATED_PLUGIN_DECLARATION_FILE_PATH = path.join(
+  process.cwd(),
+  "lib/market-api/plugins/generated-modules.d.ts"
+);
 const GENERATED_PLUGIN_VENDOR_ROOT = path.join(
   process.cwd(),
   "lib/market-api/plugins/vendor"
@@ -271,6 +275,34 @@ function createGeneratedPluginModule(modules, generatedImportSpecifiers) {
   return lines.join("\n");
 }
 
+function createGeneratedPluginDeclarations(modules, generatedImportSpecifiers) {
+  const lines = [
+    'import type { MarketPlugin } from "@/lib/market-api/plugins/types";',
+    ""
+  ];
+
+  const externalSpecifiers = modules
+    .map((moduleName) => generatedImportSpecifiers.get(moduleName) ?? moduleName)
+    .filter((specifier) => !specifier.startsWith("."));
+
+  if (!externalSpecifiers.length) {
+    lines.push("export {};", "");
+    return lines.join("\n");
+  }
+
+  for (const specifier of externalSpecifiers) {
+    lines.push(
+      `declare module ${JSON.stringify(specifier)} {`,
+      "  const plugin: MarketPlugin | MarketPlugin[];",
+      "  export default plugin;",
+      "}",
+      ""
+    );
+  }
+
+  return lines.join("\n");
+}
+
 async function runBunInstall() {
   await new Promise((resolve, reject) => {
     const child = spawn("bun", ["install", "--no-save"], {
@@ -328,6 +360,10 @@ async function main() {
   await writeFile(
     GENERATED_PLUGIN_FILE_PATH,
     createGeneratedPluginModule(modules, generatedImportSpecifiers)
+  );
+  await writeFile(
+    GENERATED_PLUGIN_DECLARATION_FILE_PATH,
+    createGeneratedPluginDeclarations(modules, generatedImportSpecifiers)
   );
 
   if (!modules.length) {
