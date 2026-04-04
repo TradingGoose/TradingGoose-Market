@@ -206,30 +206,37 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
       END) DESC, cr.rank DESC, cr.code ASC`
     : sql`ORDER BY cr.rank DESC, cr.code ASC`;
 
-  const rowsFromDb = (await db!.execute(sql`
-    SELECT
-      cr.id,
-      cr.code,
-      cr.name,
-      cr.asset_type AS "assetType",
-      cr.active AS "active",
-      cr.contract_addresses AS "contractAddresses",
-      cr.icon_url AS "iconUrl",
-      cr.updated_at AS "updatedAt",
-      (COUNT(*) OVER())::int AS "_total"
-    FROM cryptos cr
-    ${whereClause}
-    ${orderClause}
-    LIMIT ${query.pageSize}
-    OFFSET ${offset}
-  `)) as (Omit<CryptoRow, "updatedAt" | "contractAddresses"> & {
-    updatedAt: string | Date | null;
-    contractAddresses: unknown;
-    _total: number;
-  })[];
+  const [countResult, rowsFromDb, chainMap] = await Promise.all([
+    db!.execute(sql`
+      SELECT COUNT(*)::int AS total
+      FROM cryptos cr
+      ${whereClause}
+    `) as Promise<{ total: number }[]>,
 
-  const total = rowsFromDb[0]?._total ?? 0;
-  const chainMap = await buildChainMap();
+    db!.execute(sql`
+      SELECT
+        cr.id,
+        cr.code,
+        cr.name,
+        cr.asset_type AS "assetType",
+        cr.active AS "active",
+        cr.contract_addresses AS "contractAddresses",
+        cr.icon_url AS "iconUrl",
+        cr.updated_at AS "updatedAt"
+      FROM cryptos cr
+      ${whereClause}
+      ${orderClause}
+      LIMIT ${query.pageSize}
+      OFFSET ${offset}
+    `) as Promise<(Omit<CryptoRow, "updatedAt" | "contractAddresses"> & {
+      updatedAt: string | Date | null;
+      contractAddresses: unknown;
+    })[]>,
+
+    buildChainMap(),
+  ]);
+
+  const total = countResult[0]?.total ?? 0;
   const rows: CryptoRow[] = rowsFromDb.map((row) => {
     const contracts = hydrateContracts(parseContractAddresses(row.contractAddresses), chainMap);
     return {
