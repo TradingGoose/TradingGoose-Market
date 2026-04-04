@@ -234,7 +234,9 @@ export const cryptos = pgTable(
     pk: primaryKey({ columns: [table.id], name: "cryptos_pkey" }),
     idPattern: check("cryptos_id_pattern", sql`${table.id} ~ '^TG_CRYP_[0-9A-F]{6}$'`),
     codePattern: check("cryptos_code_pattern", sql`${table.code} ~ '^.{1,64}$'`),
-    uniqueCodeNameIdx: uniqueIndex("cryptos_code_name_idx").on(table.code, table.name)
+    uniqueCodeNameIdx: uniqueIndex("cryptos_code_name_idx").on(table.code, table.name),
+    rankCodeIdx: index("cryptos_rank_code_idx").on(table.rank, table.code),
+    assetTypeIdx: index("cryptos_asset_type_idx").on(table.assetType)
   })
 );
 
@@ -280,7 +282,8 @@ export const markets = pgTable(
     idPattern: check("markets_id_pattern", sql`${table.id} ~ '^TG_MKT_[0-9A-F]{6}$'`),
     codePattern: check("markets_code_pattern", sql`${table.code} ~ '^[A-Z0-9]{1,16}$'`),
     uniqueCodeIdx: uniqueIndex("markets_code_idx").on(table.code),
-    uniqueNameIdx: uniqueIndex("markets_name_idx").on(table.name)
+    uniqueNameIdx: uniqueIndex("markets_name_idx").on(table.name),
+    countryIdIdx: index("markets_country_id_idx").on(table.countryId)
   })
 );
 
@@ -308,6 +311,8 @@ export const exchanges = pgTable(
     pk: primaryKey({ columns: [table.id], name: "exchanges_pkey" }),
     idPattern: check("exchanges_id_pattern", sql`${table.id} ~ '^TG_EXCH_[0-9A-F]{6}$'`),
     micIdx: uniqueIndex("exchanges_exch_idx").on(table.mic),
+    countryIdIdx: index("exchanges_country_id_idx").on(table.countryId),
+    marketIdIdx: index("exchanges_market_id_idx").on(table.marketId),
     parentIdFk: foreignKey({
       columns: [table.parentId],
       foreignColumns: [table.id]
@@ -418,6 +423,11 @@ export const listings = pgTable(
       table.primaryExchId,
       table.assetClass,
       table.marketId
-    )
+    ),
+    quoteIdx: index("listings_quote_idx").on(table.quote),
+    marketIdIdx: index("listings_market_id_idx").on(table.marketId),
+    primaryExchIdIdx: index("listings_primary_exch_id_idx").on(table.primaryExchId),
+    assetClassIdx: index("listings_asset_class_idx").on(table.assetClass),
+    rankBaseIdx: index("listings_rank_base_idx").on(table.rank, table.base)
   })
 );

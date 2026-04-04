@@ -273,15 +273,6 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
 
-  const [{ total }] = (await db!.execute(sql`
-    SELECT COUNT(*)::int AS total
-    FROM listings l
-    LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
-    LEFT JOIN countries c ON c.id = pm.country_id
-    LEFT JOIN currencies cq ON cq.id = l.quote
-    ${whereClause}
-  `)) as { total: number }[];
-
   const rowsFromDb = (await db!.execute(sql`
     SELECT
       l.id,
@@ -313,7 +304,8 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
           ) sm
         ),
         '[]'::jsonb
-      ) AS "secondaryExchDetails"
+      ) AS "secondaryExchDetails",
+      COUNT(*)::int OVER() AS "_total"
     FROM listings l
     LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
     LEFT JOIN currencies cq ON cq.id = l.quote
@@ -326,9 +318,11 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   `)) as (Omit<ListingRow, "secondaryExchDetails" | "marketId" | "marketCode" | "marketName"> & {
     secondaryExchDetails: unknown;
     rank: number;
+    _total: number;
   })[];
 
-  const rows = rowsFromDb.map(({ secondaryExchDetails, rank, ...rest }) => ({
+  const total = rowsFromDb[0]?._total ?? 0;
+  const rows = rowsFromDb.map(({ secondaryExchDetails, rank, _total, ...rest }) => ({
     ...rest,
     secondaryExchDetails: parseSecondaryExchDetails(secondaryExchDetails)
   }));
