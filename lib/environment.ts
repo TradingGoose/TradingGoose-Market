@@ -6,4 +6,4 @@
  * Is this the hosted version of the application
  */
 export const isHosted =
-  process.env.NEXT_PUBLIC_APP_URL === "https://market.tradinggoose.ai" ||
+  process.env.NEXT_PUBLIC_APP_URL === "https://market.tradinggoose.ai"
