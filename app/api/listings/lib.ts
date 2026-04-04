@@ -305,7 +305,7 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
         ),
         '[]'::jsonb
       ) AS "secondaryExchDetails",
-      COUNT(*)::int OVER() AS "_total"
+      (COUNT(*) OVER())::int AS "_total"
     FROM listings l
     LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
     LEFT JOIN currencies cq ON cq.id = l.quote

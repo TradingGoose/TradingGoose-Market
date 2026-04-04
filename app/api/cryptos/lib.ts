@@ -216,7 +216,7 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
       cr.contract_addresses AS "contractAddresses",
       cr.icon_url AS "iconUrl",
       cr.updated_at AS "updatedAt",
-      COUNT(*)::int OVER() AS "_total"
+      (COUNT(*) OVER())::int AS "_total"
     FROM cryptos cr
     ${whereClause}
     ${orderClause}
