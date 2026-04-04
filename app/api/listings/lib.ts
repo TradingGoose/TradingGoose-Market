@@ -268,14 +268,15 @@ function mapListingForExport(listing: ListingExportSource): ListingExportRow {
   };
 }
 
-// Cached unfiltered count (refreshes every 30s, avoids 350k+ row scan per request)
-let unfilteredListingCount: { total: number; ts: number } | null = null;
-const UNFILTERED_COUNT_TTL = 30_000;
+// Fast estimated count from pg_class (updated by VACUUM/ANALYZE, accurate for pagination)
+function estimatedCount(tableName: string) {
+  return sql`SELECT COALESCE(reltuples, 0)::int AS total FROM pg_class WHERE relname = ${tableName}`;
+}
 
 function buildCountQuery(query: ListingsQuery, filters: SQL[]) {
+  // No filters: use pg_class estimate (instant, no I/O)
   if (!filters.length) {
-    // No filters: plain count, no JOINs needed
-    return sql`SELECT COUNT(*)::int AS total FROM listings`;
+    return estimatedCount("listings");
   }
 
   // Only add JOINs that the active filters actually reference
@@ -299,20 +300,9 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   const filters = buildFilters(query);
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
-  const hasFilters = filters.length > 0;
 
-  // Use cached total for unfiltered queries
-  let totalPromise: Promise<number>;
-  if (!hasFilters && unfilteredListingCount && Date.now() - unfilteredListingCount.ts < UNFILTERED_COUNT_TTL) {
-    totalPromise = Promise.resolve(unfilteredListingCount.total);
-  } else {
-    totalPromise = (db!.execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
-      .then((rows) => {
-        const total = rows[0]?.total ?? 0;
-        if (!hasFilters) unfilteredListingCount = { total, ts: Date.now() };
-        return total;
-      });
-  }
+  const totalPromise = (db!.execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
+    .then((rows) => rows[0]?.total ?? 0);
 
   const [total, rowsFromDb] = await Promise.all([
     totalPromise,
