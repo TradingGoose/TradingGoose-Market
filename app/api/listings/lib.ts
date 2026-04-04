@@ -268,9 +268,13 @@ function mapListingForExport(listing: ListingExportSource): ListingExportRow {
   };
 }
 
+// Cached unfiltered count (refreshes every 30s, avoids 350k+ row scan per request)
+let unfilteredListingCount: { total: number; ts: number } | null = null;
+const UNFILTERED_COUNT_TTL = 30_000;
+
 function buildCountQuery(query: ListingsQuery, filters: SQL[]) {
-  // No filters: simple count, no JOINs
   if (!filters.length) {
+    // No filters: plain count, no JOINs needed
     return sql`SELECT COUNT(*)::int AS total FROM listings`;
   }
 
@@ -295,9 +299,20 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   const filters = buildFilters(query);
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
+  const hasFilters = filters.length > 0;
 
-  const totalPromise = (db!.execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
-    .then((rows) => rows[0]?.total ?? 0);
+  // Use cached total for unfiltered queries
+  let totalPromise: Promise<number>;
+  if (!hasFilters && unfilteredListingCount && Date.now() - unfilteredListingCount.ts < UNFILTERED_COUNT_TTL) {
+    totalPromise = Promise.resolve(unfilteredListingCount.total);
+  } else {
+    totalPromise = (db!.execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
+      .then((rows) => {
+        const total = rows[0]?.total ?? 0;
+        if (!hasFilters) unfilteredListingCount = { total, ts: Date.now() };
+        return total;
+      });
+  }
 
   const [total, rowsFromDb] = await Promise.all([
     totalPromise,
