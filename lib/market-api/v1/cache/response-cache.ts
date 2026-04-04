@@ -3,7 +3,7 @@ import { resolveSearchParams } from "../search/params";
 
 const SEARCH_CACHE_TAG = "market-api:search";
 const GET_CACHE_TAG = "market-api:get";
-const DEFAULT_TTL_MS = 15_000;
+const DEFAULT_TTL_MS = 30_000;
 const DEFAULT_MAX_BODY_BYTES = 512 * 1024;
 
 type SerializedSearchResponse = {

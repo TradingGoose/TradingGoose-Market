@@ -44,6 +44,7 @@
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.44.5",
     "geist": "^1.5.1",
+    "ioredis": "^5.10.1",
     "lucide-react": "^0.562.0",
     "mime": "^4.0.4",
     "next": "^16.1.0",

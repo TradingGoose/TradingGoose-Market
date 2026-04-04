@@ -130,7 +130,13 @@ function parseContractAddresses(value: unknown): CryptoContract[] {
   return parsed;
 }
 
+let chainMapCache: { map: Map<string, { code: string; name: string }>; ts: number } | null = null;
+const CHAIN_MAP_TTL = 60_000; // 60 seconds
+
 async function buildChainMap() {
+  if (chainMapCache && Date.now() - chainMapCache.ts < CHAIN_MAP_TTL) {
+    return chainMapCache.map;
+  }
   const rows = await db!
     .select({ id: schema.chains.id, code: schema.chains.code, name: schema.chains.name })
     .from(schema.chains);
@@ -138,6 +144,7 @@ async function buildChainMap() {
   rows.forEach((row) => {
     map.set(row.id, { code: row.code, name: row.name });
   });
+  chainMapCache = { map, ts: Date.now() };
   return map;
 }
 
@@ -199,12 +206,6 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
       END) DESC, cr.rank DESC, cr.code ASC`
     : sql`ORDER BY cr.rank DESC, cr.code ASC`;
 
-  const [{ total }] = (await db!.execute(sql`
-    SELECT COUNT(*)::int AS total
-    FROM cryptos cr
-    ${whereClause}
-  `)) as { total: number }[];
-
   const rowsFromDb = (await db!.execute(sql`
     SELECT
       cr.id,
@@ -214,7 +215,8 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
       cr.active AS "active",
       cr.contract_addresses AS "contractAddresses",
       cr.icon_url AS "iconUrl",
-      cr.updated_at AS "updatedAt"
+      cr.updated_at AS "updatedAt",
+      COUNT(*)::int OVER() AS "_total"
     FROM cryptos cr
     ${whereClause}
     ${orderClause}
@@ -223,8 +225,10 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
   `)) as (Omit<CryptoRow, "updatedAt" | "contractAddresses"> & {
     updatedAt: string | Date | null;
     contractAddresses: unknown;
+    _total: number;
   })[];
 
+  const total = rowsFromDb[0]?._total ?? 0;
   const chainMap = await buildChainMap();
   const rows: CryptoRow[] = rowsFromDb.map((row) => {
     const contracts = hydrateContracts(parseContractAddresses(row.contractAddresses), chainMap);

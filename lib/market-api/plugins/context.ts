@@ -30,6 +30,7 @@ export function createRoutePluginContext(
   return createPluginContext(request, {
     userId,
     isServiceKey: options?.isServiceKey ?? false,
+    isFreeTier: false,
     rateLimitKey: options?.rateLimitKey ?? (userId ? `app-route:${userId}` : "app-route")
   });
 }

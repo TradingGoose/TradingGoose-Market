@@ -13,6 +13,8 @@ export type AuthContext = {
   userId?: string;
   keyId?: string;
   isServiceKey: boolean;
+  isFreeTier: boolean;
+  clientIp?: string;
   rateLimitKey: string;
 };
 
@@ -170,13 +172,60 @@ export async function deleteApiKey(id: string, userId: string): Promise<boolean>
   return Array.isArray(res) && res.length > 0;
 }
 
-// --- O(1) key lookup ---
+// --- Validated key cache (avoids DB lookup on every request) ---
+
+type CachedKeyResult = { userId: string; keyId: string; expiresAt: number };
+const keyCache = new Map<string, CachedKeyResult>();
+const KEY_CACHE_TTL = 30_000; // 30 seconds
+const KEY_CACHE_MAX_SIZE = 10_000;
+
+// Debounce lastUsedAt writes: track last flush per key, flush at most every 60s
+const lastUsedFlush = new Map<string, number>();
+const LAST_USED_FLUSH_INTERVAL = 60_000; // 60 seconds
+
+function maybeFlushLastUsed(keyId: string) {
+  const now = Date.now();
+  const lastFlush = lastUsedFlush.get(keyId) ?? 0;
+  if (now - lastFlush < LAST_USED_FLUSH_INTERVAL) return;
+  lastUsedFlush.set(keyId, now);
+  void db!
+    .update(schema.marketKeys)
+    .set({ lastUsedAt: new Date().toISOString() })
+    .where(eq(schema.marketKeys.id, keyId));
+}
+
+// Periodic cleanup of stale cache entries (every 60s)
+let keyCacheCleanupScheduled = false;
+function scheduleKeyCacheCleanup() {
+  if (keyCacheCleanupScheduled) return;
+  keyCacheCleanupScheduled = true;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of keyCache) {
+      if (v.expiresAt <= now) keyCache.delete(k);
+    }
+    for (const [k, v] of lastUsedFlush) {
+      if (now - v > LAST_USED_FLUSH_INTERVAL * 2) lastUsedFlush.delete(k);
+    }
+  }, 60_000).unref();
+}
+
+// --- O(1) key lookup with caching ---
 
 async function lookupApiKey(rawKey: string): Promise<{ userId: string; keyId: string } | null> {
   if (!db) return null;
 
   const parsed = parseKey(rawKey);
   if (!parsed) return null;
+
+  // Cache key includes secret hash so different secrets don't match
+  const candidateHash = hmacHash(parsed.secret);
+  const cacheKey = `${parsed.publicId}:${candidateHash}`;
+  const cached = keyCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    maybeFlushLastUsed(cached.keyId);
+    return { userId: cached.userId, keyId: cached.keyId };
+  }
 
   const rows = await db
     .select({
@@ -196,25 +245,50 @@ async function lookupApiKey(rawKey: string): Promise<{ userId: string; keyId: st
   if (row.status === "revoked") return null;
   if (row.expiresAt && new Date(row.expiresAt) <= new Date()) return null;
 
-  const candidateHash = hmacHash(parsed.secret);
   if (!timingSafeCompare(candidateHash, row.secretHash)) return null;
 
-  // Update last_used_at (fire-and-forget)
-  void db
-    .update(schema.marketKeys)
-    .set({ lastUsedAt: new Date().toISOString() })
-    .where(eq(schema.marketKeys.id, row.id));
+  // Cache the validated key
+  if (keyCache.size >= KEY_CACHE_MAX_SIZE) {
+    // Evict oldest entry
+    const firstKey = keyCache.keys().next().value;
+    if (firstKey !== undefined) keyCache.delete(firstKey);
+  }
+  keyCache.set(cacheKey, {
+    userId: row.userId,
+    keyId: row.id,
+    expiresAt: Date.now() + KEY_CACHE_TTL
+  });
+  scheduleKeyCacheCleanup();
+
+  maybeFlushLastUsed(row.id);
 
   return { userId: row.userId, keyId: row.id };
 }
 
 // --- Request auth ---
 
+import { extractClientIp } from "@/lib/market-api/core/free-tier";
+
+const FREE_TIER_ENABLED = process.env.MARKET_FREE_TIER_ENABLED !== "false";
+
 export async function requireApiKey(
   request: Request
 ): Promise<{ auth: AuthContext } | Response> {
   const apiKey = normalizeKey(request.headers.get("x-api-key"));
+
+  // No API key: return free tier auth (if enabled) instead of 401
   if (!apiKey) {
+    if (FREE_TIER_ENABLED) {
+      const clientIp = extractClientIp(request);
+      return {
+        auth: {
+          isServiceKey: false,
+          isFreeTier: true,
+          clientIp,
+          rateLimitKey: `free:${clientIp}`,
+        },
+      };
+    }
     return jsonError("Unauthorized", 401);
   }
 
@@ -223,6 +297,7 @@ export async function requireApiKey(
     return {
       auth: {
         isServiceKey: true,
+        isFreeTier: false,
         rateLimitKey: "service"
       }
     };
@@ -240,6 +315,7 @@ export async function requireApiKey(
   return {
     auth: {
       isServiceKey: false,
+      isFreeTier: false,
       userId: localKey.userId,
       keyId: localKey.keyId,
       rateLimitKey: localKey.userId || localKey.keyId || apiKey

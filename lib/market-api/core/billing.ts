@@ -26,7 +26,7 @@ function parseTtlSeconds(value: string | undefined, fallback: number): number {
 }
 
 const ALLOW_CACHE_TTL_MS = parseTtlSeconds(env.MARKET_USAGE_VALIDATE_TTL_SECONDS, 60) * 1000;
-const DENY_CACHE_TTL_MS = parseTtlSeconds(env.MARKET_USAGE_VALIDATE_DENY_TTL_SECONDS, 0) * 1000;
+const DENY_CACHE_TTL_MS = parseTtlSeconds(env.MARKET_USAGE_VALIDATE_DENY_TTL_SECONDS, 10) * 1000;
 
 function buildCacheKey(userId: string, officialTgUrl: string): string {
   return `${officialTgUrl.replace(/\/+$/, "")}|${userId}`;
