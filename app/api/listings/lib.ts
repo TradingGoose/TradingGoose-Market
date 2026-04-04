@@ -273,56 +273,65 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
 
-  const rowsFromDb = (await db!.execute(sql`
-    SELECT
-      l.id,
-      l.base,
-      cq.code AS "quote",
-      cq.name AS "quoteName",
-      l.name,
-      l.icon_url AS "iconUrl",
-      l.market_id AS "marketId",
-      mk.code AS "marketCode",
-      mk.name AS "marketName",
-      l.asset_class AS "assetClass",
-      l.active,
-      l.rank,
-      pm.id AS "primaryExchId",
-      pm.mic AS "primaryMicCode",
-      pm.country_id AS "countryId",
-      c.code AS "countryCode",
-      c.name AS "countryName",
-      COALESCE(l.secondary_exch_ids, ARRAY[]::text[]) AS "secondaryExchIds",
-      COALESCE(
-        (
-          SELECT jsonb_agg(jsonb_build_object('id', sm.id, 'mic', sm.mic, 'name', sm.name))
-          FROM (
-            SELECT DISTINCT m.id, m.mic, m.name
-            FROM exchanges m
-            WHERE l.secondary_exch_ids IS NOT NULL AND m.id = ANY(l.secondary_exch_ids)
-            ORDER BY m.mic ASC NULLS LAST
-          ) sm
-        ),
-        '[]'::jsonb
-      ) AS "secondaryExchDetails",
-      (COUNT(*) OVER())::int AS "_total"
-    FROM listings l
-    LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
-    LEFT JOIN currencies cq ON cq.id = l.quote
-    LEFT JOIN countries c ON c.id = pm.country_id
-    LEFT JOIN markets mk ON mk.id = l.market_id
-    ${whereClause}
-    ORDER BY l.rank DESC, l.base ASC
-    LIMIT ${query.pageSize}
-    OFFSET ${offset}
-  `)) as (Omit<ListingRow, "secondaryExchDetails" | "marketId" | "marketCode" | "marketName"> & {
-    secondaryExchDetails: unknown;
-    rank: number;
-    _total: number;
-  })[];
+  const [countResult, rowsFromDb] = await Promise.all([
+    db!.execute(sql`
+      SELECT COUNT(*)::int AS total
+      FROM listings l
+      LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
+      LEFT JOIN countries c ON c.id = pm.country_id
+      LEFT JOIN currencies cq ON cq.id = l.quote
+      ${whereClause}
+    `) as Promise<{ total: number }[]>,
 
-  const total = rowsFromDb[0]?._total ?? 0;
-  const rows = rowsFromDb.map(({ secondaryExchDetails, rank, _total, ...rest }) => ({
+    db!.execute(sql`
+      SELECT
+        l.id,
+        l.base,
+        cq.code AS "quote",
+        cq.name AS "quoteName",
+        l.name,
+        l.icon_url AS "iconUrl",
+        l.market_id AS "marketId",
+        mk.code AS "marketCode",
+        mk.name AS "marketName",
+        l.asset_class AS "assetClass",
+        l.active,
+        l.rank,
+        pm.id AS "primaryExchId",
+        pm.mic AS "primaryMicCode",
+        pm.country_id AS "countryId",
+        c.code AS "countryCode",
+        c.name AS "countryName",
+        COALESCE(l.secondary_exch_ids, ARRAY[]::text[]) AS "secondaryExchIds",
+        COALESCE(
+          (
+            SELECT jsonb_agg(jsonb_build_object('id', sm.id, 'mic', sm.mic, 'name', sm.name))
+            FROM (
+              SELECT DISTINCT m.id, m.mic, m.name
+              FROM exchanges m
+              WHERE l.secondary_exch_ids IS NOT NULL AND m.id = ANY(l.secondary_exch_ids)
+              ORDER BY m.mic ASC NULLS LAST
+            ) sm
+          ),
+          '[]'::jsonb
+        ) AS "secondaryExchDetails"
+      FROM listings l
+      LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
+      LEFT JOIN currencies cq ON cq.id = l.quote
+      LEFT JOIN countries c ON c.id = pm.country_id
+      LEFT JOIN markets mk ON mk.id = l.market_id
+      ${whereClause}
+      ORDER BY l.rank DESC, l.base ASC
+      LIMIT ${query.pageSize}
+      OFFSET ${offset}
+    `) as Promise<(Omit<ListingRow, "secondaryExchDetails" | "marketId" | "marketCode" | "marketName"> & {
+      secondaryExchDetails: unknown;
+      rank: number;
+    })[]>,
+  ]);
+
+  const total = countResult[0]?.total ?? 0;
+  const rows = rowsFromDb.map(({ secondaryExchDetails, rank, ...rest }) => ({
     ...rest,
     secondaryExchDetails: parseSecondaryExchDetails(secondaryExchDetails)
   }));
