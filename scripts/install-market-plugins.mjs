@@ -208,6 +208,42 @@ async function syncLocalPluginVendorSources(modules, sources) {
     await mkdir(path.dirname(vendorDirectory), { recursive: true });
     await cp(sourceDirectory, vendorDirectory, {
       recursive: true,
+      dereference: true,
+      filter(sourcePath) {
+        const baseName = path.basename(sourcePath);
+        return baseName !== ".git" && baseName !== "node_modules";
+      }
+    });
+
+    const importPath = normalizeRelativePath(
+      path.posix.join(
+        ".",
+        "vendor",
+        ...moduleName.split("/"),
+        entryRelativePath.replace(/\\/g, "/")
+      )
+    );
+
+    generatedImportSpecifiers.set(moduleName, importPath.startsWith(".") ? importPath : `./${importPath}`);
+  }
+
+  return generatedImportSpecifiers;
+}
+
+async function syncInstalledPluginVendorSources(modules) {
+  await rm(GENERATED_PLUGIN_VENDOR_ROOT, { recursive: true, force: true });
+
+  const generatedImportSpecifiers = new Map();
+
+  for (const moduleName of modules) {
+    const installedDirectory = path.join(process.cwd(), "node_modules", ...moduleName.split("/"));
+    const vendorDirectory = getVendorDirectory(moduleName);
+    const entryRelativePath = await resolvePluginEntryRelativePath(installedDirectory);
+
+    await mkdir(path.dirname(vendorDirectory), { recursive: true });
+    await cp(installedDirectory, vendorDirectory, {
+      recursive: true,
+      dereference: true,
       filter(sourcePath) {
         const baseName = path.basename(sourcePath);
         return baseName !== ".git" && baseName !== "node_modules";
@@ -380,6 +416,15 @@ async function main() {
   await writeFile(packageJsonPath, nextPackageJsonContents);
   try {
     await runBunInstall();
+    const installedImportSpecifiers = await syncInstalledPluginVendorSources(modules);
+    await writeFile(
+      GENERATED_PLUGIN_FILE_PATH,
+      createGeneratedPluginModule(modules, installedImportSpecifiers)
+    );
+    await writeFile(
+      GENERATED_PLUGIN_DECLARATION_FILE_PATH,
+      createGeneratedPluginDeclarations(modules, installedImportSpecifiers)
+    );
   } finally {
     await writeFile(packageJsonPath, originalPackageJsonContents);
   }
