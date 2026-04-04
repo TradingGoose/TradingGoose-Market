@@ -268,20 +268,54 @@ function mapListingForExport(listing: ListingExportSource): ListingExportRow {
   };
 }
 
+// Cached unfiltered count (refreshes every 30s, avoids 350k+ row scan per request)
+let unfilteredListingCount: { total: number; ts: number } | null = null;
+const UNFILTERED_COUNT_TTL = 30_000;
+
+function buildCountQuery(query: ListingsQuery, filters: SQL[]) {
+  if (!filters.length) {
+    // No filters: plain count, no JOINs needed
+    return sql`SELECT COUNT(*)::int AS total FROM listings`;
+  }
+
+  // Only add JOINs that the active filters actually reference
+  const joins: SQL[] = [];
+  if (query.quote !== undefined) {
+    joins.push(sql`LEFT JOIN currencies cq ON cq.id = l.quote`);
+  }
+  if (query.primaryExchId !== undefined || query.countryId !== undefined) {
+    joins.push(sql`LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id`);
+  }
+  if (query.countryId !== undefined) {
+    joins.push(sql`LEFT JOIN countries c ON c.id = pm.country_id`);
+  }
+
+  const joinClause = joins.length ? sql.join(joins, sql` `) : sql``;
+  const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
+  return sql`SELECT COUNT(*)::int AS total FROM listings l ${joinClause} ${whereClause}`;
+}
+
 export async function fetchListingsFromDb(query: ListingsQuery) {
   const filters = buildFilters(query);
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
+  const hasFilters = filters.length > 0;
 
-  const [countResult, rowsFromDb] = await Promise.all([
-    db!.execute(sql`
-      SELECT COUNT(*)::int AS total
-      FROM listings l
-      LEFT JOIN exchanges pm ON pm.id = l.primary_exch_id
-      LEFT JOIN countries c ON c.id = pm.country_id
-      LEFT JOIN currencies cq ON cq.id = l.quote
-      ${whereClause}
-    `) as Promise<{ total: number }[]>,
+  // Use cached total for unfiltered queries
+  let totalPromise: Promise<number>;
+  if (!hasFilters && unfilteredListingCount && Date.now() - unfilteredListingCount.ts < UNFILTERED_COUNT_TTL) {
+    totalPromise = Promise.resolve(unfilteredListingCount.total);
+  } else {
+    totalPromise = (db!.execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
+      .then((rows) => {
+        const total = rows[0]?.total ?? 0;
+        if (!hasFilters) unfilteredListingCount = { total, ts: Date.now() };
+        return total;
+      });
+  }
+
+  const [total, rowsFromDb] = await Promise.all([
+    totalPromise,
 
     db!.execute(sql`
       SELECT
@@ -330,7 +364,6 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
     })[]>,
   ]);
 
-  const total = countResult[0]?.total ?? 0;
   const rows = rowsFromDb.map(({ secondaryExchDetails, rank, ...rest }) => ({
     ...rest,
     secondaryExchDetails: parseSecondaryExchDetails(secondaryExchDetails)

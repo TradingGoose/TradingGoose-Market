@@ -36,6 +36,13 @@
       "when": 1775268569941,
       "tag": "0004_perf_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1775274648857,
+      "tag": "0005_rainy_raider",
+      "breakpoints": true
     }
   ]
 }
