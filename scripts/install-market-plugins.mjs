@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -17,6 +17,10 @@ const GENERATED_PLUGIN_VENDOR_ROOT = path.join(
   process.cwd(),
   "lib/market-api/plugins/vendor"
 );
+const VENDORED_IMPORT_REPLACEMENTS = new Map([
+  ["@tradinggoose/market-uploads/core/storage-client", "@uploads/core/storage-client"],
+  ["@tradinggoose/market-uploads", "@uploads"]
+]);
 const SHOULD_INSTALL = process.argv.includes("--install");
 const INITIAL_ENV_KEYS = new Set(Object.keys(process.env));
 
@@ -162,6 +166,33 @@ function getVendorDirectory(moduleName) {
   return path.join(GENERATED_PLUGIN_VENDOR_ROOT, ...moduleName.split("/"));
 }
 
+async function rewriteVendoredWorkspaceImports(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await rewriteVendoredWorkspaceImports(entryPath);
+      continue;
+    }
+
+    if (!/\.(?:[cm]?[jt]sx?)$/i.test(entry.name)) {
+      continue;
+    }
+
+    const original = await readFile(entryPath, "utf8");
+    let next = original;
+
+    for (const [from, to] of VENDORED_IMPORT_REPLACEMENTS) {
+      next = next.replaceAll(from, to);
+    }
+
+    if (next !== original) {
+      await writeFile(entryPath, next);
+    }
+  }
+}
+
 async function resolvePluginEntryRelativePath(sourceDirectory) {
   const packageJsonPath = path.join(sourceDirectory, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
@@ -214,6 +245,7 @@ async function syncLocalPluginVendorSources(modules, sources) {
         return baseName !== ".git" && baseName !== "node_modules";
       }
     });
+    await rewriteVendoredWorkspaceImports(vendorDirectory);
 
     const importPath = normalizeRelativePath(
       path.posix.join(
@@ -249,6 +281,7 @@ async function syncInstalledPluginVendorSources(modules) {
         return baseName !== ".git" && baseName !== "node_modules";
       }
     });
+    await rewriteVendoredWorkspaceImports(vendorDirectory);
 
     const importPath = normalizeRelativePath(
       path.posix.join(
