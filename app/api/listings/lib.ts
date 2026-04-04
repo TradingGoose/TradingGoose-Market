@@ -268,15 +268,10 @@ function mapListingForExport(listing: ListingExportSource): ListingExportRow {
   };
 }
 
-// Fast estimated count from pg_class (updated by VACUUM/ANALYZE, accurate for pagination)
-function estimatedCount(tableName: string) {
-  return sql`SELECT COALESCE(reltuples, 0)::int AS total FROM pg_class WHERE relname = ${tableName}`;
-}
-
 function buildCountQuery(query: ListingsQuery, filters: SQL[]) {
-  // No filters: use pg_class estimate (instant, no I/O)
+  // No filters: simple count, no JOINs
   if (!filters.length) {
-    return estimatedCount("listings");
+    return sql`SELECT COUNT(*)::int AS total FROM listings`;
   }
 
   // Only add JOINs that the active filters actually reference

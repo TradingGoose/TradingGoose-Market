@@ -20,6 +20,7 @@ import {
 } from "@/lib/market-api/plugins/app-routes";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const iconUrlSchema = z.union([
   z.string().trim().url(),

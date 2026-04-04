@@ -208,11 +208,10 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
 
   const hasFilters = filters.length > 0;
 
-  // No filters: use pg_class estimate (instant). Filtered: real COUNT.
   const totalPromise = (db!.execute(
     hasFilters
       ? sql`SELECT COUNT(*)::int AS total FROM cryptos cr ${whereClause}`
-      : sql`SELECT COALESCE(reltuples, 0)::int AS total FROM pg_class WHERE relname = ${"cryptos"}`
+      : sql`SELECT COUNT(*)::int AS total FROM cryptos`
   ) as Promise<{ total: number }[]>).then((rows) => rows[0]?.total ?? 0);
 
   const [total, rowsFromDb, chainMap] = await Promise.all([
