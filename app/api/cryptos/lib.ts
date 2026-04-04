@@ -191,6 +191,10 @@ export async function fetchCryptoOptions(query: string | null, limit: number) {
   }));
 }
 
+// Cached unfiltered count (refreshes every 30s)
+let unfilteredCryptoCount: { total: number; ts: number } | null = null;
+const UNFILTERED_CRYPTO_COUNT_TTL = 30_000;
+
 export async function fetchCryptosFromDb(query: CryptosQuery) {
   const filters = buildFilters(query);
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
@@ -206,12 +210,25 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
       END) DESC, cr.rank DESC, cr.code ASC`
     : sql`ORDER BY cr.rank DESC, cr.code ASC`;
 
-  const [countResult, rowsFromDb, chainMap] = await Promise.all([
-    db!.execute(sql`
-      SELECT COUNT(*)::int AS total
-      FROM cryptos cr
-      ${whereClause}
-    `) as Promise<{ total: number }[]>,
+  const hasFilters = filters.length > 0;
+
+  let totalPromise: Promise<number>;
+  if (!hasFilters && unfilteredCryptoCount && Date.now() - unfilteredCryptoCount.ts < UNFILTERED_CRYPTO_COUNT_TTL) {
+    totalPromise = Promise.resolve(unfilteredCryptoCount.total);
+  } else {
+    totalPromise = (db!.execute(
+      hasFilters
+        ? sql`SELECT COUNT(*)::int AS total FROM cryptos cr ${whereClause}`
+        : sql`SELECT COUNT(*)::int AS total FROM cryptos`
+    ) as Promise<{ total: number }[]>).then((rows) => {
+      const total = rows[0]?.total ?? 0;
+      if (!hasFilters) unfilteredCryptoCount = { total, ts: Date.now() };
+      return total;
+    });
+  }
+
+  const [total, rowsFromDb, chainMap] = await Promise.all([
+    totalPromise,
 
     db!.execute(sql`
       SELECT
@@ -236,7 +253,6 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
     buildChainMap(),
   ]);
 
-  const total = countResult[0]?.total ?? 0;
   const rows: CryptoRow[] = rowsFromDb.map((row) => {
     const contracts = hydrateContracts(parseContractAddresses(row.contractAddresses), chainMap);
     return {

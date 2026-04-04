@@ -235,7 +235,7 @@ export const cryptos = pgTable(
     idPattern: check("cryptos_id_pattern", sql`${table.id} ~ '^TG_CRYP_[0-9A-F]{6}$'`),
     codePattern: check("cryptos_code_pattern", sql`${table.code} ~ '^.{1,64}$'`),
     uniqueCodeNameIdx: uniqueIndex("cryptos_code_name_idx").on(table.code, table.name),
-    rankCodeIdx: index("cryptos_rank_code_idx").on(table.rank, table.code),
+    rankCodeIdx: index("cryptos_rank_code_idx").on(sql`rank DESC, code ASC`),
     assetTypeIdx: index("cryptos_asset_type_idx").on(table.assetType)
   })
 );
@@ -428,6 +428,6 @@ export const listings = pgTable(
     marketIdIdx: index("listings_market_id_idx").on(table.marketId),
     primaryExchIdIdx: index("listings_primary_exch_id_idx").on(table.primaryExchId),
     assetClassIdx: index("listings_asset_class_idx").on(table.assetClass),
-    rankBaseIdx: index("listings_rank_base_idx").on(table.rank, table.base)
+    rankBaseIdx: index("listings_rank_base_idx").on(sql`rank DESC, base ASC`)
   })
 );
