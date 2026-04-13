@@ -27,9 +27,18 @@ function parseTtlSeconds(value: string | undefined, fallback: number): number {
 
 const ALLOW_CACHE_TTL_MS = parseTtlSeconds(env.MARKET_USAGE_VALIDATE_TTL_SECONDS, 60) * 1000;
 const DENY_CACHE_TTL_MS = parseTtlSeconds(env.MARKET_USAGE_VALIDATE_DENY_TTL_SECONDS, 10) * 1000;
+const VALIDATE_TIMEOUT_MS = parseTtlSeconds(env.MARKET_USAGE_VALIDATE_TIMEOUT_MS, 5) * 1000;
+const POST_TIMEOUT_MS = parseTtlSeconds(env.MARKET_USAGE_POST_TIMEOUT_MS, 5) * 1000;
 
 function buildCacheKey(userId: string, officialTgUrl: string): string {
   return `${officialTgUrl.replace(/\/+$/, "")}|${userId}`;
+}
+
+function createTimeoutSignal(timeoutMs: number): AbortSignal | undefined {
+  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function") {
+    return undefined;
+  }
+  return AbortSignal.timeout(timeoutMs);
 }
 
 // --- Validate usage limit (calls Studio) ---
@@ -47,6 +56,7 @@ export async function validateUsageLimit(params: {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": internalApiSecret },
       body: JSON.stringify({ userId }),
+      signal: createTimeoutSignal(VALIDATE_TIMEOUT_MS),
     });
     if (!res.ok) {
       return { allowed: false, status: res.status, error: `Validate failed ${res.status}` };
@@ -114,6 +124,7 @@ export async function postMarketUsage(params: {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": internalApiSecret },
       body: JSON.stringify({ userId, endpoint, method }),
+      signal: createTimeoutSignal(POST_TIMEOUT_MS),
     });
     if (!res.ok) {
       return { success: false, status: res.status, error: `Usage post failed ${res.status}` };

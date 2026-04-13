@@ -99,10 +99,7 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
       effectiveAssetClasses.length === 0 || effectiveAssetClasses.includes("crypto");
     const includeCurrency =
       effectiveAssetClasses.length === 0 || effectiveAssetClasses.includes("currency");
-    const groupCount = Number(includeListing) + Number(includeCrypto) + Number(includeCurrency);
     const isDefaultQuery = !rawQuery;
-    const groupLimit =
-      isDefaultQuery && groupCount > 1 ? Math.max(1, Math.ceil(limit / groupCount)) : limit;
 
     const hasListingCriteria = Boolean(
       rawQuery ||
@@ -116,15 +113,19 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
       rawQuery ||
       hasCryptoQuoteFilters ||
       hasChainFilters ||
-      effectiveAssetClasses.includes("crypto") ||
-      (isDefaultQuery && includeCrypto)
+      effectiveAssetClasses.includes("crypto")
     );
     const hasCurrencyCriteria = Boolean(
       rawQuery ||
       hasCurrencyQuoteFilters ||
-      effectiveAssetClasses.includes("currency") ||
-      (isDefaultQuery && includeCurrency)
+      effectiveAssetClasses.includes("currency")
     );
+    const taskCount =
+      Number(includeListing && hasListingCriteria) +
+      Number(includeCrypto && hasCryptoCriteria) +
+      Number(includeCurrency && hasCurrencyCriteria);
+    const groupLimit =
+      isDefaultQuery && taskCount > 1 ? Math.max(1, Math.ceil(limit / taskCount)) : limit;
 
     if (regionTokens.length && !includeListing) {
       return c.json({ data: [] });

@@ -5,7 +5,7 @@ import { enforceRateLimit } from "@/lib/market-api/core/rate-limit";
 import { enforceFreeTierLimit, buildFreeTierLimitResponse } from "@/lib/market-api/core/free-tier";
 import { createPluginContext } from "@/lib/market-api/plugins/context";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 function setTierHeader(response: Response, isFreeTier: boolean) {
   response.headers.set("x-market-tier", isFreeTier ? "free" : "authenticated");
@@ -77,10 +77,12 @@ export async function handleMarketRequest(
   // Post usage after successful response (fire-and-forget, outbox-backed)
   if (billingEnabled && response.ok) {
     const path = new URL(request.url).pathname;
-    void postMarketUsageDurable({
-      userId: effectiveUserId,
-      endpoint: path,
-      method: request.method,
+    after(async () => {
+      await postMarketUsageDurable({
+        userId: effectiveUserId,
+        endpoint: path,
+        method: request.method,
+      });
     });
   }
 
