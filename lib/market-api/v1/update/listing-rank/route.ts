@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
 
 import { db, schema } from "@tradinggoose/db";
+import { requireRankUpdateAccess } from "../rank-access";
 
 async function resolveListingId(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -23,11 +25,14 @@ async function resolveListingId(request: Request) {
   return null;
 }
 
-export async function postUpdateListingRank(c: ApiContext) {
+export async function postUpdateListingRank(c: ApiContext, plugin?: PluginContext) {
   try {
     if (!db) {
       return c.json({ error: "Database connection is not configured." }, 503);
     }
+
+    const accessError = requireRankUpdateAccess(c, plugin);
+    if (accessError) return accessError;
 
     const request = c.req.raw;
     const listingId = await resolveListingId(request);

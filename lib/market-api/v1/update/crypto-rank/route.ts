@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
+import type { PluginContext } from "@/lib/market-api/plugins/types";
 
 import { db, schema } from "@tradinggoose/db";
+import { requireRankUpdateAccess } from "../rank-access";
 
 type CryptoLookup = {
   id?: string | null;
@@ -66,11 +68,14 @@ async function resolveCryptoId(request: Request): Promise<string | null> {
   return rows[0]?.id ?? null;
 }
 
-export async function postUpdateCryptoRank(c: ApiContext) {
+export async function postUpdateCryptoRank(c: ApiContext, plugin?: PluginContext) {
   try {
     if (!db) {
       return c.json({ error: "Database connection is not configured." }, 503);
     }
+
+    const accessError = requireRankUpdateAccess(c, plugin);
+    if (accessError) return accessError;
 
     const request = c.req.raw;
     const cryptoId = await resolveCryptoId(request);

@@ -129,6 +129,7 @@ Optional or integration-specific:
 
 - Runtime DB tuning: `DATABASE_POOL_URL`, `DATABASE_POOL_MAX`.
 - Free-tier and rate limiting: `REDIS_URL`, `MARKET_FREE_TIER_*`.
+- Rank update access: `MARKET_RANK_UPDATE_ACCESS_MODE` (`authenticated` or `service`).
 - Email delivery: `RESEND_API_KEY`, optional `FROM_EMAIL_ADDRESS`.
 - TradingGoose Studio billing integration: `OFFICIAL_TG_URL`.
 - Storage and plugins: `STORAGE_SERVICE`, cloud storage credentials, `MARKET_PLUGIN_MODULES`, `MARKET_PLUGIN_SOURCES`.

@@ -151,8 +151,8 @@ export async function enforceFreeTierLimit(ip: string): Promise<FreeTierResult> 
 export function buildFreeTierLimitResponse(result: Extract<FreeTierResult, { allowed: false }>) {
   const message =
     result.reason === "daily"
-      ? "Free tier daily limit exceeded. Get an API key for higher limits."
-      : "Free tier rate limit exceeded. Max 25 requests per minute.";
+      ? `Free tier daily limit exceeded. Max ${FREE_TIER_RPD} requests per day. Get an API key for higher limits.`
+      : `Free tier rate limit exceeded. Max ${FREE_TIER_RPM} requests per minute.`;
 
   return new Response(JSON.stringify({ error: message }), {
     status: 429,
