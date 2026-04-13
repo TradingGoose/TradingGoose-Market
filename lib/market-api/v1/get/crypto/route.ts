@@ -1,6 +1,6 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { fetchCryptoById, fetchCryptosByIds } from "../../search/cryptos/route";
@@ -33,19 +33,22 @@ export async function getCrypto(c: ApiContext, plugin?: PluginContext) {
       if (!crypto) {
         return c.json({ data: null, error: "Crypto not found." }, 404);
       }
-      const [data] = plugin ? await runEntityEnrichers(plugin, "crypto", "get", [crypto]) : [crypto];
-      return c.json({ data: data ?? crypto });
+      if (plugin) {
+        triggerEntityEnrichersInBackground(plugin, "crypto", "get", [crypto]);
+      }
+      return c.json({ data: crypto });
     }
 
     const resolved = await fetchCryptosByIds(request, cryptoIds, { forceLogoRefresh: true });
     const rows = cryptoIds
       .map((id) => resolved.get(id))
       .filter((row): row is NonNullable<typeof row> => row != null);
-    const enrichedRows = plugin ? await runEntityEnrichers(plugin, "crypto", "get", rows) : rows;
-    const enrichedById = new Map(enrichedRows.map((row) => [row.id, row] as const));
+    if (plugin) {
+      triggerEntityEnrichersInBackground(plugin, "crypto", "get", rows);
+    }
     const data: Record<string, Awaited<ReturnType<typeof fetchCryptoById>> | null> = {};
     for (const id of cryptoIds) {
-      data[id] = enrichedById.get(id) ?? resolved.get(id) ?? null;
+      data[id] = resolved.get(id) ?? null;
     }
     return c.json({ data });
   } catch (error) {

@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "../utils";
@@ -131,11 +131,11 @@ export async function getSearchCurrencies(c: ApiContext, plugin?: PluginContext)
       LIMIT ${limit}
     `)) as unknown as CurrencySearchRow[];
 
-    const enrichedRows = plugin
-      ? await runEntityEnrichers(plugin, "currency", "search", rows)
-      : rows;
+    if (plugin) {
+      triggerEntityEnrichersInBackground(plugin, "currency", "search", rows);
+    }
 
-    const data = enrichedRows.map((row) => ({
+    const data = rows.map((row) => ({
       ...row,
       iconUrl: resolveIconUrl(request, row.iconUrl)
     }));

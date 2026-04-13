@@ -1,6 +1,6 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { fetchCurrenciesByIds, fetchCurrencyById } from "../../search/currencies/route";
@@ -31,19 +31,22 @@ export async function getCurrency(c: ApiContext, plugin?: PluginContext) {
       if (!currency) {
         return c.json({ data: null, error: "Currency not found." }, 404);
       }
-      const [data] = plugin ? await runEntityEnrichers(plugin, "currency", "get", [currency]) : [currency];
-      return c.json({ data: data ?? currency });
+      if (plugin) {
+        triggerEntityEnrichersInBackground(plugin, "currency", "get", [currency]);
+      }
+      return c.json({ data: currency });
     }
 
     const resolved = await fetchCurrenciesByIds(request, currencyIds);
     const rows = currencyIds
       .map((id) => resolved.get(id))
       .filter((row): row is NonNullable<typeof row> => row != null);
-    const enrichedRows = plugin ? await runEntityEnrichers(plugin, "currency", "get", rows) : rows;
-    const enrichedById = new Map(enrichedRows.map((row) => [row.id, row] as const));
+    if (plugin) {
+      triggerEntityEnrichersInBackground(plugin, "currency", "get", rows);
+    }
     const data: Record<string, Awaited<ReturnType<typeof fetchCurrencyById>> | null> = {};
     for (const id of currencyIds) {
-      data[id] = enrichedById.get(id) ?? resolved.get(id) ?? null;
+      data[id] = resolved.get(id) ?? null;
     }
     return c.json({ data });
   } catch (error) {

@@ -1,6 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "./utils";
@@ -66,12 +66,13 @@ export async function buildCurrencyPairs(
   const baseLimit = hasBaseFilters ? Math.min(limit, 200) : Math.min(25, limit);
   const quoteLimit = hasQuoteFilters ? Math.min(limit, 200) : Math.min(25, limit);
 
-  const bases = plugin
-    ? await runEntityEnrichers(plugin, "currency", "search", await fetchCurrencies(baseFilters, baseLimit))
-    : await fetchCurrencies(baseFilters, baseLimit);
-  const quotes = plugin
-    ? await runEntityEnrichers(plugin, "currency", "search", await fetchCurrencies(quoteFilters, quoteLimit))
-    : await fetchCurrencies(quoteFilters, quoteLimit);
+  const bases = await fetchCurrencies(baseFilters, baseLimit);
+  const quotes = await fetchCurrencies(quoteFilters, quoteLimit);
+
+  if (plugin) {
+    triggerEntityEnrichersInBackground(plugin, "currency", "search", bases);
+    triggerEntityEnrichersInBackground(plugin, "currency", "search", quotes);
+  }
 
   if (!bases.length || !quotes.length) {
     return [];

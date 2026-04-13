@@ -1,4 +1,5 @@
 import { getInstalledMarketPlugins } from "@/lib/market-api/plugins/installed";
+import { after } from "next/server";
 import type {
   CoreRouteHandler,
   EntityEnricher,
@@ -93,6 +94,24 @@ export async function runEntityEnrichers<T>(
     current = await (enricher as EntityEnricher<T>).run(context, current);
   }
   return current;
+}
+
+export function triggerEntityEnrichersInBackground<T>(
+  context: PluginContext,
+  kind: EntityKind,
+  stage: EnrichmentStage,
+  rows: T[]
+) {
+  if (!rows.length) return;
+
+  const queuedRows = [...rows];
+  after(async () => {
+    try {
+      await runEntityEnrichers(context, kind, stage, queuedRows);
+    } catch (error) {
+      context.log.error(`[plugins] background ${kind}/${stage} enrichment failed`, error);
+    }
+  });
 }
 
 async function getProviders<T>(key: keyof NonNullable<MarketPlugin["providers"]>): Promise<T[]> {

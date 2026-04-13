@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "../utils";
@@ -389,21 +389,24 @@ export async function searchCryptoPairs(
   ]);
 
   // Apply enrichers if plugin context is available
-  const baseCryptos = plugin
-    ? await runEntityEnrichers(plugin, "crypto", "search", rawBaseCryptos)
-    : rawBaseCryptos;
+  if (plugin) {
+    triggerEntityEnrichersInBackground(plugin, "crypto", "search", rawBaseCryptos);
+  }
+  const baseCryptos = rawBaseCryptos;
 
   const quoteCandidates: QuoteCandidate[] = [];
   if (quoteType !== "currency" && rawCryptoQuotes.length) {
-    const cryptoQuotes = plugin
-      ? await runEntityEnrichers(plugin, "crypto", "search", rawCryptoQuotes)
-      : rawCryptoQuotes;
+    if (plugin) {
+      triggerEntityEnrichersInBackground(plugin, "crypto", "search", rawCryptoQuotes);
+    }
+    const cryptoQuotes = rawCryptoQuotes;
     cryptoQuotes.forEach((row) => quoteCandidates.push({ type: "crypto", ...row }));
   }
   if (quoteType !== "crypto" && rawCurrencyQuotes.length) {
-    const currencyQuotes = plugin
-      ? await runEntityEnrichers(plugin, "currency", "search", rawCurrencyQuotes)
-      : rawCurrencyQuotes;
+    if (plugin) {
+      triggerEntityEnrichersInBackground(plugin, "currency", "search", rawCurrencyQuotes);
+    }
+    const currencyQuotes = rawCurrencyQuotes;
     currencyQuotes.forEach((row) => quoteCandidates.push({ type: "currency", ...row }));
   }
 

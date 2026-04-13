@@ -1,5 +1,5 @@
 import { createRoutePluginContext } from "@/lib/market-api/plugins/context";
-import { getEntityEnrichers, runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 import type { EntityKind } from "@/lib/market-api/plugins/types";
 
 export async function runAppRouteAdminReadEnrichers<T>(
@@ -9,10 +9,9 @@ export async function runAppRouteAdminReadEnrichers<T>(
   userId?: string | null
 ) {
   if (!rows.length) return rows;
-  const enrichers = await getEntityEnrichers(kind, "admin-read");
-  if (!enrichers.length) return rows;
   const plugin = createRoutePluginContext(request, { userId });
-  return runEntityEnrichers(plugin, kind, "admin-read", rows);
+  triggerEntityEnrichersInBackground(plugin, kind, "admin-read", rows);
+  return rows;
 }
 
 export async function runAppRouteAfterWriteEnricher<T>(
@@ -22,9 +21,7 @@ export async function runAppRouteAfterWriteEnricher<T>(
   userId?: string | null
 ) {
   if (!row) return row;
-  const enrichers = await getEntityEnrichers(kind, "after-write");
-  if (!enrichers.length) return row;
   const plugin = createRoutePluginContext(request, { userId });
-  const [enriched] = await runEntityEnrichers(plugin, kind, "after-write", [row]);
-  return enriched ?? row;
+  triggerEntityEnrichersInBackground(plugin, kind, "after-write", [row]);
+  return row;
 }

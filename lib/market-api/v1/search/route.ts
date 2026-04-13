@@ -29,7 +29,7 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
     const filters = parseFiltersParam(searchParams);
-    const limit = parsePositiveInt(filters.limit, 50, 200);
+    const limit = parsePositiveInt(searchParams.get("limit") ?? filters.limit, 50, 200);
     const rawQuery = searchParams.get("search_query")?.trim() ?? null;
     const parsedQuery = parseSearchQuery(rawQuery);
     const baseQuery = parsedQuery.baseQuery ?? null;

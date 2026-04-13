@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { HttpStatusCode } from "@/lib/market-api/core/http";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { runEntityEnrichers } from "@/lib/market-api/plugins/runtime";
+import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
 import { db } from "@tradinggoose/db";
 import { resolveIconUrl } from "../utils";
@@ -178,10 +178,10 @@ async function buildSearchListings(
   rows: ListingSearchResult[],
   plugin?: PluginContext
 ) {
-  const enrichedRows = plugin
-    ? await runEntityEnrichers(plugin, "listing", "search", rows)
-    : rows;
-  return buildPublicListings(request, enrichedRows);
+  if (plugin) {
+    triggerEntityEnrichersInBackground(plugin, "listing", "search", rows);
+  }
+  return buildPublicListings(request, rows);
 }
 
 async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?: string) {
