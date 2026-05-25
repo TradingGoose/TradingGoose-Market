@@ -20,7 +20,6 @@ import { searchListingRows } from "./listings/route";
 
 type RankedListing = {
   listing: ListingResult;
-  normalizedRank: number;
   rankValue: number;
 };
 
@@ -120,12 +119,7 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
       hasCurrencyQuoteFilters ||
       effectiveAssetClasses.includes("currency")
     );
-    const taskCount =
-      Number(includeListing && hasListingCriteria) +
-      Number(includeCrypto && hasCryptoCriteria) +
-      Number(includeCurrency && hasCurrencyCriteria);
-    const groupLimit =
-      isDefaultQuery && taskCount > 1 ? Math.max(1, Math.ceil(limit / taskCount)) : limit;
+    const groupLimit = limit;
 
     if (regionTokens.length && !includeListing) {
       return c.json({ data: [] });
@@ -215,15 +209,26 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
       }
     }
     if (results.cryptos?.length) {
-      for (const pair of results.cryptos) {
-        merged.push(toCryptoListing(pair));
+      if (isDefaultQuery) {
+        const seenBaseIds = new Set<string>();
+        for (const pair of results.cryptos) {
+          const listing = toCryptoListing(pair);
+          const baseKey = listing.base_id ?? listing.base;
+          if (seenBaseIds.has(baseKey)) continue;
+          seenBaseIds.add(baseKey);
+          merged.push(listing);
+        }
+      } else {
+        for (const pair of results.cryptos) {
+          merged.push(toCryptoListing(pair));
+        }
       }
     }
     if (results.currencies?.length) {
       const seen = new Set<string>();
       for (const pair of results.currencies) {
         const listing = toCurrencyListing(pair);
-        const key = `${listing.base}:${listing.quote}`;
+        const key = isDefaultQuery ? listing.base : `${listing.base}:${listing.quote}`;
         if (seen.has(key)) continue;
         seen.add(key);
         merged.push(listing);
@@ -241,32 +246,15 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
         })
         : merged;
 
-    const maxRankByType = new Map<string, number>();
-    for (const listing of filteredMerged) {
-      const listingType = listing.listing_type ?? "default";
-      const rankValue = Number(listing.rank ?? 0);
-      const current = maxRankByType.get(listingType) ?? 0;
-      if (Number.isFinite(rankValue) && rankValue > current) {
-        maxRankByType.set(listingType, rankValue);
-      }
-    }
-
     const scored: RankedListing[] = filteredMerged.map((listing) => {
-      const listingType = listing.listing_type ?? "default";
-      const maxRank = maxRankByType.get(listingType) ?? 0;
       const rankValue = Number(listing.rank ?? 0);
-      const normalizedRank =
-        Number.isFinite(rankValue) && maxRank > 0 ? rankValue / maxRank : 0;
       return {
         listing,
-        normalizedRank,
         rankValue: Number.isFinite(rankValue) ? rankValue : 0
       };
     });
 
     scored.sort((a, b) => {
-      const rankDiff = b.normalizedRank - a.normalizedRank;
-      if (rankDiff !== 0) return rankDiff;
       const rawRankDiff = b.rankValue - a.rankValue;
       if (rawRankDiff !== 0) return rawRankDiff;
       const baseDiff = a.listing.base.localeCompare(b.listing.base);
