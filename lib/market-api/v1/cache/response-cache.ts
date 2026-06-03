@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "crypto";
+import { createHash } from "crypto";
 import { getRedis } from "@/lib/market-api/core/redis";
 import { resolveSearchParams } from "../search/params";
 
@@ -7,14 +7,6 @@ const SEARCH_CACHE_KIND = "search";
 const GET_CACHE_KIND = "get";
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_BODY_BYTES = 512 * 1024;
-const CACHE_LOCK_TTL_MS = 10_000;
-const CACHE_WAIT_INTERVAL_MS = 50;
-const RELEASE_LOCK_SCRIPT = `
-if redis.call("get", KEYS[1]) == ARGV[1] then
-  return redis.call("del", KEYS[1])
-end
-return 0
-`;
 
 type RedisClient = ReturnType<typeof getRedis>;
 type CacheKind = typeof SEARCH_CACHE_KIND | typeof GET_CACHE_KIND;
@@ -116,33 +108,9 @@ function buildCacheSafeRequest(request: Request, params: URLSearchParams) {
   });
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function readCachedResponse(redis: RedisClient, cacheKey: string) {
   const cached = await redis.get(cacheKey);
   return cached ? (JSON.parse(cached) as SerializedResponse) : null;
-}
-
-async function acquireCacheLock(redis: RedisClient, lockKey: string) {
-  const token = randomUUID();
-  const locked = await redis.set(lockKey, token, "PX", CACHE_LOCK_TTL_MS, "NX");
-  return locked === "OK" ? { lockKey, token } : null;
-}
-
-async function releaseCacheLock(redis: RedisClient, lockKey: string, token: string) {
-  await redis.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, token).catch(() => undefined);
-}
-
-async function waitForCachedResponse(redis: RedisClient, cacheKey: string, lockKey: string) {
-  for (let waited = 0; waited < CACHE_LOCK_TTL_MS; waited += CACHE_WAIT_INTERVAL_MS) {
-    await sleep(CACHE_WAIT_INTERVAL_MS);
-    const cached = await readCachedResponse(redis, cacheKey);
-    if (cached) return cached;
-    if (!(await redis.exists(lockKey))) return null;
-  }
-  return null;
 }
 
 type ResponseCacheConfig = {
@@ -159,34 +127,36 @@ async function withResponseCache(
 ) {
   if (request.method.toUpperCase() !== "GET") return resolver(request);
 
-  const redis = getRedis();
   const params = await resolveSearchParams(request);
   const rawCacheKey = buildCacheKey(config.scope, params);
   const cacheKey = buildResponseCacheKey(config.kind, rawCacheKey);
-  const lockKey = `${cacheKey}:lock`;
-  let cached = await readCachedResponse(redis, cacheKey);
+  const cacheSafeRequest = buildCacheSafeRequest(request, params);
+  let redis: RedisClient | null = null;
 
-  while (!cached) {
-    const lock = await acquireCacheLock(redis, lockKey);
-    if (lock) {
-      try {
-        const cacheSafeRequest = buildCacheSafeRequest(request, params);
-        const serialized = await toSerializedResponse(await resolver(cacheSafeRequest));
-        if (!shouldCacheSerializedResponse(serialized, getMaxBodyBytes(config.maxBodyBytesEnvKey))) {
-          return toResponse(serialized, "BYPASS");
-        }
-
-        await redis.set(cacheKey, JSON.stringify(serialized), "EX", getCacheTtlSeconds(config.ttlEnvKey));
-        return toResponse(serialized, "MISS");
-      } finally {
-        await releaseCacheLock(redis, lock.lockKey, lock.token);
-      }
-    }
-
-    cached = await waitForCachedResponse(redis, cacheKey, lockKey);
+  try {
+    redis = getRedis();
+    const cached = await readCachedResponse(redis, cacheKey);
+    if (cached) return toResponse(cached, "HIT");
+  } catch (error) {
+    redis = null;
+    console.error("[response-cache] Redis read failed:", error instanceof Error ? error.message : error);
   }
 
-  return toResponse(cached, "HIT");
+  const serialized = await toSerializedResponse(await resolver(cacheSafeRequest));
+  if (!shouldCacheSerializedResponse(serialized, getMaxBodyBytes(config.maxBodyBytesEnvKey))) {
+    return toResponse(serialized, "BYPASS");
+  }
+
+  if (redis) {
+    try {
+      await redis.set(cacheKey, JSON.stringify(serialized), "EX", getCacheTtlSeconds(config.ttlEnvKey));
+      return toResponse(serialized, "MISS");
+    } catch (error) {
+      console.error("[response-cache] Redis write failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  return toResponse(serialized, "BYPASS");
 }
 
 export async function withSearchResponseCache(
