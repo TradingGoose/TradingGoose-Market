@@ -342,25 +342,6 @@ export const marketKeys = pgTable(
   })
 );
 
-export const marketBillingOutbox = pgTable(
-  "market_billing_outbox",
-  {
-    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
-    eventType: text("event_type").notNull(),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-    userId: text("user_id").notNull(),
-    attempts: integer("attempts").notNull().default(0),
-    lastAttemptAt: timestamp("last_attempt_at", { mode: "string" }),
-    nextRetryAt: timestamp("next_retry_at", { mode: "string" }),
-    deliveredAt: timestamp("delivered_at", { mode: "string" }),
-    createdAt: timestamp("created_at", { mode: "string" }).notNull().default(sql`now()`)
-  },
-  (table) => ({
-    pendingIdx: index("market_billing_outbox_pending_idx").on(table.deliveredAt, table.nextRetryAt),
-    userIdIdx: index("market_billing_outbox_user_id_idx").on(table.userId)
-  })
-);
-
 export const marketHours = pgTable(
   "market_hours",
   {
