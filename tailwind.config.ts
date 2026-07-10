@@ -30,7 +30,7 @@ export default {
 					DEFAULT: 'hsl(var(--primary))',
 					foreground: 'hsl(var(--primary-foreground))',
 				},
-				'primary-hover': 'hsla(var(--primary-hover),0.8)',
+				'primary-hover': 'hsl(var(--primary-hover) / 0.8)',
 				secondary: {
 					DEFAULT: 'hsl(var(--secondary))',
 					foreground: 'hsl(var(--secondary-foreground))',
