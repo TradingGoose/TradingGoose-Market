@@ -1,11 +1,11 @@
 import { createApiContext, type ApiContext } from "@/lib/market-api/core/context";
 import { requireApiKey } from "@/lib/market-api/core/auth";
-import { billingConfig, validateUsageLimitCached, postMarketUsageDurable } from "@/lib/market-api/core/billing";
+import { billingConfig, validateUsageLimitCached, postMarketUsage } from "@/lib/market-api/core/billing";
 import { enforceRateLimit } from "@/lib/market-api/core/rate-limit";
 import { enforceFreeTierLimit, buildFreeTierLimitResponse } from "@/lib/market-api/core/free-tier";
 import { createPluginContext } from "@/lib/market-api/plugins/context";
 import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 function setTierHeader(response: Response, isFreeTier: boolean) {
   response.headers.set("x-market-tier", isFreeTier ? "free" : "authenticated");
@@ -74,16 +74,22 @@ export async function handleMarketRequest(
 
   setTierHeader(response, false);
 
-  // Post usage after successful response (fire-and-forget, outbox-backed)
+  // Post usage after successful response and before returning billable data.
   if (billingEnabled && response.ok) {
     const path = new URL(request.url).pathname;
-    after(async () => {
-      await postMarketUsageDurable({
-        userId: effectiveUserId,
-        endpoint: path,
-        method: request.method,
-      });
+    const usagePost = await postMarketUsage({
+      userId: effectiveUserId,
+      endpoint: path,
+      method: request.method,
     });
+    if (!usagePost.success) {
+      const res = NextResponse.json(
+        { error: "Usage billing failed" },
+        { status: usagePost.status ?? 502 }
+      );
+      res.headers.set("x-market-api", "next");
+      return res;
+    }
   }
 
   return response;

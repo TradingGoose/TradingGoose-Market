@@ -64,13 +64,13 @@
 
   /* Light Mode Theme */
   :root,
-  .light {
+  :root.light {
     /* Core Colors */
     --background: 0 0% 100%;
     --foreground: 20 14.3% 4.1%;
 
     /* Card Colors */
-    --card: 0 0% 99.5%;
+    --card: 0 0% 98.5%;
     --card-foreground: 20 14.3% 4.1%;
 
     /* Popover Colors */
@@ -78,22 +78,21 @@
     --popover-foreground: 240 10% 3.922%;
 
     /* Primary Colors */
-    --primary: 48, 100%, 50%;
+    --primary: 48 100% 50%;
     --primary-foreground: 20 14.3% 4.1%;
-    --primary-hover: 48, 100%, 50%;
+    --primary-hover: 48 100% 50%;
 
     /* Secondary Colors */
-    --secondary: 160 4.8% 90.9%;
+    --secondary: 240 4.8% 90.9%;
     --secondary-foreground: 24 9.8% 10%;
 
     /* Muted Colors */
-    --muted: 240 4.762% 95.882%;
+    --muted: 240 4.762% 93.882%;
     --muted-foreground: 240 4.237% 46.275%;
 
     /* Accent Colors */
-    --accent: 240 4.762% 95.882%;
+    --accent: 240 4.762% 97.382%;
     --accent-foreground: 240 5.882% 10%;
-    --accent-hover: 240 4.762% 90.882%;
 
     /* Destructive Colors */
     --destructive: 357.143 100% 45.294%;
@@ -143,7 +142,7 @@
   }
 
   /* Dark Mode Theme */
-  .dark {
+  :root.dark {
     /* Core Colors */
     --background: 20 14.3% 2.9%;
     --foreground: 60 9.1% 97.8%;
@@ -153,13 +152,13 @@
     --card-foreground: 60 9.1% 97.8%;
 
     /* Popover Colors */
-    --popover: 240 5.882% 10%;
+    --popover: 0 0% 5%;
     --popover-foreground: 0 0% 98.039%;
 
     /* Primary Colors */
-    --primary: 48, 100%, 50%;
+    --primary: 48 100% 50%;
     --primary-foreground: 20 14.3% 4.1%;
-    --primary-hover: 48, 100%, 50%;
+    --primary-hover: 48 100% 50%;
 
     /* Secondary Colors */
     --secondary: 240 6.5% 15.1%;
@@ -170,9 +169,8 @@
     --muted-foreground: 240 5.495% 64.314%;
 
     /* Accent Colors */
-    --accent: 240 3.704% 15.882%;
+    --accent: 240 3.704% 13.282%;
     --accent-foreground: 0 0% 98.039%;
-    --accent-hover: 240 3.704% 10.882%;
 
     /* Destructive Colors */
     --destructive: 358.839 100% 69.608%;
@@ -374,6 +372,42 @@ input[type="search"]::-ms-clear {
     animation-timing-function: ease-out;
     animation-iteration-count: 1;
     animation-fill-mode: none;
+  }
+
+  /* Identical to cell-ripple; alternating names restarts the ripple
+     without remounting the grid. */
+  @keyframes cell-ripple-b {
+    0% {
+      transform: scale(0.95);
+      opacity: 0.8;
+    }
+
+    60% {
+      transform: scale(1.05);
+      opacity: 0.5;
+    }
+
+    100% {
+      transform: scale(1.12);
+      opacity: 0.2;
+    }
+  }
+
+  .animate-cell-ripple-b {
+    animation-name: cell-ripple-b;
+    animation-duration: var(--duration, 500ms);
+    animation-delay: var(--delay, 0ms);
+    animation-timing-function: ease-out;
+    animation-iteration-count: 1;
+    animation-fill-mode: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+
+    .animate-cell-ripple,
+    .animate-cell-ripple-b {
+      animation: none;
+    }
   }
 
   .mask-radial-from-20\% {

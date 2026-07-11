@@ -1,14 +1,33 @@
-import { notFound } from "next/navigation";
-import { isHosted } from "@/lib/environment";
+import type { Metadata, Viewport } from "next";
+
+import Background from "./components/background/landing-background";
+import { getLandingSiteBaseUrl, isLandingSiteUrlConfigured } from "./site-url";
 
 type LandingLayoutProps = {
   children: React.ReactNode;
 };
 
-export default function LandingLayout({ children }: LandingLayoutProps) {
-  if (isHosted) {
-    notFound();
-  }
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0c0c0c" }
+  ]
+};
 
-  return <>{children}</>;
+export function generateMetadata(): Metadata {
+  return {
+    ...(isLandingSiteUrlConfigured()
+      ? { metadataBase: new URL(getLandingSiteBaseUrl()) }
+      : {}),
+    other: {
+      "msapplication-TileColor": "#000000"
+    }
+  };
+}
+
+export default function LandingLayout({ children }: LandingLayoutProps) {
+  return <Background>{children}</Background>;
 }
