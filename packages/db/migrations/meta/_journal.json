@@ -43,6 +43,13 @@
       "when": 1775274648857,
       "tag": "0005_rainy_raider",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783728161949,
+      "tag": "0006_early_gargoyle",
+      "breakpoints": true
     }
   ]
 }
