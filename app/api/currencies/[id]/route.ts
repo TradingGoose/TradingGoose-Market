@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchCurrenciesFromDb } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
-import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/currencies/[id]");
 
 const updateCurrencySchema = z
   .object({
@@ -27,15 +31,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: currencyId } = await params;
   if (!currencyId) {
@@ -70,7 +68,7 @@ export async function PATCH(
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.currencies)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.currencies.id, currencyId))
@@ -92,31 +90,23 @@ export async function PATCH(
   });
 
   const updatedCurrency = refreshed.data.find(row => row.id === currencyId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "currency", updatedCurrency, auth.user.id);
-
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: updatedCurrency });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: currencyId } = await params;
   if (!currencyId) {
     return NextResponse.json({ error: "Currency id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.currencies.id })
     .from(schema.currencies)
     .where(eq(schema.currencies.id, currencyId))
@@ -127,7 +117,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.currencies).where(eq(schema.currencies.id, currencyId));
+    await requireDatabase().delete(schema.currencies).where(eq(schema.currencies.id, currencyId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete currency.";
     console.error("[currencies:delete] API error:", message);
@@ -136,3 +126,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: currencyId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;

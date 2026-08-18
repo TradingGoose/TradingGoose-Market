@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchCountriesFromDb } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
-import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/countries/[id]");
 
 const updateCountrySchema = z
   .object({
@@ -27,15 +31,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: countryId } = await params;
   if (!countryId) {
@@ -70,7 +68,7 @@ export async function PATCH(
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.countries)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.countries.id, countryId))
@@ -92,31 +90,23 @@ export async function PATCH(
   });
 
   const updatedCountry = refreshed.data.find(row => row.id === countryId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "country", updatedCountry, auth.user.id);
-
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: updatedCountry });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: countryId } = await params;
   if (!countryId) {
     return NextResponse.json({ error: "Country id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.countries.id })
     .from(schema.countries)
     .where(eq(schema.countries.id, countryId))
@@ -127,7 +117,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.countries).where(eq(schema.countries.id, countryId));
+    await requireDatabase().delete(schema.countries).where(eq(schema.countries.id, countryId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete country.";
     console.error("[countries:delete] API error:", message);
@@ -136,3 +126,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: countryId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;

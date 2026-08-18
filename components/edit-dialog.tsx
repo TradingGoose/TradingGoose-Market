@@ -5,11 +5,13 @@ import { type ComponentPropsWithoutRef, type ReactNode } from 'react'
 import { CheckIcon, ChevronsUpDownIcon, Loader2 } from 'lucide-react'
 
 import AvatarUpload from '@/components/file-upload/avatar-upload'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Skeleton } from '@/components/ui/skeleton'
 import { type FileWithPreview } from '@/hooks/use-file-upload'
 import { cn } from '@/lib/ui/utils'
 
@@ -61,12 +63,24 @@ export function EditDialogFooter({
   leftSlot
 }: EditDialogFooterProps) {
   return (
-    <DialogFooter>
-      {leftSlot}
-      <Button type='button' variant='outline' onClick={onCancel} disabled={cancelDisabled}>
+    <DialogFooter className='gap-2 sm:space-x-0'>
+      {leftSlot ? <div className='mr-auto w-full sm:w-auto'>{leftSlot}</div> : null}
+      <Button
+        type='button'
+        variant='outline'
+        className='w-full sm:w-auto'
+        onClick={onCancel}
+        disabled={cancelDisabled || loading}
+      >
         Cancel
       </Button>
-      <Button type={submitType} onClick={onSubmit} disabled={submitDisabled}>
+      <Button
+        type={submitType}
+        className='w-full sm:w-auto'
+        onClick={onSubmit}
+        disabled={submitDisabled || loading}
+        aria-busy={loading}
+      >
         {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
         {submitLabel}
       </Button>
@@ -81,7 +95,11 @@ type FormErrorProps = {
 
 export function FormError({ message, className }: FormErrorProps) {
   if (!message) return null
-  return <p className={cn('text-sm text-destructive', className)}>{message}</p>
+  return (
+    <Alert variant='destructive' appearance='light' size='sm' className={className}>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  )
 }
 
 type IconUploadFieldProps = {
@@ -123,8 +141,17 @@ export function IconUploadField({
             onFileChange={onFileChange}
             className='items-start'
           />
-          {uploading && <p className='text-xs text-muted-foreground'>Uploading...</p>}
-          {error && <p className='text-xs text-destructive'>{error}</p>}
+          {uploading ? (
+            <div className='flex items-center gap-2' role='status' aria-live='polite'>
+              <Skeleton className='h-3 w-24' />
+              <span className='sr-only'>Uploading icon…</span>
+            </div>
+          ) : null}
+          {error ? (
+            <Alert variant='destructive' appearance='light' size='sm'>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
         </>
       ) : (
         <p className='text-sm text-muted-foreground'>{emptyMessage}</p>
@@ -217,9 +244,9 @@ export function SearchableSelect({
           <CommandList className={listClassName ?? 'max-h-64 overflow-y-auto'}>
             <CommandEmpty>
               {loading ? (
-                <span className='flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground'>
-                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                  {loadingMessage}
+                <span className='flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground' role='status' aria-live='polite'>
+                  <Skeleton className='h-4 w-24' />
+                  <span className='sr-only'>{loadingMessage}</span>
                 </span>
               ) : (
                 <span className='text-xs text-muted-foreground'>{emptyMessage}</span>

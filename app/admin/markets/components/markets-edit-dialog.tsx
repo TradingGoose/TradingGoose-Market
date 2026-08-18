@@ -26,18 +26,36 @@ type MarketFormState = {
   timeZoneLabel: string
 }
 
-export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'edit' }: MarketEditDialogProps) {
+const createMarketFormState = (market: MarketRow | null): MarketFormState => ({
+  code: market?.code ?? '',
+  name: market?.name ?? '',
+  url: market?.url ?? '',
+  countryId: market?.countryId ?? '',
+  cityId: market?.cityId ?? '',
+  timeZoneId: market?.timeZoneId ?? '',
+  timeZoneLabel: market?.timeZoneName ?? ''
+})
+
+const createInitialCityOptions = (market: MarketRow | null) =>
+  market?.cityId && market.cityName ? [{ value: market.cityId, label: market.cityName }] : []
+
+export function MarketEditDialog(props: MarketEditDialogProps) {
+  const { market, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${market?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-3xl'>
+        <MarketEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function MarketEditDialogContent({ market, open, onOpenChange, onSave, mode = 'edit' }: MarketEditDialogProps) {
   const isEdit = mode === 'edit' && !!market
 
-  const [formState, setFormState] = useState<MarketFormState>({
-    code: '',
-    name: '',
-    url: '',
-    countryId: '',
-    cityId: '',
-    timeZoneId: '',
-    timeZoneLabel: ''
-  })
+  const [formState, setFormState] = useState<MarketFormState>(() => createMarketFormState(market))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [countrySearch, setCountrySearch] = useState('')
@@ -45,54 +63,15 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
   const [countryLoading, setCountryLoading] = useState(false)
   const [countryError, setCountryError] = useState<string | null>(null)
   const [citySearch, setCitySearch] = useState('')
-  const [cityOptions, setCityOptions] = useState<{ value: string; label: string }[]>([])
+  const [cityOptions, setCityOptions] = useState<{ value: string; label: string }[]>(() =>
+    createInitialCityOptions(market)
+  )
   const [cityLoading, setCityLoading] = useState(false)
   const [cityError, setCityError] = useState<string | null>(null)
   const [tzSearch, setTzSearch] = useState('')
   const [tzOptions, setTzOptions] = useState<TimeZoneOption[]>([])
   const [tzLoading, setTzLoading] = useState(false)
   const [tzError, setTzError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-
-    if (market) {
-      setFormState({
-        code: market.code,
-        name: market.name ?? '',
-        url: market.url ?? '',
-        countryId: market.countryId ?? '',
-        cityId: market.cityId ?? '',
-        timeZoneId: market.timeZoneId ?? '',
-        timeZoneLabel: market.timeZoneName ?? ''
-      })
-    } else {
-      setFormState({
-        code: '',
-        name: '',
-        url: '',
-        countryId: '',
-        cityId: '',
-        timeZoneId: '',
-        timeZoneLabel: ''
-      })
-    }
-
-    setError(null)
-    setCountrySearch('')
-    setCitySearch('')
-    setTzSearch('')
-  }, [market, open])
-
-  useEffect(() => {
-    if (!open || !market?.cityId || !market.cityName) return
-    const cityId = market.cityId
-    const cityName = market.cityName
-    setCityOptions(prev => {
-      if (prev.some(option => option.value === cityId)) return prev
-      return [...prev, { value: cityId, label: cityName }]
-    })
-  }, [open, market?.cityId, market?.cityName])
 
   useEffect(() => {
     if (!open) return
@@ -125,13 +104,7 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
   }, [countrySearch, open])
 
   useEffect(() => {
-    if (!open) return
-    if (!formState.countryId) {
-      if (!formState.cityId) {
-        setCityOptions([])
-      }
-      return
-    }
+    if (!open || !formState.countryId) return
 
     const controller = new AbortController()
     const timeout = setTimeout(() => {
@@ -161,7 +134,7 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
       clearTimeout(timeout)
       controller.abort()
     }
-  }, [citySearch, formState.countryId, formState.cityId, open])
+  }, [citySearch, formState.countryId, open])
 
   useEffect(() => {
     if (!open || !formState.cityId) return
@@ -190,7 +163,7 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [open, formState.cityId, formState.countryId, cityOptions])
+  }, [formState.cityId, formState.countryId, cityOptions, open])
 
   useEffect(() => {
     if (!open) return
@@ -323,8 +296,7 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-3xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Market' : 'Add Market'}
           description={isEdit ? 'Update market details and location.' : 'Create a new market.'}
@@ -378,11 +350,14 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
                   setFormState(prev => ({
                     ...prev,
                     countryId: value,
-                    cityId: value ? prev.cityId : ''
+                    cityId: value === prev.countryId ? prev.cityId : ''
                   }))
+                  setCitySearch('')
+                  setCityOptions([])
+                  setCityError(null)
                 }}
               />
-              {!formState.countryId.trim() && <p className='text-xs text-destructive'>Required</p>}
+              <FormError message={!formState.countryId.trim() ? 'Country is required.' : null} />
             </div>
 
             <div className='space-y-2'>
@@ -434,7 +409,6 @@ export function MarketEditDialog({ market, open, onOpenChange, onSave, mode = 'e
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

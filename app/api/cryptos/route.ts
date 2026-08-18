@@ -2,17 +2,17 @@ import { NextResponse } from "next/server";
 import { inArray } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchCryptoOptions, fetchCryptosFromDb, type CryptosQuery } from "./lib";
-import { apiRequireEditor } from "@/lib/auth/session";
 import { parsePositiveInt } from "@/lib/api-utils";
-import {
-  runAppRouteAdminReadEnrichers,
-  runAppRouteAfterWriteEnricher
-} from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+const routePolicy = createSystemAdminRoutePolicy("/api/cryptos");
 
 type ContractAddressInput = {
   chainId: string;
@@ -38,7 +38,7 @@ function normalizeContractAddresses(contracts: ContractAddressInput[]) {
 async function ensureChainsExist(chainIds: string[]) {
   if (!chainIds.length) return true;
   const uniqueIds = Array.from(new Set(chainIds));
-  const rows = await db!
+  const rows = await requireDatabase()
     .select({ id: schema.chains.id })
     .from(schema.chains)
     .where(inArray(schema.chains.id, uniqueIds));
@@ -46,13 +46,10 @@ async function ensureChainsExist(chainIds: string[]) {
 }
 
 export async function GET(request: Request) {
+  const auth = await routePolicy.authorize(request);
+  if (auth.error) return auth.error;
+
   try {
-    if (!db) {
-      return NextResponse.json(
-        { data: [], error: "Database connection is not configured." },
-        { status: 503 }
-      );
-    }
 
     const { searchParams } = new URL(request.url);
     const pageParam = searchParams.get("page");
@@ -90,9 +87,7 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchCryptosFromDb(query);
-    const data = await runAppRouteAdminReadEnrichers(request, "crypto", payload.data);
-
-    return NextResponse.json({ ...payload, data });
+    return NextResponse.json(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[cryptos] API error:", message);
@@ -115,15 +110,9 @@ const createCryptoSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   let payload: z.infer<typeof createCryptoSchema>;
   try {
@@ -158,14 +147,19 @@ export async function POST(request: Request) {
 
   let newId: string | null = null;
   try {
-    const result = await db
+    const result = await requireDatabase()
       .insert(schema.cryptos)
       .values({ code, name, contractAddresses, iconUrl, active })
       .returning({ id: schema.cryptos.id });
 
     newId = result[0]?.id ?? null;
-  } catch (error: any) {
-    if (error?.code === "23505") {
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "23505"
+    ) {
       return NextResponse.json({ error: "Crypto already exists." }, { status: 409 });
     }
     const message = error instanceof Error ? error.message : "Failed to create crypto.";
@@ -184,7 +178,11 @@ export async function POST(request: Request) {
   });
 
   const createdCrypto = refreshed.data.find(row => row.id === newId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "crypto", createdCrypto, auth.user.id);
-
-  return NextResponse.json({ data }, { status: 201 });
+  return NextResponse.json({ data: createdCrypto }, { status: 201 });
 }
+
+export const HEAD = (request: Request) => routePolicy.head(request, GET);
+export const OPTIONS = routePolicy.options;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

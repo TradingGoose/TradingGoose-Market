@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 
 import { EditDialogFooter, EditDialogHeader, FormError, IconUploadField } from '@/components/edit-dialog'
 import {
@@ -26,34 +26,34 @@ type CurrencyFormState = {
   iconUrl: string
 }
 
-export function CurrencyEditDialog({ currency, open, onOpenChange, onSave, mode = 'edit' }: CurrencyEditDialogProps) {
+const createCurrencyFormState = (currency: CurrencyRow | null): CurrencyFormState => ({
+  code: currency?.code ?? '',
+  name: currency?.name ?? '',
+  iconUrl: currency?.iconUrl ?? ''
+})
+
+export function CurrencyEditDialog(props: CurrencyEditDialogProps) {
+  const { currency, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${currency?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-2xl'>
+        <CurrencyEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CurrencyEditDialogContent({ currency, onOpenChange, onSave, mode = 'edit' }: CurrencyEditDialogProps) {
   const currencyId = currency?.id?.trim() ?? ''
   const isEdit = mode === 'edit' && currencyId.length > 0
 
-  const [formState, setFormState] = useState<CurrencyFormState>({
-    code: '',
-    name: '',
-    iconUrl: ''
-  })
+  const [formState, setFormState] = useState<CurrencyFormState>(() => createCurrencyFormState(currency))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [iconUploading, setIconUploading] = useState(false)
   const [iconError, setIconError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    if (currency) {
-      setFormState({
-        code: currency.code,
-        name: currency.name,
-        iconUrl: currency.iconUrl ?? ''
-      })
-    } else {
-      setFormState({ code: '', name: '', iconUrl: '' })
-    }
-    setError(null)
-    setIconError(null)
-  }, [currency, open])
 
   const isFormValid = formState.code.trim().length >= 1 && formState.name.trim().length > 0 && !saving
 
@@ -160,8 +160,7 @@ export function CurrencyEditDialog({ currency, open, onOpenChange, onSave, mode 
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-2xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Currency' : 'Add Currency'}
           description={isEdit ? 'Update currency details.' : 'Create a new currency.'}
@@ -208,7 +207,6 @@ export function CurrencyEditDialog({ currency, open, onOpenChange, onSave, mode 
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

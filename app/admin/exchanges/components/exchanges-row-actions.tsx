@@ -4,7 +4,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from '@/components/ui/button'
 import { EllipsisVerticalIcon } from 'lucide-react'
 import { ExchangeRow } from './types'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 type ExchangeRowActionsProps = {
   exchange: ExchangeRow
@@ -13,9 +12,6 @@ type ExchangeRowActionsProps = {
 }
 
 export function ExchangeRowActions({ exchange, onEdit, onDelete }: ExchangeRowActionsProps) {
-  const canEdit = useCanEdit()
-  if (!canEdit) return null
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

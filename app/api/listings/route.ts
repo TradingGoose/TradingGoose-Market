@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import {
   fetchListingsFromDb,
   type ListingsQuery,
@@ -12,15 +14,13 @@ import {
   resolveMarketId,
   resolveExchIds
 } from "./lib";
-import { apiRequireEditor } from "@/lib/auth/session";
 import { parsePositiveInt, normalizeNullableString, parseBoolean } from "@/lib/api-utils";
-import {
-  runAppRouteAdminReadEnrichers,
-  runAppRouteAfterWriteEnricher
-} from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+const routePolicy = createSystemAdminRoutePolicy("/api/listings");
 
 const iconUrlSchema = z.union([
   z.string().trim().url(),
@@ -44,15 +44,12 @@ const createListingSchema = z.object({
 });
 
 export async function GET(request: Request) {
+  const auth = await routePolicy.authorize(request);
+  if (auth.error) return auth.error;
+
   try {
     const { searchParams } = new URL(request.url);
 
-    if (!db) {
-      return NextResponse.json(
-        { data: [], total: 0, error: "Database connection is not configured." },
-        { status: 503 }
-      );
-    }
 
     const page = parsePositiveInt(searchParams.get("page"), 1);
     const pageSize = parsePositiveInt(searchParams.get("pageSize"), 10, 100);
@@ -84,9 +81,7 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchListingsFromDb(query);
-    const data = await runAppRouteAdminReadEnrichers(request, "listing", payload.data);
-
-    return NextResponse.json({ ...payload, data });
+    return NextResponse.json(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[listings] API error:", error);
@@ -95,15 +90,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   let payload: z.infer<typeof createListingSchema>;
   try {
@@ -156,7 +145,7 @@ export async function POST(request: Request) {
 
   let newId: string | null = null;
   try {
-    const result = await db
+    const result = await requireDatabase()
       .insert(schema.listings)
       .values({
         base,
@@ -172,7 +161,7 @@ export async function POST(request: Request) {
       .returning({ id: schema.listings.id });
 
     newId = result[0]?.id ?? null;
-  } catch (error: any) {
+  } catch (error) {
     const code = extractPgErrorCode(error);
     const constraint = extractPgConstraint(error);
     if (code === "23505" || constraint === "listings_base_quote_primary_exch_idx") {
@@ -181,7 +170,6 @@ export async function POST(request: Request) {
         { status: 409 }
       );
     }
-    const message = error instanceof Error ? error.message : "Failed to create listing.";
     console.error("[listings:create] API error:", error);
     return NextResponse.json({ error: "Failed to create listing." }, { status: 500 });
   }
@@ -197,7 +185,11 @@ export async function POST(request: Request) {
   });
 
   const createdListing = refreshed.data.find((row) => row.id === newId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "listing", createdListing, auth.user.id);
-
-  return NextResponse.json({ data }, { status: 201 });
+  return NextResponse.json({ data: createdListing }, { status: 201 });
 }
+
+export const HEAD = (request: Request) => routePolicy.head(request, GET);
+export const OPTIONS = routePolicy.options;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

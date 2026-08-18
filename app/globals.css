@@ -3,61 +3,6 @@
 @tailwind utilities;
 
 /* ==========================================================================
-   WORKFLOW COMPONENT Z-INDEX FIXES
-   ========================================================================== */
-.workflow-container .react-flow__edges {
-  z-index: 0 !important;
-}
-
-.workflow-container .react-flow__node {
-  z-index: 21 !important;
-}
-
-.workflow-container .react-flow__node-loopNode,
-.workflow-container .react-flow__node-parallelNode,
-.workflow-container .react-flow__node-subflowNode {
-  z-index: -1 !important;
-}
-
-.workflow-container .react-flow__handle {
-  z-index: 30 !important;
-}
-
-.workflow-container .react-flow__edge [data-testid="workflow-edge"] {
-  z-index: 0 !important;
-}
-
-.workflow-container .react-flow__edge-labels {
-  z-index: 60 !important;
-}
-
-/* ==========================================================================
-   LANDING LOOP ANIMATION
-   ========================================================================== */
-@keyframes dash-animation {
-  from {
-    stroke-dashoffset: 0;
-  }
-
-  to {
-    stroke-dashoffset: -24;
-  }
-}
-
-
-.landing-loop-animated-dash {
-  animation: dash-animation 1.5s linear infinite;
-  /* Ensure animation works in React Flow context */
-  will-change: stroke-dashoffset;
-  transform: translateZ(0);
-}
-
-/* Ensure React Flow doesn't override our animation */
-.react-flow__node-landingLoop svg rect.landing-loop-animated-dash {
-  animation: dash-animation 1.5s linear infinite !important;
-}
-
-/* ==========================================================================
    THEME SYSTEM - CSS CUSTOM PROPERTIES
    ========================================================================== */
 @layer base {
@@ -112,7 +57,6 @@
     --scrollbar-thumb-hover: 0 0% 55%;
     --scrollbar-size: 8px;
 
-    --workflow-dots: 0 0% 94.5%;
     --card-background: 0 0% 99.2%;
     --card-border: 0 0% 89.8%;
     --card-text: 0 0% 3.9%;
@@ -186,7 +130,6 @@
     --scrollbar-thumb: 0 0% 30%;
     --scrollbar-thumb-hover: 0 0% 40%;
 
-    --workflow-dots: 0 0% 7.5%;
     --card-background: 0 0% 9.0%;
     --card-border: 0 0% 22.7%;
     --card-text: 0 0% 98%;

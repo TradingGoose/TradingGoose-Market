@@ -26,15 +26,30 @@ type CityFormState = {
   timeZoneLabel: string
 }
 
-export function CityEditDialog({ city, open, onOpenChange, onSave, mode = 'edit' }: CityEditDialogProps) {
+const createCityFormState = (city: CityRow | null): CityFormState => ({
+  name: city?.name ?? '',
+  countryId: city?.countryId ?? '',
+  timeZoneId: city?.timeZoneId ?? '',
+  timeZoneLabel: city?.timeZoneName ?? ''
+})
+
+export function CityEditDialog(props: CityEditDialogProps) {
+  const { city, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${city?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-2xl'>
+        <CityEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CityEditDialogContent({ city, open, onOpenChange, onSave, mode = 'edit' }: CityEditDialogProps) {
   const isEdit = mode === 'edit' && !!city
 
-  const [formState, setFormState] = useState<CityFormState>({
-    name: '',
-    countryId: '',
-    timeZoneId: '',
-    timeZoneLabel: ''
-  })
+  const [formState, setFormState] = useState<CityFormState>(() => createCityFormState(city))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [countrySearch, setCountrySearch] = useState('')
@@ -45,23 +60,6 @@ export function CityEditDialog({ city, open, onOpenChange, onSave, mode = 'edit'
   const [tzOptions, setTzOptions] = useState<TimeZoneOption[]>([])
   const [tzLoading, setTzLoading] = useState(false)
   const [tzError, setTzError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    if (city) {
-      setFormState({
-        name: city.name,
-        countryId: city.countryId ?? '',
-        timeZoneId: city.timeZoneId ?? '',
-        timeZoneLabel: city.timeZoneName ?? ''
-      })
-    } else {
-      setFormState({ name: '', countryId: '', timeZoneId: '', timeZoneLabel: '' })
-    }
-    setError(null)
-    setCountrySearch('')
-    setTzSearch('')
-  }, [city, open])
 
   useEffect(() => {
     if (!open) return
@@ -221,8 +219,7 @@ export function CityEditDialog({ city, open, onOpenChange, onSave, mode = 'edit'
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-2xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit City' : 'Add City'}
           description={isEdit ? 'Update city details and time zone.' : 'Create a new city.'}
@@ -259,7 +256,7 @@ export function CityEditDialog({ city, open, onOpenChange, onSave, mode = 'edit'
                   }))
                 }}
               />
-              {!formState.countryId.trim() && <p className='text-xs text-destructive'>Required</p>}
+              <FormError message={!formState.countryId.trim() ? 'Country is required.' : null} />
             </div>
 
             <div className='space-y-2'>
@@ -283,7 +280,7 @@ export function CityEditDialog({ city, open, onOpenChange, onSave, mode = 'edit'
                   }))
                 }}
               />
-              {!formState.timeZoneId.trim() && <p className='text-xs text-destructive'>Required</p>}
+              <FormError message={!formState.timeZoneId.trim() ? 'Time zone is required.' : null} />
             </div>
           </div>
 
@@ -296,7 +293,6 @@ export function CityEditDialog({ city, open, onOpenChange, onSave, mode = 'edit'
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

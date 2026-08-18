@@ -19,12 +19,12 @@ import {
 import { CryptoEditDialog } from './cryptos-edit-dialog'
 import { CryptoRow } from './types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildCryptoColumns } from './cryptos-columns'
 import { usePagination } from '@/hooks/use-pagination'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -44,7 +44,6 @@ type CryptosApiResponse = {
 }
 
 export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
-  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<CryptoRow[]>(data ?? [])
@@ -298,7 +297,7 @@ export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
   return (
     <>
       <div className='flex min-h-0 w-full flex-1 flex-col gap-4 overflow-hidden min-w-0'>
-        <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card'>
+        <Card className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden shadow-none'>
           <div className='flex flex-col gap-4 border-b p-6 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between'>
             <TableFilter column={table.getColumn('id')!} placeholder='Search crypto (code or name)' hideLabel />
             <div className='grid flex-1 grid-cols-2 gap-4 min-w-0 xs:grid-cols-2 sm:items-end'>
@@ -327,12 +326,10 @@ export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              {canEdit && (
-                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                  <PlusIcon className='h-4 w-4' />
-                  Add Crypto
-                </Button>
-              )}
+              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                <PlusIcon className='h-4 w-4' />
+                Add Crypto
+              </Button>
             </div>
           </div>
           <DataTable
@@ -341,7 +338,7 @@ export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
             loadError={loadError}
             loadingMessage='Loading cryptos...'
           />
-        </div>
+        </Card>
 
         <div className='flex items-center justify-between gap-3 p-0 max-sm:flex-col'>
           <p className='text-muted-foreground text-sm whitespace-nowrap' aria-live='polite'>
@@ -371,23 +368,19 @@ export function CryptosTable({ data, totalCount }: CryptosTableProps = {}) {
           />
         </div>
       </div>
-      {canEdit && (
-        <CryptoEditDialog
-          crypto={editingCrypto}
-          open={isEditorOpen}
-          onOpenChange={handleEditorOpenChange}
-          onSave={handleCryptoUpdated}
-        />
-      )}
-      {canEdit && (
-        <CryptoEditDialog
-          crypto={null}
-          open={isCreateOpen}
-          onOpenChange={setIsCreateOpen}
-          onSave={handleCryptoCreated}
-          mode='create'
-        />
-      )}
+      <CryptoEditDialog
+        crypto={editingCrypto}
+        open={isEditorOpen}
+        onOpenChange={handleEditorOpenChange}
+        onSave={handleCryptoUpdated}
+      />
+      <CryptoEditDialog
+        crypto={null}
+        open={isCreateOpen}
+        onOpenChange={setIsCreateOpen}
+        onSave={handleCryptoCreated}
+        mode='create'
+      />
     </>
   )
 }
