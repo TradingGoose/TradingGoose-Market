@@ -50,6 +50,20 @@
       "when": 1783728161949,
       "tag": "0006_early_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784435193012,
+      "tag": "0007_tired_pretty_boy",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784503638208,
+      "tag": "0008_happy_terrax",
+      "breakpoints": true
     }
   ]
 }
