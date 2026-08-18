@@ -1,9 +1,12 @@
 import { sql } from "drizzle-orm";
+import type { MarketApiActor } from "@/lib/market-api/core/access";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
 
-import { db, schema } from "@tradinggoose/db";
-import { requireRankUpdateAccess } from "../rank-access";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
+import { requirePrivateRankActor } from "../rank-access";
+
 
 async function resolveCurrencyId(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -29,8 +32,8 @@ async function resolveCurrencyId(request: Request) {
     // ignore invalid JSON
   }
 
-  if (code && db) {
-    const result = (await db.execute(sql`
+  if (code) {
+    const result = (await requireDatabase().execute(sql`
       SELECT id FROM currencies
       WHERE code ILIKE ${code}
       ORDER BY code ASC
@@ -42,13 +45,10 @@ async function resolveCurrencyId(request: Request) {
   return code ?? null;
 }
 
-export async function postUpdateCurrencyRank(c: ApiContext, plugin?: PluginContext) {
+export async function postUpdateCurrencyRank(c: ApiContext, actor: MarketApiActor | null) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
-    const accessError = requireRankUpdateAccess(c, plugin);
+    const accessError = requirePrivateRankActor(c, actor);
     if (accessError) return accessError;
 
     const request = c.req.raw;
@@ -57,7 +57,7 @@ export async function postUpdateCurrencyRank(c: ApiContext, plugin?: PluginConte
       return c.json({ error: "currency_id is required." }, 400);
     }
 
-    const updated = await db
+    const updated = await requireDatabase()
       .update(schema.currencies)
       .set({
         rank: sql<number>`${schema.currencies.rank} + 1`,

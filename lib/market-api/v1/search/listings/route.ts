@@ -1,13 +1,13 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 import type { HttpStatusCode } from "@/lib/market-api/core/http";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "../utils";
 import type { Listing } from "../types";
 import { resolveSearchParams } from "../params";
+
 
 function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
   if (value == null || value === "") return fallback;
@@ -102,13 +102,12 @@ function parseListParam(searchParams: URLSearchParams, key: string) {
 }
 
 async function fetchCountryIdsByTokens(tokens: string[]) {
-  if (!db) return [];
   if (!tokens.length) return [];
   const filters = tokens.map(
     (token) =>
       sql`(COALESCE(name, '') ILIKE ${`%${token}%`} OR COALESCE(code, '') ILIKE ${`%${token}%`})`
   );
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id
     FROM countries
     WHERE ${sql.join(filters, sql` OR `)}
@@ -175,21 +174,16 @@ function buildPublicListings(
 
 async function buildSearchListings(
   request: Request,
-  rows: ListingSearchResult[],
-  plugin?: PluginContext
+  rows: ListingSearchResult[]
 ) {
-  if (plugin) {
-    triggerEntityEnrichersInBackground(plugin, "listing", "search", rows);
-  }
   return buildPublicListings(request, rows);
 }
 
 async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?: string) {
-  if (!db) return [] as ListingSearchResult[];
   if (!filters.length) return [] as ListingSearchResult[];
   const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
   const orderByClause = buildOrderBy(searchTerm);
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       l.id AS "listingId",
       l.base,
@@ -227,9 +221,6 @@ export async function fetchListingById(
   listingId: string,
   options?: { forceLogoRefresh?: boolean }
 ): Promise<Listing | null> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const trimmedId = listingId.trim();
   if (!trimmedId) return null;
@@ -246,9 +237,6 @@ export async function fetchListingsByIds(
   listingIds: string[],
   options?: { forceLogoRefresh?: boolean }
 ): Promise<Map<string, Listing>> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const ids = uniqueNonEmpty(
     listingIds.map((id) => id.trim()).filter((id) => id.length > 0)
@@ -279,18 +267,14 @@ type ListingSearchResponse = {
 
 async function runListingSearch(
   request: Request,
-  searchParams: URLSearchParams,
-  plugin?: PluginContext
+  searchParams: URLSearchParams
 ): Promise<ListingSearchResponse> {
-  if (!db) {
-    return { data: [], error: "Database connection is not configured.", status: 503 };
-  }
 
   const listingId = searchParams.get("listing_id")?.trim();
   if (listingId) {
     return {
       data: [],
-      error: "listing_id is not supported on /search/listings. Use /get/listing instead.",
+      error: "listing_id is not supported on /api/search/listings. Use /api/get/listing instead.",
       status: 400
     };
   }
@@ -346,7 +330,7 @@ async function runListingSearch(
       filters.push(sql`(${sql.join(nameFilters, sql` OR `)})`);
     }
     if (filters.length) {
-      const rows = (await db.execute(sql`
+      const rows = (await requireDatabase().execute(sql`
         SELECT id
         FROM currencies
         WHERE ${sql.join(filters, sql` AND `)}
@@ -369,7 +353,7 @@ async function runListingSearch(
   }
   if (marketTokens.length) {
     const normalized = uniqueNonEmpty(marketTokens.map((token) => token.toUpperCase()));
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM markets
       WHERE id IN (${sql.join(normalized.map((token) => sql`${token}`), sql`, `)})
@@ -381,7 +365,7 @@ async function runListingSearch(
     const codeFilters = marketCodesParam.map(
       (code) => sql`COALESCE(code, '') ILIKE ${`%${code}%`}`
     );
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM markets
       WHERE ${sql.join(codeFilters, sql` OR `)}
@@ -389,7 +373,7 @@ async function runListingSearch(
     marketIds = intersectIds(marketIds, uniqueNonEmpty(rows.map((row) => row.id)));
   }
   if (marketNamesParam.length) {
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM markets
       WHERE ${sql.join(
@@ -417,7 +401,7 @@ async function runListingSearch(
 
   let countryExchangeIds: string[] | null = null;
   if (countryIds && countryIds.length) {
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM exchanges
       WHERE country_id IN (${sql.join(countryIds.map((id) => sql`${id}`), sql`, `)})
@@ -473,7 +457,7 @@ async function runListingSearch(
     if (!rows.length) {
       return { data: [], status: 200 };
     }
-    return { data: await buildSearchListings(request, rows, plugin), status: 200 };
+    return { data: await buildSearchListings(request, rows), status: 200 };
   }
 
   const orderByTerm = listingName ?? listingBase ?? undefined;
@@ -540,7 +524,7 @@ async function runListingSearch(
   for (const filters of rankedFilters) {
     const rows = await fetchListingsByFilters(filters, limit, orderByTerm);
     if (rows.length) {
-      return { data: await buildSearchListings(request, rows, plugin), status: 200 };
+      return { data: await buildSearchListings(request, rows), status: 200 };
     }
   }
 
@@ -603,14 +587,14 @@ async function runListingSearch(
   }
 
   const rows = await fetchListingsByFilters(fallbackFilters, limit, listingName ?? undefined);
-  return { data: await buildSearchListings(request, rows, plugin), status: 200 };
+  return { data: await buildSearchListings(request, rows), status: 200 };
 }
 
-export async function getSearchListings(c: ApiContext, plugin?: PluginContext) {
+export async function getSearchListings(c: ApiContext) {
   try {
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
-    const result = await runListingSearch(request, searchParams, plugin);
+    const result = await runListingSearch(request, searchParams);
     if (result.status >= 400) {
       return c.json({ data: result.data ?? [], error: result.error ?? "Unknown error" }, result.status);
     }
@@ -624,10 +608,9 @@ export async function getSearchListings(c: ApiContext, plugin?: PluginContext) {
 
 export async function searchListingRows(
   request: Request,
-  searchParams: URLSearchParams,
-  plugin?: PluginContext
+  searchParams: URLSearchParams
 ): Promise<Listing[]> {
-  const result = await runListingSearch(request, searchParams, plugin);
+  const result = await runListingSearch(request, searchParams);
   if (result.status >= 400) {
     throw new Error(result.error ?? `Listing search failed with status ${result.status}`);
   }

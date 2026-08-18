@@ -1,12 +1,12 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "../utils";
 import { uniqueNonEmpty } from "../parsing";
 import { resolveSearchParams } from "../params";
+
 
 type CurrencySearchRow = {
   id: string;
@@ -28,14 +28,11 @@ export async function fetchCurrencyById(
   request: Request,
   currencyId: string
 ): Promise<CurrencySearchRow | null> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const trimmedId = currencyId.trim();
   if (!trimmedId) return null;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id, code, name, icon_url AS "iconUrl"
     FROM currencies
     WHERE id = ${trimmedId}
@@ -55,16 +52,13 @@ export async function fetchCurrenciesByIds(
   request: Request,
   currencyIds: string[]
 ): Promise<Map<string, CurrencySearchRow>> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const ids = uniqueNonEmpty(
     currencyIds.map((id) => id.trim()).filter((id) => id.length > 0)
   );
   if (!ids.length) return new Map();
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id, code, name, icon_url AS "iconUrl"
     FROM currencies
     WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
@@ -78,11 +72,8 @@ export async function fetchCurrenciesByIds(
   return new Map(resolved.map((row) => [row.id, row]));
 }
 
-export async function getSearchCurrencies(c: ApiContext, plugin?: PluginContext) {
+export async function getSearchCurrencies(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ data: [], error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
@@ -94,7 +85,7 @@ export async function getSearchCurrencies(c: ApiContext, plugin?: PluginContext)
 
     if (currencyId) {
       return c.json(
-        { data: [], error: "currency_id is not supported on /search/currencies. Use /get/currency instead." },
+        { data: [], error: "currency_id is not supported on /api/search/currencies. Use /api/get/currency instead." },
         400
       );
     }
@@ -123,17 +114,13 @@ export async function getSearchCurrencies(c: ApiContext, plugin?: PluginContext)
 
     const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
 
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id, code, name, icon_url AS "iconUrl"
       FROM currencies
       ${whereClause}
       ORDER BY code ASC
       LIMIT ${limit}
     `)) as unknown as CurrencySearchRow[];
-
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "currency", "search", rows);
-    }
 
     const data = rows.map((row) => ({
       ...row,

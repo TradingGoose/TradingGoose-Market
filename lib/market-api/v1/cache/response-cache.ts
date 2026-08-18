@@ -169,8 +169,8 @@ export async function withSearchResponseCache(
     {
       scope,
       kind: SEARCH_CACHE_KIND,
-      ttlEnvKey: "MARKET_SEARCH_CACHE_TTL_MS",
-      maxBodyBytesEnvKey: "MARKET_SEARCH_CACHE_MAX_BODY_BYTES"
+      ttlEnvKey: "SEARCH_CACHE_TTL_MS",
+      maxBodyBytesEnvKey: "SEARCH_CACHE_MAX_BODY_BYTES"
     },
     resolver
   );
@@ -186,8 +186,8 @@ export async function withGetResponseCache(
     {
       scope,
       kind: GET_CACHE_KIND,
-      ttlEnvKey: "MARKET_GET_CACHE_TTL_MS",
-      maxBodyBytesEnvKey: "MARKET_GET_CACHE_MAX_BODY_BYTES"
+      ttlEnvKey: "GET_CACHE_TTL_MS",
+      maxBodyBytesEnvKey: "GET_CACHE_MAX_BODY_BYTES"
     },
     resolver
   );

@@ -1,12 +1,12 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "../utils";
 import type { CryptoPair } from "../types";
 import { resolveSearchParams } from "../params";
+
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -157,9 +157,8 @@ async function fetchCryptos(
   filters: SQL[],
   limit: number
 ): Promise<CryptoRowMeta[]> {
-  if (!db) return [];
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       cr.id,
       cr.code,
@@ -181,9 +180,8 @@ async function fetchCurrencies(
   filters: SQL[],
   limit: number
 ): Promise<CurrencyRow[]> {
-  if (!db) return [];
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       id,
       code,
@@ -203,9 +201,6 @@ export async function fetchCryptoById(
   cryptoId: string,
   options?: { forceLogoRefresh?: boolean }
 ): Promise<CryptoDetail | null> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const trimmedId = cryptoId.trim();
   if (!trimmedId) return null;
@@ -224,9 +219,6 @@ export async function fetchCryptosByIds(
   cryptoIds: string[],
   options?: { forceLogoRefresh?: boolean }
 ): Promise<Map<string, CryptoDetail>> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const ids = uniqueNonEmpty(
     cryptoIds.map((id) => id.trim()).filter((id) => id.length > 0)
@@ -246,12 +238,8 @@ export async function fetchCryptosByIds(
 export async function searchCryptoPairs(
   request: Request,
   searchParams: URLSearchParams,
-  options?: { preferCurrencyQuote?: boolean },
-  plugin?: PluginContext
+  options?: { preferCurrencyQuote?: boolean }
 ): Promise<CryptoPair[]> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const limit = parsePositiveInt(searchParams.get("limit"), DEFAULT_LIMIT, MAX_LIMIT);
   const quoteType = normalizeQuoteType(
@@ -388,24 +376,14 @@ export async function searchCryptoPairs(
     quoteCurrencyPromise,
   ]);
 
-  // Apply enrichers if plugin context is available
-  if (plugin) {
-    triggerEntityEnrichersInBackground(plugin, "crypto", "search", rawBaseCryptos);
-  }
   const baseCryptos = rawBaseCryptos;
 
   const quoteCandidates: QuoteCandidate[] = [];
   if (quoteType !== "currency" && rawCryptoQuotes.length) {
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "crypto", "search", rawCryptoQuotes);
-    }
     const cryptoQuotes = rawCryptoQuotes;
     cryptoQuotes.forEach((row) => quoteCandidates.push({ type: "crypto", ...row }));
   }
   if (quoteType !== "crypto" && rawCurrencyQuotes.length) {
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "currency", "search", rawCurrencyQuotes);
-    }
     const currencyQuotes = rawCurrencyQuotes;
     currencyQuotes.forEach((row) => quoteCandidates.push({ type: "currency", ...row }));
   }
@@ -488,22 +466,19 @@ export async function searchCryptoPairs(
   }));
 }
 
-export async function getSearchCrypto(c: ApiContext, plugin?: PluginContext) {
+export async function getSearchCrypto(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ data: [], error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
     const cryptoId = searchParams.get("crypto_id")?.trim() ?? searchParams.get("cryptoId")?.trim();
     if (cryptoId) {
       return c.json(
-        { data: [], error: "crypto_id is not supported on /search/cryptos. Use /get/crypto instead." },
+        { data: [], error: "crypto_id is not supported on /api/search/cryptos. Use /api/get/crypto instead." },
         400
       );
     }
-    const data = await searchCryptoPairs(request, searchParams, undefined, plugin);
+    const data = await searchCryptoPairs(request, searchParams);
 
     return c.json({ data });
   } catch (error) {

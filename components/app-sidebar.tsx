@@ -1,49 +1,29 @@
 "use client";
 
 import type { Route } from "next";
-import {
-  Bitcoin,
-  ChevronsUpDown,
-  Clock3,
-  Coins,
-  Database,
-  Flag,
-  Landmark,
-  Layers,
-  MapPin,
-  Network,
-  Users
-} from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Activity, Bitcoin, Clock3, Coins, Database, FileClock, Flag, KeyRound, Landmark, Layers, MapPin, Network } from "lucide-react";
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarRail
-} from "@/components/ui/sidebar";
 import type { SettingsSection } from "@/components/settings-dialog/settings-dialog";
+import { SidebarUsageIndicator } from "@/components/sidebar-usage-indicator";
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarRail } from "@/components/ui/sidebar";
 import { UserMenu, type UserMenuUser } from "@/components/user-menu";
 
-type NavItem = { title: string; href: Route; icon: typeof Database };
+type NavItem = { title: string; href: Route; icon: typeof KeyRound };
 
-const navItems: NavItem[] = [
+const accountItems: NavItem[] = [
+  { title: "API Keys", href: "/account/api-keys" as Route, icon: KeyRound },
+  { title: "Activity", href: "/account/activity" as Route, icon: Activity },
+  { title: "Logs", href: "/account/logs" as Route, icon: FileClock }
+];
+
+const adminItems: NavItem[] = [
+  { title: "Admin API Keys", href: "/admin/api-keys" as Route, icon: KeyRound },
+  { title: "Private API Usage", href: "/admin/api-usage" as Route, icon: Activity },
   { title: "Listings", href: "/admin/listings" as Route, icon: Layers },
-  { title: "Cryptos", href: "/admin/cryptos" as Route, icon: Bitcoin },
+  { title: "Cryptocurrencies", href: "/admin/cryptos" as Route, icon: Bitcoin },
   { title: "Chains", href: "/admin/chains" as Route, icon: Network },
   { title: "Exchanges", href: "/admin/exchanges" as Route, icon: Database },
   { title: "Markets", href: "/admin/markets" as Route, icon: Landmark },
@@ -51,105 +31,30 @@ const navItems: NavItem[] = [
   { title: "Cities", href: "/admin/cities" as Route, icon: MapPin },
   { title: "Currencies", href: "/admin/currencies" as Route, icon: Coins },
   { title: "Timezones", href: "/admin/timezones" as Route, icon: Clock3 },
-  { title: "MarketHours", href: "/admin/market-hours" as Route, icon: Layers }
+  { title: "Market Hours", href: "/admin/market-hours" as Route, icon: Clock3 }
 ];
 
-type AppSidebarProps = React.ComponentProps<typeof Sidebar> & {
-  user: UserMenuUser;
-  onOpenSettings?: (section: SettingsSection) => void;
-};
-
-export function AppSidebar({ user, onOpenSettings, ...props }: AppSidebarProps) {
+export function AppSidebar({ user, mode, onOpenSettings, ...props }: React.ComponentProps<typeof Sidebar> & { user: UserMenuUser; mode: "account" | "admin"; onOpenSettings: (section: SettingsSection) => void }) {
   const pathname = usePathname() ?? "/";
-  const isAdmin = user.role === "admin";
-
+  const items = mode === "account" ? accountItems : adminItems;
   return (
     <Sidebar collapsible="icon" variant="sidebar" {...props}>
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            {isAdmin ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <SidebarMenuButton
-                    size="lg"
-                    className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-                  >
-                    <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                      <Layers className="size-4" />
-                    </div>
-                    <div className="grid flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-semibold">TradingGoose</span>
-                      <span className="truncate text-xs">Market</span>
-                    </div>
-                    <ChevronsUpDown className="ml-auto" />
-                  </SidebarMenuButton>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-md"
-                  side="bottom"
-                  sideOffset={4}
-                  align="start"
-                >
-                  <DropdownMenuItem asChild>
-                    <Link href={"/admin" as Route}>
-                      <Layers className="mr-2 size-4" />
-                      Dashboard
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      e.preventDefault();
-                      onOpenSettings?.("team");
-                    }}
-                  >
-                    <Users className="mr-2 size-4" />
-                    Team Management
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <SidebarMenuButton asChild size="lg">
-                <Link href={"/admin" as Route}>
-                  <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                    <Layers className="size-4" />
-                  </div>
-                  <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-semibold">TradingGoose</span>
-                    <span className="truncate text-xs">Market</span>
-                  </div>
-                </Link>
-              </SidebarMenuButton>
-            )}
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <SidebarMenu><SidebarMenuItem><SidebarMenuButton asChild size="lg"><Link href={(mode === "account" ? "/account/api-keys" : "/admin") as Route}><Image src="/icon.png" alt="" width={32} height={32} className="size-8 rounded-md" /><div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">TradingGoose</span><span className="truncate text-xs">{mode === "account" ? "Market" : "Market Admin"}</span></div></Link></SidebarMenuButton></SidebarMenuItem></SidebarMenu>
       </SidebarHeader>
-
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
-          <SidebarMenu>
-            {navItems.map((item) => (
-              <SidebarMenuItem key={item.href}>
-                <SidebarMenuButton
-                  asChild
-                  isActive={pathname === item.href || pathname.startsWith(`${item.href}/`)}
-                >
-                  <Link href={item.href}>
-                    <item.icon />
-                    <span>{item.title}</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
+          <SidebarGroupLabel>{mode === "account" ? "Market" : "Administration"}</SidebarGroupLabel>
+          <SidebarMenu>{items.map((item) => <SidebarMenuItem key={item.href}><SidebarMenuButton asChild isActive={pathname === item.href || pathname.startsWith(`${item.href}/`)} tooltip={item.title}><Link href={item.href}><item.icon /><span>{item.title}</span></Link></SidebarMenuButton></SidebarMenuItem>)}</SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter>
-        <UserMenu user={user} onOpenSettings={onOpenSettings} />
+      <SidebarFooter className="gap-2">
+        <SidebarUsageIndicator onOpenSubscription={() => onOpenSettings("subscription")} />
+        <UserMenu user={user} mode={mode} onOpenSettings={onOpenSettings} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );
 }
+
+export { accountItems, adminItems };

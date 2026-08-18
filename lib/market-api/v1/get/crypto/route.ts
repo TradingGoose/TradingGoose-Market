@@ -1,19 +1,15 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+
 import { fetchCryptoById, fetchCryptosByIds } from "../../search/cryptos/route";
 import { parseListParam } from "../../search/parsing";
 import { resolveSearchParams } from "../../search/params";
 
+
 const MAX_BATCH = 200;
 
-export async function getCrypto(c: ApiContext, plugin?: PluginContext) {
+export async function getCrypto(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
@@ -33,19 +29,10 @@ export async function getCrypto(c: ApiContext, plugin?: PluginContext) {
       if (!crypto) {
         return c.json({ data: null, error: "Crypto not found." }, 404);
       }
-      if (plugin) {
-        triggerEntityEnrichersInBackground(plugin, "crypto", "get", [crypto]);
-      }
       return c.json({ data: crypto });
     }
 
     const resolved = await fetchCryptosByIds(request, cryptoIds, { forceLogoRefresh: true });
-    const rows = cryptoIds
-      .map((id) => resolved.get(id))
-      .filter((row): row is NonNullable<typeof row> => row != null);
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "crypto", "get", rows);
-    }
     const data: Record<string, Awaited<ReturnType<typeof fetchCryptoById>> | null> = {};
     for (const id of cryptoIds) {
       data[id] = resolved.get(id) ?? null;

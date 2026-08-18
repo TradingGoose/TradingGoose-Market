@@ -1,20 +1,19 @@
 import { sql, type SQL } from "drizzle-orm";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "./utils";
 import type { CurrencyPair, CurrencyPairFilters, CurrencyRow } from "./types";
 import { uniqueNonEmpty } from "./parsing";
+
 
 function resolveCurrencyIcon(request: Request, row: CurrencyRow) {
   return { ...row, iconUrl: resolveIconUrl(request, row.iconUrl) };
 }
 
 async function fetchCurrencies(filters: SQL[], limit: number): Promise<CurrencyRow[]> {
-  if (!db) return [];
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       id,
       code,
@@ -32,8 +31,7 @@ async function fetchCurrencies(filters: SQL[], limit: number): Promise<CurrencyR
 export async function buildCurrencyPairs(
   request: Request,
   filters: CurrencyPairFilters,
-  limit: number,
-  plugin?: PluginContext
+  limit: number
 ): Promise<CurrencyPair[]> {
   const baseQuery = filters.baseQuery?.trim() ?? null;
 
@@ -68,11 +66,6 @@ export async function buildCurrencyPairs(
 
   const bases = await fetchCurrencies(baseFilters, baseLimit);
   const quotes = await fetchCurrencies(quoteFilters, quoteLimit);
-
-  if (plugin) {
-    triggerEntityEnrichersInBackground(plugin, "currency", "search", bases);
-    triggerEntityEnrichersInBackground(plugin, "currency", "search", quotes);
-  }
 
   if (!bases.length || !quotes.length) {
     return [];

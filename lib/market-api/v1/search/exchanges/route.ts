@@ -1,9 +1,11 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { parseListParam } from "../parsing";
 import { resolveSearchParams } from "../params";
+
 
 type ExchangeSearchRow = {
   id: string;
@@ -29,9 +31,6 @@ function parsePositiveInt(value: string | null | undefined, fallback: number, ma
 }
 
 export async function searchExchangesRows(params: ExchangeSearchParams) {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const micId = params.micId?.trim() ?? "";
   const micName = params.micName?.trim() ?? "";
@@ -64,7 +63,7 @@ export async function searchExchangesRows(params: ExchangeSearchParams) {
 
   const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id, mic, name
     FROM exchanges
     ${whereClause}
@@ -77,9 +76,6 @@ export async function searchExchangesRows(params: ExchangeSearchParams) {
 
 export async function getSearchExchanges(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ data: [], error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);

@@ -1,19 +1,15 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+
 import { fetchCurrenciesByIds, fetchCurrencyById } from "../../search/currencies/route";
 import { parseListParam } from "../../search/parsing";
 import { resolveSearchParams } from "../../search/params";
 
+
 const MAX_BATCH = 200;
 
-export async function getCurrency(c: ApiContext, plugin?: PluginContext) {
+export async function getCurrency(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
@@ -31,19 +27,10 @@ export async function getCurrency(c: ApiContext, plugin?: PluginContext) {
       if (!currency) {
         return c.json({ data: null, error: "Currency not found." }, 404);
       }
-      if (plugin) {
-        triggerEntityEnrichersInBackground(plugin, "currency", "get", [currency]);
-      }
       return c.json({ data: currency });
     }
 
     const resolved = await fetchCurrenciesByIds(request, currencyIds);
-    const rows = currencyIds
-      .map((id) => resolved.get(id))
-      .filter((row): row is NonNullable<typeof row> => row != null);
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "currency", "get", rows);
-    }
     const data: Record<string, Awaited<ReturnType<typeof fetchCurrencyById>> | null> = {};
     for (const id of currencyIds) {
       data[id] = resolved.get(id) ?? null;

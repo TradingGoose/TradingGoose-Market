@@ -1,19 +1,15 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+
 import { fetchListingById, fetchListingsByIds } from "../../search/listings/route";
 import { parseListParam } from "../../search/parsing";
 import { resolveSearchParams } from "../../search/params";
 
+
 const MAX_BATCH = 200;
 
-export async function getListing(c: ApiContext, plugin?: PluginContext) {
+export async function getListing(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
@@ -33,19 +29,10 @@ export async function getListing(c: ApiContext, plugin?: PluginContext) {
       if (!listing) {
         return c.json({ data: null, error: "Listing not found." }, 404);
       }
-      if (plugin) {
-        triggerEntityEnrichersInBackground(plugin, "listing", "get", [listing]);
-      }
       return c.json({ data: listing });
     }
 
     const resolved = await fetchListingsByIds(request, listingIds, { forceLogoRefresh: true });
-    const rows = listingIds
-      .map((id) => resolved.get(id))
-      .filter((row): row is NonNullable<typeof row> => row != null);
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "listing", "get", rows);
-    }
     const data: Record<string, Awaited<ReturnType<typeof fetchListingById>> | null> = {};
     for (const id of listingIds) {
       data[id] = resolved.get(id) ?? null;

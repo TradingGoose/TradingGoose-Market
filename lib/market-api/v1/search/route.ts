@@ -1,7 +1,6 @@
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
 
-import { db } from "@tradinggoose/db";
+
 import { buildCurrencyPairs } from "./currency";
 import { toCryptoListing, toCurrencyListing } from "./mappers";
 import type { CryptoPair, Listing, ListingResult } from "./types";
@@ -18,12 +17,13 @@ import { searchCryptoPairs } from "./cryptos/route";
 import { searchListingRows } from "./listings/route";
 
 
+
 type RankedListing = {
   listing: ListingResult;
   rankValue: number;
 };
 
-export async function getSearch(c: ApiContext, plugin?: PluginContext) {
+export async function getSearch(c: ApiContext) {
   try {
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
@@ -150,7 +150,7 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
 
     if (includeListing && hasListingCriteria) {
       tasks.push(
-        searchListingRows(request, listingParams, plugin).then((rows) => {
+        searchListingRows(request, listingParams).then((rows) => {
           results.listings = rows;
         })
       );
@@ -164,15 +164,12 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
       cryptoQuoteNames.forEach((value) => cryptoParams.append("crypto_quote_name", value));
       chainTokens.forEach((value) => cryptoParams.append("chain", value));
       tasks.push(
-        searchCryptoPairs(request, cryptoParams, { preferCurrencyQuote: true }, plugin).then((rows) => {
+        searchCryptoPairs(request, cryptoParams, { preferCurrencyQuote: true }).then((rows) => {
           results.cryptos = rows;
         })
       );
     }
     if (includeCurrency && hasCurrencyCriteria) {
-      if (!db) {
-        return c.json({ data: [], error: "Database connection is not configured." }, 503);
-      }
       tasks.push(
         buildCurrencyPairs(
           request,
@@ -182,8 +179,7 @@ export async function getSearch(c: ApiContext, plugin?: PluginContext) {
             quoteCodes: currencyQuoteCodes,
             quoteNames: currencyQuoteNames
           },
-          groupLimit,
-          plugin
+          groupLimit
         ).then((rows) => {
           results.currencies = rows;
         })
