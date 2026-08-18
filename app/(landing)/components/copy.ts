@@ -58,13 +58,8 @@ export const landingHero = {
   }
 } as const;
 
-/* Public GET entry points only; short-form URLs mirror rewrites() in next.config.ts. */
+/* Public GET entry points from the finite versioned Market manifest. */
 export const apiEntryPoints = [
-  { method: "GET", urlTemplate: "/search?search_query={search_query}" },
-  {
-    method: "GET",
-    urlTemplate: "/search/listings?base_query={base_query}&limit={limit}"
-  },
   {
     method: "GET",
     urlTemplate: "/api/search?version=v1&search_query={search_query}"
@@ -83,8 +78,7 @@ export const structuredFeatureList = [
   "Canonical market reference data management",
   "Listings, exchanges, cryptocurrencies, currencies, countries, cities, time zones, chains, market groups, and trading hours",
   "Admin browse, create, edit, export, and upload workflows",
-  "Versioned public API with HMAC-signed keys",
-  "Per-key rate limiting and usage reporting",
-  "Icon upload storage across local filesystem, Vercel Blob, or Azure Blob",
-  "Optional Market plugin injection"
+  "Versioned anonymous or customer-key public reads",
+  "Per-key spend windows with Market-owned Activity and Logs",
+  "Icon upload storage across local filesystem, Vercel Blob, or Azure Blob"
 ] as const;

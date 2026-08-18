@@ -1,109 +1,103 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Route } from "next";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { authClient } from "@/lib/auth/client";
+import { AuthPageHeader } from "@/components/auth/auth-page-header";
+import { PasswordField } from "@/components/auth/password-field";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { authClient } from "@/lib/auth/client";
+import { beginEmailVerification, markVerificationCodeSent } from "@/lib/auth/verification";
 
-type LoginFormProps = {
-  showSignupLink: boolean;
-};
+function requiresEmailVerification(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  const value = `${String(candidate.code ?? "")} ${String(candidate.message ?? "")}`.toLowerCase();
+  return value.includes("email_not_verified") || value.includes("email not verified");
+}
 
-export default function LoginForm({ showSignupLink }: LoginFormProps) {
+function safeCallback(value: string | null): string {
+  if (!value) return "/account/api-keys";
+  let callback: URL;
+  try {
+    callback = new URL(value, "https://market.invalid");
+  } catch {
+    return "/account/api-keys";
+  }
+  if (callback.origin !== "https://market.invalid") return "/account/api-keys";
+  const localPath = `${callback.pathname}${callback.search}${callback.hash}`;
+  if (callback.pathname === "/admin" || callback.pathname.startsWith("/admin/")) return localPath;
+  if (callback.pathname === "/account" || callback.pathname.startsWith("/account/")) return localPath;
+  return "/account/api-keys";
+}
+
+export default function LoginForm({ registrationOpen }: { registrationOpen: boolean }) {
   const searchParams = useSearchParams();
+  const callbackUrl = useMemo(() => safeCallback(searchParams.get("callbackUrl")), [searchParams]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const callbackUrl = useMemo(() => {
-    const candidate = searchParams.get("callbackUrl") ?? searchParams.get("redirect");
-    if (!candidate || !candidate.startsWith("/admin")) {
-      return "/admin";
-    }
-    return candidate;
-  }, [searchParams]);
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSubmitting) return;
-
     setError(null);
     setIsSubmitting(true);
-
     try {
-      const { error: signInError } = await authClient.signIn.email({
-        email,
-        password,
-        callbackURL: callbackUrl
-      });
-
-      if (signInError) {
-        setError(signInError.message ?? "Unable to sign in.");
+      const normalizedEmail = email.trim().toLowerCase();
+      const result = await authClient.signIn.email({ email: normalizedEmail, password });
+      if (result.error) {
+        if (requiresEmailVerification(result.error)) {
+          beginEmailVerification(normalizedEmail, callbackUrl);
+          try {
+            const otpResult = await authClient.emailOtp.sendVerificationOtp({
+              email: normalizedEmail,
+              type: "sign-in",
+            });
+            if (!otpResult.error) markVerificationCodeSent();
+          } catch {
+            // The verification screen keeps resend recovery available.
+          }
+          window.location.assign("/verify");
+          return;
+        }
+        setError("The email or password is incorrect.");
         return;
       }
-      window.location.assign(callbackUrl as Route);
+      window.location.assign(callbackUrl);
     } catch {
-      setError("Unable to sign in.");
+      setError("Unable to sign in. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-primary">TradingGoose Admin</CardTitle>
-          <CardDescription className="text-secondary-foreground">
-            Sign in with TradingGoose-Market Admin credentials.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                autoComplete="email"
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete="current-password"
-                required
-              />
-            </div>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? "Signing in..." : "Sign in"}
-            </Button>
-            {showSignupLink ? (
-              <p className="text-center text-sm text-muted-foreground">
-                Need an account?{" "}
-                <Link className="font-medium text-primary hover:underline" href="/signup">
-                  Sign up
-                </Link>
-              </p>
-            ) : null}
-          </form>
-        </CardContent>
-      </Card>
-    </main>
+    <div className="space-y-8">
+      <AuthPageHeader eyebrow="TradingGoose Market" title="Welcome back" description="Sign in to manage API keys and inspect Market usage." />
+      <form className="space-y-6" onSubmit={handleSubmit}>
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" disabled={isSubmitting} required autoFocus />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor="password">Password</Label>
+            <Link href="/forgot-password" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Forgot password?</Link>
+          </div>
+          <PasswordField id="password" value={password} onChange={setPassword} autoComplete="current-password" disabled={isSubmitting} />
+        </div>
+        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        <Button type="submit" className="w-full" disabled={isSubmitting}>{isSubmitting ? "Signing in…" : "Sign in"}</Button>
+      </form>
+      <p className="text-center text-sm text-muted-foreground">
+        {registrationOpen ? <>New to Market? <Link className="font-medium text-foreground hover:underline" href="/signup">Create an account</Link></> : "Public registration is currently closed."}
+      </p>
+    </div>
   );
 }
