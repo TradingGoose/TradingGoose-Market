@@ -1,247 +1,174 @@
-<h1 align="center">TradingGoose Market</h1>
-<p align="center">
-  <b>Canonical market reference data platform for TradingGoose</b>
-</p>
+# TradingGoose Market
 
-<p align="center">
-  Market data cockpit for canonical listings, exchanges, currencies, and trading hours.
-</p>
+TradingGoose Market is a standalone market-reference data service. It owns customer authentication, usage-priced PAYG billing, API-key management, request history, and administrative curation for listings, exchanges, currencies, cryptocurrencies, countries, cities, time zones, chains, markets, and trading hours.
 
-<p align='center'>
-  <a href="https://discord.gg/wavf5JWhuT" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-</p>
+Market shares TradingGoose’s visual system with Studio, but it does not call Studio for authorization, billing, keys, usage, or request limiting. Studio and other products consume Market as ordinary API clients.
 
-<p align='center'>
-  <a href="https://google.com/ai?q=I+am+using+TradingGoose-Market+from+https%3A%2F%2Fgithub.com%2FTradingGoose%2FTradingGoose-Market.+How+do+I+manage+canonical+market+reference+data+with+this+project" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/ASK%20google%20AI-8E75B2?style=for-the-badge&logo=google%20gemini&logoColor=white" alt="Gemini"></a>
-  <a href="https://perplexity.ai?q=I+am+using+TradingGoose-Market+from+https%3A%2F%2Fgithub.com%2FTradingGoose%2FTradingGoose-Market.+How+do+I+manage+canonical+market+reference+data+with+this+project" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/ASK%20perplexity-088F8F?style=for-the-badge&logo=perplexity&logoColor=000000" alt="Perplexity"></a>
-</p>
+## Product surfaces
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/94f9af3c-0fc4-4bbc-9a19-fe6fa0314b24">
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/b5ce6a54-6986-4a6a-afa7-df341bb35bdf">
-  <img alt="Project Screenshot" src="https://github.com/user-attachments/assets/94f9af3c-0fc4-4bbc-9a19-fe6fa0314b24" width="2559">
-</picture>
+- Email/password signup, sign-in, sign-out, verified email change, and password reset through Better Auth.
+- A customer account shell with exactly API Keys, Activity, and Logs.
+- One-time-reveal public API keys with an optional whole-dollar spend allowance over the preceding 1–30 × 24 hours.
+- Market-owned immutable request admissions and completion status for customer analytics.
+- Stripe-backed PAYG activation, metered request accrual, threshold/cycle/final settlement, and Customer Portal management.
+- Database-provisioned additive system administrators with private update keys and system-wide private-key usage views.
+- Admin entity curation, export, delete, and icon upload workflows. Market Hours intentionally supports list, export, and delete only.
 
----
-
-## What is TradingGoose Market?
-
-TradingGoose Market is the canonical source of truth for market reference data used across TradingGoose. It stores and serves listings, exchanges, cryptocurrencies, currencies, countries, cities, time zones, blockchain networks, market groups, and trading hours through a Next.js admin UI and a versioned public API.
-
-It exists because of a problem we ran into while building [TradingGoose Studio](https://github.com/TradingGoose/TradingGoose-Studio): once Studio needed to support more than one market data provider, symbol identity stopped being simple. The same asset could be spelled differently across Yahoo Finance, Alpaca, Finnhub, Alpha Vantage, and other sources, which made cross-provider support harder than it should have been.
-
-> **Early Stage Notice**
->
-> TradingGoose Market is still under active development. Expect rough edges, schema changes, and occasional breaking updates while the platform evolves.
-
-## Why It Exists
-
-TradingGoose Market was built to give TradingGoose Studio a shared market identity layer instead of pushing provider-specific symbol logic into every connector. Market keeps the canonical records and market metadata. Studio can then apply provider-specific symbol formatting rules on top of that shared context.
-
-If you want the full background, see:
-
-- [TradingGoose Studio repository](https://github.com/TradingGoose/TradingGoose-Studio)
-- [Blog post: why and how we built TradingGoose Market](https://www.tradinggoose.ai/blog/building-tradinggoose-market#how-rule-resolution-works)
-
-## Core Capabilities
-
-- Canonical management of market reference data.
-- Versioned public API at `/api/search`, `/api/get`, and `/api/update`, with short-path rewrites for `/search` and `/update`.
-- Admin UI for browse, create, edit, export, and upload flows across every entity type.
-- Team management and invitation-based signup flows for admin and collaborators.
-- API key support with per-key rate limiting and usage reporting back to TradingGoose Studio.
-- Icon upload support with local filesystem, Vercel Blob, or Azure Blob storage.
-- Optional plugin injection through `MARKET_PLUGIN_MODULES`.
-
-## Tech Stack
+## Runtime
 
 | Layer | Technology |
 | --- | --- |
-| Runtime | Bun |
-| Framework | Next.js (App Router) |
-| Database | PostgreSQL + Drizzle ORM |
-| Auth | Better Auth + HMAC-signed API keys |
-| UI | Radix UI, shadcn/ui, Tailwind CSS, TanStack Table |
+| Runtime and package manager | Bun |
+| Application | Next.js App Router, React, TypeScript |
+| Database | PostgreSQL and Drizzle ORM |
+| Authentication | Better Auth |
+| Billing | Stripe |
+| API-key generation and validation | Unkey (server-side) |
+| UI | shadcn/ui, Tailwind CSS, Recharts, TanStack Table |
 | Storage | Local filesystem, Vercel Blob, or Azure Blob |
-| Integrations | Redis, Resend, TradingGoose Studio billing hooks |
-| Language | TypeScript |
 
-## Quick Start
+## Setup
 
-### Requirements
-
-- Bun 1.3+
-- Docker or an existing PostgreSQL instance
-- PostgreSQL 17 recommended
-
-### Setup
-
-1. Copy the environment template.
-
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Install dependencies.
-
-   ```bash
-   bun install
-   ```
-
-3. Start PostgreSQL. Example:
-
-   ```bash
-   docker run -d --name tradinggoose-market-db -p 5432:5432 \
-     -e POSTGRES_PASSWORD=password \
-     -e POSTGRES_DB=tradinggoose \
-     postgres:17
-   ```
-
-4. Fill in the required values in `.env`.
-
-5. Run migrations.
-
-   ```bash
-   bun run db:migrate
-   ```
-
-6. Start the app.
-
-   ```bash
-   bun run dev
-   ```
-
-7. Open `http://localhost:3000/admin`.
-
-The first user to sign up becomes an admin. After that, sign-up is restricted to invited users.
-
-### Environment
-
-Required for a normal local setup:
-
-- `DATABASE_URL` - used by Drizzle Kit migrations and as the runtime fallback connection string.
-- `BETTER_AUTH_SECRET` - auth and session secret.
-- `BETTER_AUTH_URL` - auth base URL.
-- `NEXT_PUBLIC_APP_URL` - public app URL used for auth redirects and generated links.
-- `INTERNAL_API_SECRET` - HMAC pepper and internal API secret.
-- `REDIS_URL` - Redis connection string for response cache and free-tier rate limiting.
-
-Optional or integration-specific:
-
-- Runtime DB tuning: `DATABASE_POOL_URL`, `DATABASE_POOL_MAX`.
-- Free-tier tuning: `MARKET_FREE_TIER_*`.
-- Rank update access: `MARKET_RANK_UPDATE_ACCESS_MODE` (`authenticated` or `service`).
-- Email delivery: `RESEND_API_KEY`, optional `FROM_EMAIL_ADDRESS`.
-- TradingGoose Studio billing integration: `OFFICIAL_TG_URL`.
-- Storage and plugins: `STORAGE_SERVICE`, cloud storage credentials, `MARKET_PLUGIN_MODULES`, `MARKET_PLUGIN_SOURCES`.
-
-If you use `DATABASE_POOL_URL` at runtime, keep `DATABASE_URL` set for migrations.
-
-### Storage
-
-If `STORAGE_SERVICE` is not set, the app auto-detects storage from the configured credentials and falls back to local storage when no cloud provider is configured.
-
-## Plugins
-
-TradingGoose Market can inject private or local plugins at install time without committing their dependencies.
-
-Example:
+Requirements are Bun 1.3+, PostgreSQL, and the configured provider accounts.
+Provision a newly initialized empty PostgreSQL database; Market does not probe,
+import, backfill, or preserve an earlier Market schema.
 
 ```bash
-MARKET_PLUGIN_MODULES=@your-org/your-plugin
-MARKET_PLUGIN_SOURCES={"@your-org/your-plugin":"file:../your-plugin"}
-bun run install:with-plugins
+cp .env.example .env
+bun install
+bun run db:migrate
 bun run dev
 ```
 
-`bun run install:with-plugins` writes the generated plugin loader, installs the requested modules, and restores `package.json` afterward. Restart the dev server after rerunning it so the generated loader is picked up.
+`db:migrate` is the sole migration command. It applies the checked-in Drizzle
+chain to the configured empty database before the application starts. Drizzle
+migrations are generated from `packages/db/schema.ts`; migration SQL is never
+hand-edited and there is no legacy cutover or compatibility path.
 
-## Project Layout
+Create an ordinary account through `/signup`, complete email verification, and
+then provision system-admin membership through the database/operator-owned CLI:
 
-```text
-app/
-  (auth)/           Login and signup pages
-  admin/            Admin UI pages and CRUD screens
-  api/              Auth, health, search, get, update, uploads, and export routes
-lib/
-  auth/             Better Auth server and client config
-  db/               Database client utilities and status checks
-  market-api/       API auth, rate limiting, billing, and versioned handlers
-  ui/               Shared UI utilities
-packages/
-  db/               Drizzle schema, client, and migrations package
-uploads/            Storage abstraction for local, Vercel Blob, and Azure Blob
-scripts/            Install-time plugin injector
+```bash
+bun run admin:manage add --user-id <user-id>
+bun run admin:manage remove --user-id <user-id>
 ```
 
-## API
+Adding admin membership preserves the user’s customer billing, public keys, and history. Removal revokes every grant-bound private key before deleting the membership. There is no HTTP membership writer, invitation flow, role editor, ban flow, or application account-deletion action.
 
-The public API is available through `/api/search`, `/api/get`, and `/api/update`. The shorter `/search` and `/update` paths are rewritten to the same handlers.
+## Required configuration
 
-Authenticated requests are validated with HMAC-signed keys, and rate limits are enforced per key.
+Core runtime:
 
-### Search
+- `DATABASE_URL`
+- `NEXT_PUBLIC_APP_URL` and the same-origin `BETTER_AUTH_URL`
+- `BETTER_AUTH_SECRET`; production requires exactly 64 lowercase hexadecimal
+  characters generated with `openssl rand -hex 32`
+- `REGISTRATION_MODE=open|close`
+- server-only `RESEND_API_KEY`
+- complete `RESEND_FROM_EMAIL` sender on an operator-verified Resend domain
+- optional `RESEND_AUDIENCE_ID` for best-effort verified-user contact projection
+- `BILLING_ENABLED=true|false`
+- positive `PAYG_USD_PER_1000_READS`
+- `UNKEY_API_ID`
+- separate `UNKEY_KEY_MANAGEMENT_ROOT_KEY` and `UNKEY_KEY_VERIFY_ROOT_KEY`
 
-| Endpoint | Description |
+Enabled billing also requires:
+
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `PAYG_STRIPE_PRICE_ID`
+- positive `PAYG_INVOICE_THRESHOLD_USD`
+
+Disabled billing supports no Stripe values, `STRIPE_SECRET_KEY` alone for best-effort Customer provisioning, or the complete secret/webhook/Price synchronization triple. Activation and Portal stay disabled, keyed requests remain usable and are recorded as non-billable, saved per-key limits are not consumed, and no disabled-era request is retrocharged.
+
+Anonymous request limiting is optional. Leave both variables absent for unlimited anonymous reads, or set the complete pair:
+
+- `ANONYMOUS_RATE_LIMIT`
+- `ANONYMOUS_RATE_LIMIT_DURATION_SECONDS`
+
+A configured pair also requires `UNKEY_ANONYMOUS_NAMESPACE_ID` and `UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY`. The bucket is service-wide; it is not partitioned by client IP. Redis, when configured, belongs only to the retained response cache.
+
+`STORAGE_SERVICE` is an optional `LOCAL|VERCEL|AZURE` override. When it is
+unset, Market preserves its original auto-detection contract:
+
+- Only complete Vercel credentials select `VERCEL`.
+- Only complete Azure credentials select `AZURE`.
+- Neither complete credential set selects `LOCAL`.
+- Both complete credential sets select `LOCAL` and emit a warning.
+
+An explicit `STORAGE_SERVICE=LOCAL|VERCEL|AZURE` overrides that detection:
+
+- `LOCAL` needs no provider credentials.
+- `VERCEL` requires the server-only `BLOB_READ_WRITE_TOKEN`.
+- `AZURE` requires `AZURE_STORAGE_CONTAINER_NAME` plus either `AZURE_CONNECTION_STRING` or both `AZURE_ACCOUNT_NAME` and `AZURE_ACCOUNT_KEY`.
+
+## Finite Market API
+
+Every keyed request requires the exact `version=v1` query parameter. Public reads accept an optional `x-api-key`; absence selects anonymous access, while a present header—including an empty value—selects key validation and never falls back. `Authorization: Bearer` is not an API-key alias.
+
+Public `GET|HEAD` routes:
+
+| Route | Requested resource |
 | --- | --- |
-| `GET /search` | Universal search across listings, cryptos, and currencies |
-| `GET /search/listings` | Search listings with filters |
-| `GET /search/cryptos` | Search cryptocurrencies with chain and pair filters |
-| `GET /search/currencies` | Search currencies by code or name |
-| `GET /search/exchanges` | Search exchanges by MIC or name |
-| `GET /search/countries` | Search countries by code or name |
-| `GET /search/cities` | Search cities by name or country |
+| `/api/search` | Market Instrument |
+| `/api/search/cities` | City |
+| `/api/search/countries` | Country |
+| `/api/search/currencies` | Currency |
+| `/api/search/cryptos` | Cryptocurrency |
+| `/api/search/exchanges` | Exchange |
+| `/api/search/listings` | Listing Identity |
+| `/api/get/crypto` | Cryptocurrency |
+| `/api/get/currency` | Currency |
+| `/api/get/listing` | Listing Identity |
+| `/api/get/market-hours` | Market Hours |
+| `/api/get/timezone` | Timezone |
 
-### Get
+Private `POST` routes require a database-admin-minted private key:
 
-| Endpoint | Description |
+| Route |
+| --- |
+| `/api/update/crypto-rank` |
+| `/api/update/crypto-rank/decay` |
+| `/api/update/currency-rank` |
+| `/api/update/currency-rank/decay` |
+| `/api/update/listing-rank` |
+| `/api/update/listing-rank/decay` |
+
+There are no short-path aliases, wildcard endpoint families, logo-update API aliases, static service secrets, customer-key throughput limits, or private-key request/spend limits.
+
+Public-key use requires literal active PAYG only while billing is enabled. Key creation, listing, limit editing, and revocation remain billing-independent. Each admitted keyed request is recorded before its data handler runs; completion is stored separately as success, client error, server error, or visibly pending after a crash.
+
+Clients may identify the calling application with `HTTP-Referer` and optional `X-Title`. Market normalizes and stores safe attribution snapshots for Activity and Logs; these headers never affect access, billing, spend enforcement, caching, or handler input.
+
+## Commands
+
+| Command | Purpose |
 | --- | --- |
-| `GET /get/listing` | Fetch listing(s) by ID, single or batch up to 200 |
-| `GET /get/crypto` | Fetch crypto(s) by ID, single or batch up to 200 |
-| `GET /get/currency` | Fetch currency(ies) by ID, single or batch up to 200 |
-| `GET /get/timezone` | Fetch time zone info |
-| `GET /get/market-hours` | Fetch trading hours for an exchange or market |
-
-### Update
-
-| Endpoint | Description |
-| --- | --- |
-| `POST /update/listing-rank` | Update listing rank, with `/decay` variant |
-| `POST /update/listing-logo` | Update listing logo |
-| `POST /update/crypto-rank` | Update crypto rank, with `/decay` variant |
-| `POST /update/crypto-logo` | Update crypto logo |
-| `POST /update/currency-rank` | Update currency rank, with `/decay` variant |
-| `POST /update/currency-logo` | Update currency logo |
-| `POST /update/country-logo` | Update country logo |
-
-Rate limits default to 50 req/s per user key and 1,000 req/s for internal service keys. When free tier access is enabled, unauthenticated requests are rate limited by IP, with defaults of 25 req/min and 500 req/day.
-
-## Admin CRUD Endpoints
-
-Each entity (`listings`, `cryptos`, `currencies`, `exchanges`, `countries`, `cities`, `chains`, `markets`, `time-zones`, `market-hours`) exposes:
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/api/{entity}` | List with pagination and filters, plus option mode for dropdowns |
-| `POST` | `/api/{entity}` | Create |
-| `GET` | `/api/{entity}/{id}` | Get single |
-| `PATCH` | `/api/{entity}/{id}` | Update |
-| `DELETE` | `/api/{entity}/{id}` | Delete |
-| `GET` | `/api/{entity}/export` | Export all as JSON |
-
-## Scripts
-
-| Command | Description |
-| --- | --- |
-| `bun run dev` | Start the development server |
-| `bun run build` | Create a production build |
-| `bun run start` | Start the production server |
+| `bun run dev` | Start development |
+| `bun run build` | Build the database package and production application |
+| `bun run start` | Start the production application |
 | `bun run lint` | Run ESLint |
-| `bun run type-check` | Run TypeScript type checking |
-| `bun run db:generate` | Generate Drizzle migration files |
-| `bun run db:migrate` | Apply database migrations |
-| `bun run install:with-plugins` | Install dependencies with plugin injection enabled |
+| `bun run type-check` | Build database types and check TypeScript |
+| `DATABASE_URL=postgres://market:market@127.0.0.1:5432/market_quality bun run test` | Build database types and run the unfiltered Vitest suite, including isolated fresh-database and retention lifecycles |
+| `bun run test:watch` | Run Vitest in watch mode |
+| `bun run db:generate` | Generate the structural Drizzle migration |
+| `bun run db:migrate` | Apply the checked-in Drizzle chain to the configured empty database |
+| `bun run test:release` | Sequentially clean-build, start, readiness-check, and exact-route-smoke all four registration/billing modes |
+| `bun run admin:manage …` | Add or remove database-owned admin membership |
+
+## Release validation
+
+The release workflow runs two independent PostgreSQL 17 gates. `quality` owns
+the unfiltered test suite using a `market_quality` control database. The
+`release-validation` job applies `db:migrate` exactly once to its separate
+`market_release` database, then invokes `test:release` exactly once. The harness
+owns all four `REGISTRATION_MODE=open|close` ×
+`BILLING_ENABLED=true|false` production builds and servers, performs
+exact route and registration-policy probes—including two rejected
+closed-registration POSTs and one successful local signup in
+open-registration/billing-disabled mode—and always terminates each server.
+Publication requires both gates.
 
 ## License
 
-TradingGoose Market is licensed under Apache-2.0. See the [LICENSE](LICENSE) file for details.
+Apache-2.0. See [LICENSE](LICENSE).

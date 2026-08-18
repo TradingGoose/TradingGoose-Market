@@ -1,99 +1,108 @@
-name: Release
+name: Release TradingGoose Market
 
 on:
   workflow_dispatch:
 
+concurrency:
+  group: tradinggoose-market-release
+  cancel-in-progress: false
+
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: market
+          POSTGRES_PASSWORD: market
+          POSTGRES_DB: market_quality
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U market -d market_quality"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run db:build
+      - run: bun run type-check
+      - run: bun run lint
+      - run: bun run test
+        env:
+          DATABASE_URL: postgres://market:market@127.0.0.1:5432/market_quality
+
+  release-validation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: market
+          POSTGRES_PASSWORD: market
+          POSTGRES_DB: market_release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U market -d market_release"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run db:build
+      - run: bun run db:migrate
+        env:
+          DATABASE_URL: postgres://market:market@127.0.0.1:5432/market_release
+      - run: bun run test:release
+        env:
+          DATABASE_URL: postgres://market:market@127.0.0.1:5432/market_release
+          NEXT_PUBLIC_APP_URL: https://127.0.0.1:3000
+          BETTER_AUTH_URL: https://127.0.0.1:3000
+          BETTER_AUTH_SECRET: 51d365045e0022c3c710f22e1d4133321ae9eb5e081d6eee119c09cacf145dfb
+          PAYG_USD_PER_1000_READS: "1.00"
+          UNKEY_API_ID: api_release_validation
+          UNKEY_KEY_MANAGEMENT_ROOT_KEY: unkey_release_management
+          UNKEY_KEY_VERIFY_ROOT_KEY: unkey_release_verify
+          RESEND_API_KEY: re_release_validation
+          RESEND_FROM_EMAIL: "TradingGoose Market <market@example.com>"
+
   release:
+    needs: [quality, release-validation]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Create release
+          ref: ${{ github.sha }}
+      - name: Create TradingGoose Market release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v$(date -u +'%Y.%m.%d')"
-
-          # Append suffix if tag already exists (e.g. v2026.04.03.1)
           SUFFIX=0
           while gh release view "$TAG" > /dev/null 2>&1; do
             SUFFIX=$((SUFFIX + 1))
             TAG="v$(date -u +'%Y.%m.%d').$SUFFIX"
           done
 
-          # Get the previous release date to filter PRs
-          PREV_DATE=$(gh release list --limit 1 --json createdAt --jq '.[0].createdAt' 2>/dev/null || echo "")
-
-          # Collect all commits from PRs merged into staging, deduplicate, and categorize
-          declare -A SEEN
-          FEATURES=""
-          FIXES=""
-          REFACTORS=""
-          DOCS=""
-          OTHER=""
-
-          if [ -n "$PREV_DATE" ]; then
-            PR_NUMS=$(gh pr list --base staging --state merged --json number,mergedAt \
-              --jq "[.[] | select(.mergedAt >= \"$PREV_DATE\")] | .[].number")
-          else
-            PR_NUMS=$(gh pr list --base staging --state merged --json number \
-              --jq '.[].number')
-          fi
-
-          for PR_NUM in $PR_NUMS; do
-            COMMITS=$(gh pr view "$PR_NUM" --json commits \
-              --jq '.commits[] | "\(.oid[:7])\t\(.messageHeadline)"')
-
-            while IFS=$'\t' read -r HASH MSG; do
-              [ -z "$HASH" ] && continue
-              [ -n "${SEEN[$HASH]}" ] && continue
-              SEEN[$HASH]=1
-
-              # Format conventional commit prefix as inline code
-              LINE=$(echo "- ${MSG} (${HASH})" | sed -E 's/^(- )(feat|fix|build|refactor|chore|ci|docs|style|test|perf)(\([^)]*\))?:/\1`\2\3`:/')
-
-              case "$MSG" in
-                feat*)     FEATURES="${FEATURES}${LINE}"$'\n' ;;
-                fix*)      FIXES="${FIXES}${LINE}"$'\n' ;;
-                refactor*) REFACTORS="${REFACTORS}${LINE}"$'\n' ;;
-                docs*)     DOCS="${DOCS}${LINE}"$'\n' ;;
-                *)         OTHER="${OTHER}${LINE}"$'\n' ;;
-              esac
-            done <<< "$COMMITS"
-          done
-
-          # Assemble release notes
-          NOTES="# TradingGoose Studio ${TAG}"$'\n\n'
-          NOTES="${NOTES}_Release date: $(date -u +%Y-%m-%d)_"$'\n\n'
-
-          [ -n "$FEATURES" ]  && NOTES="${NOTES}## Features"$'\n'"${FEATURES}"$'\n'
-          [ -n "$FIXES" ]     && NOTES="${NOTES}## Bug Fixes"$'\n'"${FIXES}"$'\n'
-          [ -n "$REFACTORS" ] && NOTES="${NOTES}## Refactors"$'\n'"${REFACTORS}"$'\n'
-          [ -n "$DOCS" ]      && NOTES="${NOTES}## Documentation"$'\n'"${DOCS}"$'\n'
-          [ -n "$OTHER" ]     && NOTES="${NOTES}## Other Changes"$'\n'"${OTHER}"$'\n'
-
-          # Contributors
-          if [ -n "$PREV_DATE" ]; then
-            CONTRIBUTORS=$(gh pr list --base staging --state merged --json author,mergedAt \
-              --jq "[.[] | select(.mergedAt >= \"$PREV_DATE\")] | [.[].author.login] | unique | .[] | \"- @\(.)\"")
-          else
-            CONTRIBUTORS=$(gh pr list --base staging --state merged --json author \
-              --jq '[.[].author.login] | unique | .[] | "- @\(.)"')
-          fi
-          [ -n "$CONTRIBUTORS" ] && NOTES="${NOTES}## Contributors"$'\n'"${CONTRIBUTORS}"$'\n'
-
-          if [ "$NOTES" = "# TradingGoose Studio ${TAG}"$'\n\n'"_Release date: $(date -u +%Y-%m-%d)_"$'\n\n' ]; then
-            NOTES="${NOTES}No changes since last release."$'\n'
-          fi
-
           gh release create "$TAG" \
-            --title "$TAG" \
-            --target staging \
-            --notes "$NOTES" \
+            --title "TradingGoose Market $TAG" \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
             --latest
