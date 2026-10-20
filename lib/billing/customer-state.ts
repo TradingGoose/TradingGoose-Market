@@ -31,7 +31,7 @@ export async function ensureMarketCustomerState(
         .from(schema.user)
         .where(eq(schema.user.id, userId))
         .limit(1)
-        .for("update");
+        .for("update", { of: schema.user });
       if (!customer) {
         throw new Error("Market customer does not exist.");
       }
@@ -157,6 +157,9 @@ export async function ensureStripeUserCustomer(
   return withBillingSubjectLock(
     userId,
     async (transaction) => {
+      // The billing-subject lock protects the subscription bridge. Only the
+      // user is updated here; locking joined owner rows reverses key-operation
+      // lock order and can deadlock an unrelated key/grant advisory scope.
       const [record] = await transaction
         .select({
           user: schema.user,
@@ -178,7 +181,7 @@ export async function ensureStripeUserCustomer(
         )
         .where(eq(schema.user.id, userId))
         .limit(1)
-        .for("update");
+        .for("update", { of: schema.user });
       if (!record) throw new Error("Market customer does not exist.");
 
       const storedCustomerId = record.user.stripeCustomerId;

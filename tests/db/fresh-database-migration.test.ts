@@ -563,7 +563,7 @@ async function assertRealSignupCreatesCanonicalCustomer(
 
 describe.sequential("fresh database migration", () => {
   it(
-    "applies the checked-in Drizzle chain once and creates a real unverified customer bridge",
+    "applies the Drizzle chain, creates an unverified customer, and serializes billing with key operations",
     async () => {
       const controlUrl = parseControlUrl(process.env.DATABASE_URL);
       const databaseName = `${GENERATED_DATABASE_PREFIX}${randomUUID().replaceAll("-", "")}`;
@@ -598,6 +598,8 @@ describe.sequential("fresh database migration", () => {
 
           environmentSnapshot = installApplicationEnvironment(targetUrl);
           applicationClient = await assertRealSignupCreatesCanonicalCustomer(targetSql, databaseName);
+          const { assertCustomerRowLockOrder } = await import("../helpers/customer-row-locks");
+          await assertCustomerRowLockOrder(targetSql, applicationClient);
         } finally {
           try {
             if (applicationClient) await applicationClient.end({ timeout: 5 });

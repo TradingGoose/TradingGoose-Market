@@ -179,7 +179,7 @@ export async function handleKeyedMarketRoute(
           .innerJoin(systemAdmin, eq(systemAdmin.id, marketApiKeys.adminGrantId))
           .innerJoin(user, eq(user.id, systemAdmin.userId))
           .where(eq(marketApiKeys.id, mapping.id))
-          .for("update")
+          .for("update", { of: user })
           .limit(1);
         const row = rows[0];
         if (
@@ -329,7 +329,7 @@ async function reloadAuthorizedPublicKey(
     .innerJoin(marketUsageOwner, eq(marketUsageOwner.id, marketApiKeys.usageOwnerId))
     .innerJoin(user, eq(user.id, marketApiKeys.userId))
     .where(eq(marketApiKeys.id, keyId))
-    .for("update")
+    .for("update", { of: user })
     .limit(1);
   const row = rows[0];
   if (

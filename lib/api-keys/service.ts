@@ -128,7 +128,7 @@ export async function updateCustomerApiKeyAllowance(input: {
           eq(marketUsageOwner.userId, input.userId),
         ),
       )
-      .for("update")
+      .for("update", { of: marketApiKeys })
       .limit(1);
     const key = rows[0]?.key;
     if (!key) throw new ApiKeyNotFoundError("API key was not found");

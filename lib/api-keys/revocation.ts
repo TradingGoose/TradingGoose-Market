@@ -59,7 +59,7 @@ export async function revokeAdminApiKey(keyId: string, callerGrantId: string) {
               eq(systemAdmin.status, "active"),
             ),
           )
-          .for("update")
+          .for("update", { of: user })
           .limit(2);
         if (
           callerRows.length !== 1 ||
@@ -86,7 +86,7 @@ export async function revokeAdminApiKey(keyId: string, callerGrantId: string) {
               eq(marketApiKeys.adminGrantId, targetGrantId),
             ),
           )
-          .for("update")
+          .for("update", { of: marketApiKeys })
           .limit(2);
         const key = keyRows[0];
         if (keyRows.length !== 1 || !key) {
@@ -167,7 +167,7 @@ async function revokeApiKey(input: {
           eq(marketApiKeys.keyClass, input.expectedClass),
         ),
       )
-      .for("update")
+      .for("update", { of: user })
       .limit(1);
     const row = rows[0];
     if (

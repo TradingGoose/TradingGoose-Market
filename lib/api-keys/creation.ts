@@ -503,6 +503,8 @@ async function assertCreationAdmission(
     adminGrantId: string | null;
   },
 ) {
+  // Keep the live identity stable through insertion without locking the joined
+  // usage owner. The surrounding advisory scope protects creation.
   const ownerRows = await tx
     .select({
       id: marketUsageOwner.id,
@@ -519,7 +521,7 @@ async function assertCreationAdmission(
         eq(user.id, input.userId),
       ),
     )
-    .for("update")
+    .for("update", { of: user })
     .limit(2);
   const owner = ownerRows[0];
   if (
