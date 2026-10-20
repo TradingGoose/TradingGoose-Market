@@ -85,6 +85,8 @@ Enabled billing also requires:
 - `PAYG_STRIPE_PRICE_ID`
 - positive `PAYG_INVOICE_THRESHOLD_USD`
 
+Enabled customer-key access requires an active subscription and no failed-usage-payment block, mirroring Studio's `userStats.billingBlocked`. A confirmed decline preserves the already-admitted request but pauses later billable requests until invoice payment recovery. Key management remains available. Threshold billing waits for at least one full cent of unbilled usage, even when the configured threshold is smaller; cycle/final settlement retains nearest-cent rounding.
+
 Disabled billing supports no Stripe values, `STRIPE_SECRET_KEY` alone for best-effort Customer provisioning, or the complete secret/webhook/Price synchronization triple. Activation and Portal stay disabled, keyed requests remain usable and are recorded as non-billable, saved per-key limits are not consumed, and no disabled-era request is retrocharged.
 
 Anonymous request limiting is optional. Leave both variables absent for unlimited anonymous reads, or set the complete pair:
@@ -173,9 +175,10 @@ owns all four `REGISTRATION_MODE=open|close` ×
 exact route and registration-policy probes—including two rejected
 closed-registration POSTs and one successful local signup in
 open-registration/billing-disabled mode—and always terminates each server.
-The shared public/auth origin is `https://localhost:3000`; transport binds to
-`http://127.0.0.1:3000` and sends canonical forwarded headers, preserving the
-real HTTPS redirect check while matching Next.js's loopback-host normalization.
+The shared public/auth origin is `https://market.example.test:3000`; transport
+binds to `http://127.0.0.1:3000` and sends the canonical Host and forwarded headers.
+The distinct public hostname proves reverse-proxied UI requests render instead
+of redirecting to themselves; raw loopback requests must still redirect to HTTPS.
 Publication requires both gates.
 
 ## License
