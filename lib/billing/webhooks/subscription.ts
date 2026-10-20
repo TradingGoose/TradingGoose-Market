@@ -11,7 +11,7 @@ import {
   getPaygSubscriptionByStripeId,
   withoutPaygActivationAttemptId,
 } from "../subscription";
-import { createAndSettleUsageInvoice } from "../threshold-billing";
+import { createAndSettleUsageInvoice, reconcileUsageInvoices } from "../threshold-billing";
 import { resolveRetainedUserStatsForSubscription } from "../user-stats";
 import { isExactMarketSubscription } from "../activation";
 
@@ -248,7 +248,16 @@ export async function handleMarketSubscriptionDeleted(
     const stats = statsRows[0];
     if (!stats) throw new Error("Retained PAYG usage accumulator is missing");
     const currentNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
-    const billedNano = decimalUsdToNanoUsd(stats.billedOverageThisPeriod);
+    if (!locked.periodEnd) throw new Error("Canceled PAYG subscription period is missing");
+    const billedUsd = await reconcileUsageInvoices(stripe, {
+      customerId,
+      stripeSubscriptionId: snapshot.id,
+      periodEnd: locked.periodEnd.toISOString(),
+      billedUsd: stats.billedOverageThisPeriod,
+      currentUsd: stats.currentPeriodCost,
+      deletedSubscriptionSnapshot: snapshot,
+    });
+    const billedNano = decimalUsdToNanoUsd(billedUsd);
     if (billedNano > currentNano) throw new Error("Billed overage exceeds current usage");
     const hasCurrentUsage =
       BigInt(stats.currentPeriodRequestQuantity) !== 0n ||
@@ -263,21 +272,25 @@ export async function handleMarketSubscriptionDeleted(
     }
     const billingPeriod = new Date(periodTime * 1_000).toISOString().slice(0, 7);
     if (amountCents > 0) {
-      await createAndSettleUsageInvoice(stripe, {
+      const covered = await createAndSettleUsageInvoice(stripe, {
         customerId,
         stripeSubscriptionId: snapshot.id,
         amountCents,
-        itemIdempotencyKey: `final-overage-item:${customerId}:${snapshot.id}:${billingPeriod}`,
-        invoiceIdempotencyKey: `final-overage-invoice:${customerId}:${snapshot.id}:${billingPeriod}`,
         description: `Final Market usage – ${billingPeriod}`,
         itemDescription: `Final Market data API usage – ${billingPeriod}`,
         metadata: {
           type: "final_overage_billing",
           subscriptionId: snapshot.id,
           billingPeriod,
+          usagePeriodEnd: locked.periodEnd.toISOString(),
         },
+        snapshot: { fromUsd: billedUsd, throughUsd: stats.currentPeriodCost, requestQuantity: stats.currentPeriodRequestQuantity },
         deletedSubscriptionSnapshot: snapshot,
       });
+      if (decimalUsdToNanoUsd(covered.fromUsd) !== billedNano ||
+        decimalUsdToNanoUsd(covered.throughUsd) !== currentNano) {
+        throw new Error("Stripe final invoice snapshot differs from canceled usage");
+      }
     }
     if (hasCurrentUsage) {
       await tx

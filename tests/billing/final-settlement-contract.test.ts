@@ -2,6 +2,7 @@ import type { MarketTransaction } from "@tradinggoose/db";
 import { subscription, user, userStats } from "@tradinggoose/db/schema";
 import type Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { usageStripeFixture } from "./stripe-usage-fixture";
 
 interface SubscriptionState {
   id: string;
@@ -43,9 +44,10 @@ const state = vi.hoisted(() => ({
   updates: [] as UpdateRecord[],
   activeTransaction: 0,
   clearCasMiss: false,
-  settle: vi.fn<
-    (stripe: unknown, input: Record<string, unknown>) => Promise<string>
-  >(async () => "in_final"),
+  settle: vi.fn(async (_stripe: unknown, input: { snapshot: { fromUsd: string; throughUsd: string; requestQuantity: string } }) => input.snapshot),
+  reconciledBilledUsd: null as string | null,
+  realProvider: false,
+  failCommitOnce: false,
   transaction: vi.fn(),
 }));
 
@@ -80,15 +82,24 @@ vi.mock("@/lib/billing/subscription", () => ({
   }),
 }));
 
-vi.mock("@/lib/billing/threshold-billing", () => ({
-  createAndSettleUsageInvoice: state.settle,
-}));
+vi.mock("@/lib/billing/threshold-billing", async importOriginal => {
+  const original = await importOriginal<typeof import("../../lib/billing/threshold-billing")>();
+  return {
+    ...original,
+    createAndSettleUsageInvoice: (...args: Parameters<typeof original.createAndSettleUsageInvoice>) =>
+      state.realProvider ? original.createAndSettleUsageInvoice(...args) : state.settle(...args),
+    reconcileUsageInvoices: (...args: Parameters<typeof original.reconcileUsageInvoices>) =>
+      state.realProvider ? original.reconcileUsageInvoices(...args) : Promise.resolve(state.reconciledBilledUsd ?? args[1].billedUsd),
+  };
+});
 
 vi.mock("@/lib/billing/user-stats", () => ({
   resolveRetainedUserStatsForSubscription: vi.fn(async () => ({ id: "stats_1" })),
+  getClosedPeriodUsage: async () => ({ requestQuantity: state.stats!.currentPeriodRequestQuantity, costUsd: state.stats!.currentPeriodCost }),
 }));
 
 import { handleMarketSubscriptionDeleted } from "../../lib/billing/webhooks/subscription";
+import { handleMarketCycleInvoiceFinalized } from "../../lib/billing/webhooks/invoices";
 
 beforeEach(() => {
   state.current = localSubscription();
@@ -97,7 +108,10 @@ beforeEach(() => {
   state.updates.length = 0;
   state.activeTransaction = 0;
   state.clearCasMiss = false;
-  state.settle.mockReset().mockResolvedValue("in_final");
+  state.settle.mockReset().mockImplementation(async (_stripe, input) => input.snapshot);
+  state.reconciledBilledUsd = null;
+  state.realProvider = false;
+  state.failCommitOnce = false;
   state.transaction.mockReset().mockImplementation(
     async (callback: (tx: MarketTransaction) => Promise<unknown>) => {
       state.activeTransaction += 1;
@@ -106,7 +120,12 @@ beforeEach(() => {
       const statsBefore = cloneStats(state.stats);
       const updateCountBefore = state.updates.length;
       try {
-        return await callback(transactionFixture(transactionNumber));
+        const result = await callback(transactionFixture(transactionNumber));
+        if (state.failCommitOnce) {
+          state.failCommitOnce = false;
+          throw new Error("Database commit failed");
+        }
+        return result;
       } catch (error) {
         state.current = subscriptionBefore;
         state.stats = statsBefore;
@@ -118,6 +137,44 @@ beforeEach(() => {
 });
 
 describe("PAYG final cancellation settlement", () => {
+  it("reconciles a paid cycle after local rollback before deletion settles the new remainder", async () => {
+    state.realProvider = true;
+    state.stats = usageStats({ currentPeriodRequestQuantity: "1000", currentPeriodCost: "1" });
+    state.failCommitOnce = true;
+    const stripe = usageStripeFixture();
+    const fresh = Object.assign(await stripe.subscriptionRetrieve(), deletedSnapshot(), {
+      status: "active", default_payment_method: "pm_subscription",
+      items: { data: [{ quantity: 1, price: { id: "price_market_payg" },
+        current_period_start: Date.parse("2026-09-01T00:00:00.000Z") / 1000,
+        current_period_end: Date.parse("2026-10-01T00:00:00.000Z") / 1000 }] },
+    });
+    stripe.subscriptionRetrieve.mockResolvedValue(fresh);
+    await expect(handleMarketCycleInvoiceFinalized(stripe.client, {
+      billing_reason: "subscription_cycle", customer: "cus_1",
+      period_start: Date.parse("2026-08-01T00:00:00.000Z") / 1000,
+      period_end: Date.parse("2026-09-01T00:00:00.000Z") / 1000,
+      parent: { subscription_details: { subscription: "sub_provider" } },
+    } as Stripe.Invoice)).rejects.toThrow("Database commit failed");
+    expect(state.stats?.currentPeriodCost).toBe("1");
+    expect(stripe.charges).toEqual([100]);
+
+    state.stats!.currentPeriodCost = "1.01";
+    state.stats!.currentPeriodRequestQuantity = "1010";
+    await handleMarketSubscriptionDeleted(stripe.client, { ...fresh, status: "canceled" } as Stripe.Subscription);
+    expect(stripe.charges).toEqual([100, 1]);
+    expect(stripe.invoiceItemsCreate).toHaveBeenCalledTimes(2);
+    expect(state.current?.stripeSubscriptionId).toBeNull();
+    expect(state.stats?.currentPeriodCost).toBe("0");
+  });
+  it("reconciles a pending threshold invoice before charging only final remainder", async () => {
+    state.stats = usageStats({ currentPeriodCost: "1.01", billedOverageThisPeriod: "0" });
+    state.reconciledBilledUsd = "1";
+    await handleMarketSubscriptionDeleted({} as Stripe, deletedSnapshot());
+    expect(state.settle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      amountCents: 1, snapshot: expect.objectContaining({ fromUsd: "1", throughUsd: "1.01" }),
+    }));
+    expect(state.current?.stripeSubscriptionId).toBeNull();
+  });
   it("does not cancel a binding from a non-canceled provider snapshot", async () => {
     const snapshot = deletedSnapshot();
     Object.assign(snapshot, { status: "active" });
@@ -250,10 +307,6 @@ describe("PAYG final cancellation settlement", () => {
           customerId: "cus_1",
           stripeSubscriptionId: "sub_provider",
           amountCents: 100,
-          itemIdempotencyKey:
-            "final-overage-item:cus_1:sub_provider:2026-08",
-          invoiceIdempotencyKey:
-            "final-overage-invoice:cus_1:sub_provider:2026-08",
           deletedSubscriptionSnapshot: expect.objectContaining({
             id: "sub_provider",
             status: "canceled",

@@ -3,10 +3,10 @@ import { and, eq } from "drizzle-orm";
 import type Stripe from "stripe";
 import { acquireBillingSubjectLock } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
-import { decimalUsdToNanoUsd, nanoUsdToCentsHalfUp } from "../money";
+import { decimalUsdToNanoUsd, nanoUsdToCentsHalfUp, nanoUsdToDecimalUsd } from "../money";
 import { getPaygSubscriptionByStripeId } from "../subscription";
-import { createAndSettleUsageInvoice } from "../threshold-billing";
-import { resolveRetainedUserStatsForSubscription } from "../user-stats";
+import { createAndSettleUsageInvoice, reconcileUsageInvoices } from "../threshold-billing";
+import { getClosedPeriodUsage, resolveRetainedUserStatsForSubscription } from "../user-stats";
 import {
   classifyUnboundMarketSubscription,
   providerCustomerId,
@@ -100,27 +100,45 @@ export async function handleMarketCycleInvoiceFinalized(
     if (!stats || stats.usageOwnerId === "") {
       throw new Error("Retained PAYG usage accumulator is missing");
     }
-    const currentNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
-    const billedNano = decimalUsdToNanoUsd(stats.billedOverageThisPeriod);
+    const closedUsage = await getClosedPeriodUsage(tx, stats, new Date(storedPeriodEnd));
+    const currentNano = decimalUsdToNanoUsd(closedUsage.costUsd);
+    const accumulatorNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
+    const nextQuantity = BigInt(stats.currentPeriodRequestQuantity) - BigInt(closedUsage.requestQuantity);
+    if (currentNano > accumulatorNano || nextQuantity < 0n) {
+      throw new Error("Closed-period PAYG usage exceeds its accumulator");
+    }
+    const billedUsd = await reconcileUsageInvoices(stripe, {
+      customerId: invoiceCustomerId,
+      stripeSubscriptionId,
+      periodEnd: new Date(storedPeriodEnd).toISOString(),
+      billedUsd: stats.billedOverageThisPeriod,
+      currentUsd: closedUsage.costUsd,
+    });
+    const billedNano = decimalUsdToNanoUsd(billedUsd);
     if (billedNano > currentNano) throw new Error("Billed overage exceeds current usage");
     const remainderNano = currentNano - billedNano;
     const amountCents = nanoUsdToCentsHalfUp(remainderNano);
     const billingPeriod = new Date(invoicePeriodEnd).toISOString().slice(0, 7);
     if (amountCents > 0) {
-      await createAndSettleUsageInvoice(stripe, {
+      const covered = await createAndSettleUsageInvoice(stripe, {
         customerId: invoiceCustomerId,
         stripeSubscriptionId,
         amountCents,
-        itemIdempotencyKey: `overage-item:${invoiceCustomerId}:${stripeSubscriptionId}:${billingPeriod}`,
-        invoiceIdempotencyKey: `overage-invoice:${invoiceCustomerId}:${stripeSubscriptionId}:${billingPeriod}`,
         description: `Market usage – ${billingPeriod}`,
         itemDescription: `Market data API usage – ${billingPeriod}`,
         metadata: {
           type: "overage_billing",
           subscriptionId: stripeSubscriptionId,
           billingPeriod,
+          usagePeriodEnd: new Date(storedPeriodEnd).toISOString(),
         },
+        snapshot: { fromUsd: billedUsd, throughUsd: closedUsage.costUsd, requestQuantity: closedUsage.requestQuantity },
       });
+      if (decimalUsdToNanoUsd(covered.fromUsd) !== billedNano ||
+        decimalUsdToNanoUsd(covered.throughUsd) !== currentNano ||
+        BigInt(covered.requestQuantity) !== BigInt(closedUsage.requestQuantity)) {
+        throw new Error("Stripe cycle invoice snapshot differs from immutable closed-period usage");
+      }
     }
     const advanced = await tx
       .update(subscription)
@@ -142,10 +160,10 @@ export async function handleMarketCycleInvoiceFinalized(
     await tx
       .update(userStats)
       .set({
-        lastPeriodRequestQuantity: stats.currentPeriodRequestQuantity,
-        lastPeriodCost: stats.currentPeriodCost,
-        currentPeriodRequestQuantity: "0",
-        currentPeriodCost: "0",
+        lastPeriodRequestQuantity: closedUsage.requestQuantity,
+        lastPeriodCost: closedUsage.costUsd,
+        currentPeriodRequestQuantity: nextQuantity.toString(),
+        currentPeriodCost: nanoUsdToDecimalUsd(accumulatorNano - currentNano),
         billedOverageThisPeriod: "0",
         updatedAt: new Date(),
       })

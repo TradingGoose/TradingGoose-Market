@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   current: null as Record<string, unknown> | null,
   locked: null as Record<string, unknown> | null,
   stats: null as Record<string, unknown> | null,
+  closedUsage: null as { requestQuantity: string; costUsd: string } | null,
   subscriptionUpdates: [] as Array<Record<string, unknown>>,
   statsUpdates: [] as Array<Record<string, unknown>>,
   advanceRows: [{ id: "sub_default_user_1" }] as Array<{ id: string }>,
@@ -19,7 +20,7 @@ const state = vi.hoisted(() => ({
     stripeCustomerId: string | null;
   }>,
   retained: vi.fn(async () => ({ id: "stats_1" })),
-  settle: vi.fn(async () => "in_1"),
+  settle: vi.fn(async (_stripe: unknown, input: { snapshot: { fromUsd: string; throughUsd: string; requestQuantity: string } }) => input.snapshot),
   transaction: vi.fn(),
 }));
 
@@ -41,10 +42,15 @@ vi.mock("@/lib/billing/subscription", () => ({
 
 vi.mock("@/lib/billing/threshold-billing", () => ({
   createAndSettleUsageInvoice: state.settle,
+  reconcileUsageInvoices: async (_stripe: unknown, input: { billedUsd: string }) => input.billedUsd,
 }));
 
 vi.mock("@/lib/billing/user-stats", () => ({
   resolveRetainedUserStatsForSubscription: state.retained,
+  getClosedPeriodUsage: async () => state.closedUsage ?? {
+    requestQuantity: state.stats?.currentPeriodRequestQuantity,
+    costUsd: state.stats?.currentPeriodCost,
+  },
 }));
 
 vi.mock("@/lib/billing/webhooks/subscription", async (importOriginal) => {
@@ -67,6 +73,7 @@ beforeEach(() => {
   state.current = localSubscription();
   state.locked = null;
   state.stats = usageStats();
+  state.closedUsage = null;
   state.subscriptionUpdates.length = 0;
   state.statsUpdates.length = 0;
   state.advanceRows = [{ id: "sub_default_user_1" }];
@@ -76,7 +83,7 @@ beforeEach(() => {
   state.retainedBridge.mockReset();
   state.liveUsers = [{ id: "user_1", stripeCustomerId: "cus_1" }];
   state.retained.mockClear();
-  state.settle.mockReset().mockResolvedValue("in_1");
+  state.settle.mockReset().mockImplementation(async (_stripe, input) => input.snapshot);
   state.transaction.mockReset().mockImplementation(async (callback) =>
     callback(transactionFixture()),
   );
@@ -272,8 +279,6 @@ describe("PAYG cycle webhook settlement", () => {
         customerId: "cus_1",
         stripeSubscriptionId: "sub_provider",
         amountCents: 100,
-        itemIdempotencyKey: "overage-item:cus_1:sub_provider:2026-08",
-        invoiceIdempotencyKey: "overage-invoice:cus_1:sub_provider:2026-08",
       }),
     );
     expect(state.subscriptionUpdates).toHaveLength(1);
@@ -296,6 +301,35 @@ describe("PAYG cycle webhook settlement", () => {
     ).rejects.toThrow("watermark changed before it could advance");
 
     expect(state.statsUpdates).toEqual([]);
+  });
+
+  it("retains newly admitted next-period usage when cycle delivery is delayed", async () => {
+    state.closedUsage = { requestQuantity: "1000", costUsd: "1" };
+    state.stats = usageStats({ currentPeriodRequestQuantity: "1020", currentPeriodCost: "1.02" });
+    await handleMarketCycleInvoiceFinalized(stripeFixture(), cycleInvoice());
+    expect(state.settle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      amountCents: 100,
+      snapshot: { fromUsd: "0", throughUsd: "1", requestQuantity: "1000" },
+    }));
+    expect(state.statsUpdates).toEqual([expect.objectContaining({
+      lastPeriodRequestQuantity: "1000", lastPeriodCost: "1",
+      currentPeriodRequestQuantity: "20", currentPeriodCost: "0.02", billedOverageThisPeriod: "0",
+    })]);
+  });
+
+  it("recovers an already paid cycle after rollback while new-period admissions accumulate", async () => {
+    state.closedUsage = { requestQuantity: "1000", costUsd: "1" };
+    state.stats = usageStats({ currentPeriodRequestQuantity: "1010", currentPeriodCost: "1.01" });
+    state.advanceRows = [];
+    await expect(handleMarketCycleInvoiceFinalized(stripeFixture(), cycleInvoice())).rejects.toThrow("watermark changed");
+    state.stats = usageStats({ currentPeriodRequestQuantity: "1020", currentPeriodCost: "1.02" });
+    state.advanceRows = [{ id: "sub_default_user_1" }];
+    await handleMarketCycleInvoiceFinalized(stripeFixture(), cycleInvoice());
+    expect(state.settle.mock.calls.map(([, input]) => input.snapshot)).toEqual([
+      { fromUsd: "0", throughUsd: "1", requestQuantity: "1000" },
+      { fromUsd: "0", throughUsd: "1", requestQuantity: "1000" },
+    ]);
+    expect(state.statsUpdates).toEqual([expect.objectContaining({ currentPeriodRequestQuantity: "20", currentPeriodCost: "0.02" })]);
   });
 
   it("ignores an old provider after the local row has been reactivated", async () => {

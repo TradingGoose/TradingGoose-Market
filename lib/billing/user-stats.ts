@@ -1,7 +1,34 @@
-import { marketUsageOwner, subscription, userStats } from "@tradinggoose/db/schema";
+import { marketApiUsageEvent, marketUsageOwner, subscription, userStats } from "@tradinggoose/db/schema";
 import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
-import { eq } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { requireDatabase } from "@/lib/db/runtime";
+import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd } from "./money";
+
+export async function getClosedPeriodUsage(
+  tx: MarketTransaction,
+  stats: Pick<typeof userStats.$inferSelect,
+    "usageOwnerId" | "currentPeriodRequestQuantity" | "currentPeriodCost">,
+  periodEnd: Date,
+) {
+  const [usage] = await tx.select({
+    requestQuantity: sql<string>`coalesce(sum(${marketApiUsageEvent.billableQuantity}), 0)::text`,
+    costUsd: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)::text`,
+  }).from(marketApiUsageEvent).where(and(
+    eq(marketApiUsageEvent.usageOwnerId, stats.usageOwnerId),
+    eq(marketApiUsageEvent.billableQuantity, 1),
+    gte(marketApiUsageEvent.admittedAt, periodEnd),
+  ));
+  if (!usage) throw new Error("PAYG closed-period usage is unavailable");
+  // The accumulator already excludes every prior settled activation. Replaying
+  // a timestamp-bounded prefix could include an old subscription that ended in
+  // the same Stripe second as reactivation. Remove only newer unswept events.
+  const requestQuantity = BigInt(stats.currentPeriodRequestQuantity) - BigInt(usage.requestQuantity);
+  const costNano = decimalUsdToNanoUsd(stats.currentPeriodCost) - decimalUsdToNanoUsd(usage.costUsd);
+  if (requestQuantity < 0n || costNano < 0n) {
+    throw new Error("Next-period PAYG usage exceeds its accumulator");
+  }
+  return { requestQuantity: requestQuantity.toString(), costUsd: nanoUsdToDecimalUsd(costNano) };
+}
 
 export async function getActiveUserStats(userId: string, database = requireDatabase()) {
   const rows = await database
