@@ -17,6 +17,7 @@ import {
   withBillingSubjectAndApiKeyHandlerLocks,
 } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
+import { databaseNow } from "@/lib/db/clock";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import { createAnonymousLimiter } from "@/lib/unkey/anonymous";
 import { getMarketKeyProvider } from "@/lib/unkey/runtime";
@@ -481,13 +482,6 @@ async function requireExactSpendCapacity(
       ),
     );
   }
-}
-
-async function databaseNow(tx: MarketTransaction) {
-  const clockRows = await tx.execute(sql<{ now: Date }>`select now() as now`);
-  const [clock] = Array.from(clockRows as Iterable<{ now: Date }>);
-  if (!clock?.now) throw new Error("Database clock is unavailable");
-  return clock.now;
 }
 
 async function persistSpendObservation(

@@ -5,7 +5,7 @@ import {
   systemAdmin,
   user,
 } from "@tradinggoose/db/schema";
-import { and, asc, count, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNotNull, max, sql } from "drizzle-orm";
 import {
   decimalUsdToNanoUsd,
   nanoUsdToDecimalUsd,
@@ -13,6 +13,7 @@ import {
 } from "@/lib/billing/money";
 import { requireDatabase } from "@/lib/db/runtime";
 import { acquireApiKeyLock } from "@/lib/db/locks";
+import { databaseNow } from "@/lib/db/clock";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import { createSpendLimitCodec } from "@/lib/unkey/spend-limit";
 import type { CustomerKeyAllowance } from "./validation";
@@ -31,7 +32,7 @@ export async function listCustomerApiKeys(userId: string) {
     .select({
       key: marketApiKeys,
       allTimeRequests: count(marketApiUsageEvent.id),
-      lastUsedAt: sql<Date | null>`max(${marketApiUsageEvent.admittedAt})`,
+      lastUsedAt: max(marketApiUsageEvent.admittedAt),
     })
     .from(marketApiKeys)
     .innerJoin(marketUsageOwner, eq(marketUsageOwner.id, marketApiKeys.usageOwnerId))
@@ -86,7 +87,7 @@ export async function getCustomerApiKeyDetail(userId: string, keyId: string) {
   const aggregate = await database
     .select({
       allTimeRequests: count(marketApiUsageEvent.id),
-      lastUsedAt: sql<Date | null>`max(${marketApiUsageEvent.admittedAt})`,
+      lastUsedAt: max(marketApiUsageEvent.admittedAt),
     })
     .from(marketApiUsageEvent)
     .where(eq(marketApiUsageEvent.marketApiKeyId, key.id));
@@ -163,7 +164,7 @@ export async function listAdminApiKeys() {
       adminEmail: user.email,
       grantStatus: systemAdmin.status,
       totalRequests: count(marketApiUsageEvent.id),
-      lastUsedAt: sql<Date | null>`max(${marketApiUsageEvent.admittedAt})`,
+      lastUsedAt: max(marketApiUsageEvent.admittedAt),
     })
     .from(marketApiKeys)
     .leftJoin(user, eq(user.id, marketApiKeys.userId))
@@ -197,9 +198,7 @@ export async function getRollingUsage(
 ) {
   const database = requireDatabase();
   return database.transaction(async (tx) => {
-    const clockRows = await tx.execute(sql<{ now: Date }>`select now() as now`);
-    const [clock] = Array.from(clockRows as Iterable<{ now: Date }>);
-    const now = clock?.now ?? new Date();
+    const now = await databaseNow(tx);
     const cutoff = new Date(now.getTime() - windowDays * 86_400_000);
     const totals = await tx
       .select({
