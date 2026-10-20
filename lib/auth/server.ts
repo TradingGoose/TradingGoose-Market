@@ -212,5 +212,3 @@ export const auth = betterAuth({
     nextCookies(),
   ]
 });
-
-export { DISABLED_AUTH_PATHS };

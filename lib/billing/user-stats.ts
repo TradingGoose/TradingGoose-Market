@@ -30,15 +30,6 @@ export async function getClosedPeriodUsage(
   return { requestQuantity: requestQuantity.toString(), costUsd: nanoUsdToDecimalUsd(costNano) };
 }
 
-export async function getActiveUserStats(userId: string, database = requireDatabase()) {
-  const rows = await database
-    .select()
-    .from(userStats)
-    .where(eq(userStats.userId, userId))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
 export async function resolveRetainedUserStatsForSubscription(
   localSubscription: typeof subscription.$inferSelect,
   database: MarketDatabase | MarketTransaction = requireDatabase(),

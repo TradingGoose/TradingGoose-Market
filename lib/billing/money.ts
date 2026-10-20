@@ -43,11 +43,3 @@ export function nanoUsdMeetsDecimalThreshold(
     BigInt(fractional.padEnd(scale, "0") || "0");
   return valueAtScale >= thresholdAtScale;
 }
-
-export function usdPerThousandToRequestNanoUsd(value: string): bigint {
-  const perThousandNanoUsd = decimalUsdToNanoUsd(value);
-  if (perThousandNanoUsd <= 0n || perThousandNanoUsd % 1_000n !== 0n) {
-    throw new TypeError("rate must produce an exact positive nano-USD per request");
-  }
-  return perThousandNanoUsd / 1_000n;
-}

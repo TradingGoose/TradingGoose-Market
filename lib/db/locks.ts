@@ -104,28 +104,6 @@ export async function withAdminGrantLock<T>(
   });
 }
 
-export async function withAdminGrantLocks<T>(
-  grantIds: readonly string[],
-  callback: MarketLockCallback<T>,
-  database: MarketDatabase = requireDatabase()
-): Promise<T> {
-  return database.transaction(async (transaction) => {
-    await acquireAdminGrantLocks(transaction, grantIds);
-    return callback(transaction);
-  });
-}
-
-export async function withApiKeyLock<T>(
-  keyId: string,
-  callback: MarketLockCallback<T>,
-  database: MarketDatabase = requireDatabase()
-): Promise<T> {
-  return database.transaction(async (transaction) => {
-    await acquireApiKeyLock(transaction, keyId);
-    return callback(transaction);
-  });
-}
-
 type SessionLock = {
   namespace: number;
   id: string;
