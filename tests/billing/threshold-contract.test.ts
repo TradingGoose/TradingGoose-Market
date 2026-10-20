@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   enabled: true,
   threshold: "1",
   stripe: null as unknown as Stripe,
+  stripeClient: vi.fn(),
   now: new Date("2026-08-15T00:00:00.000Z"),
 }));
 
@@ -22,7 +23,10 @@ vi.mock("@/lib/environment", () => ({
 }));
 
 vi.mock("@/lib/billing/stripe-client", () => ({
-  requireEnabledStripeClient: () => state.stripe,
+  requireEnabledStripeClient: () => {
+    state.stripeClient();
+    return state.stripe;
+  },
 }));
 
 import { checkAndBillMarketThreshold } from "../../lib/billing/threshold-billing";
@@ -31,6 +35,7 @@ beforeEach(() => {
   state.enabled = true;
   state.threshold = "1";
   state.now = new Date("2026-08-15T00:00:00.000Z");
+  state.stripeClient.mockReset();
 });
 
 describe("Studio-parity PAYG threshold settlement", () => {
@@ -76,6 +81,8 @@ describe("Studio-parity PAYG threshold settlement", () => {
     });
     state.threshold = "0.001";
     await checkAndBillMarketThreshold(below.client, "user_1");
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(stripe.invoiceList).not.toHaveBeenCalled();
     expect(stripe.invoiceCreate).not.toHaveBeenCalled();
     expect(below.updates).toEqual([]);
 
@@ -88,6 +95,33 @@ describe("Studio-parity PAYG threshold settlement", () => {
     expect(waiver.updates).toEqual([
       expect.objectContaining({ billedOverageThisPeriod: "0.001" }),
     ]);
+  });
+
+  it("keeps repeated below-threshold reads local even when Stripe is unavailable", async () => {
+    const stripe = usageStripeFixture();
+    state.stripe = stripe.client;
+    state.stripeClient.mockImplementation(() => {
+      throw new Error("Stripe is unavailable");
+    });
+    // Total accrued cost is above the threshold, but the unsettled remainder
+    // after the existing billed coverage is not.
+    for (const currentPeriodCost of ["1.1", "1.2", "1.9"]) {
+      const transaction = transactionFixture({ currentPeriodCost, billedOverageThisPeriod: "1" });
+      await checkAndBillMarketThreshold(transaction.client, "user_1");
+      expect(transaction.updates).toEqual([]);
+    }
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(stripe.invoiceList).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid billed coverage locally before any provider call", async () => {
+    const stripe = usageStripeFixture();
+    state.stripe = stripe.client;
+    const transaction = transactionFixture({ currentPeriodCost: "0.5", billedOverageThisPeriod: "1" });
+    await expect(checkAndBillMarketThreshold(transaction.client, "user_1"))
+      .rejects.toThrow("Billed overage exceeds current-period usage");
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(transaction.updates).toEqual([]);
   });
 
   it("performs no database or Stripe work while billing is disabled", async () => {
@@ -154,15 +188,36 @@ describe("Studio-parity PAYG threshold settlement", () => {
     state.stripe = stripe.client;
     stripe.state.lostResponse = point;
     await expect(checkAndBillMarketThreshold(transactionFixture({ currentPeriodCost: "1", billedOverageThisPeriod: "0" }).client, "user_1")).rejects.toThrow(`${point} response lost`);
-    // An operator may also raise the threshold before the retry; the existing
-    // invoice still has to be reconciled rather than skipped below the threshold.
-    state.threshold = "5";
     const retry = transactionFixture({ currentPeriodCost: "1.01", billedOverageThisPeriod: "0" });
     await checkAndBillMarketThreshold(retry.client, "user_1");
     expect(stripe.invoiceCreate).toHaveBeenCalledOnce();
     expect(stripe.invoiceItemsCreate).toHaveBeenCalledOnce();
     expect(stripe.charges).toEqual([100]);
     expect(retry.updates).toEqual([expect.objectContaining({ billedOverageThisPeriod: "1" })]);
+  });
+
+  it("defers recovery below a raised threshold, then recovers the original invoice when due", async () => {
+    const stripe = usageStripeFixture();
+    state.stripe = stripe.client;
+    stripe.state.lostResponse = "pay";
+    await expect(checkAndBillMarketThreshold(transactionFixture({
+      currentPeriodCost: "1", billedOverageThisPeriod: "0",
+    }).client, "user_1")).rejects.toThrow("pay response lost");
+
+    state.threshold = "5";
+    state.stripeClient.mockClear();
+    stripe.invoiceList.mockClear();
+    const below = transactionFixture({ currentPeriodCost: "1.01", billedOverageThisPeriod: "0" });
+    await checkAndBillMarketThreshold(below.client, "user_1");
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(stripe.invoiceList).not.toHaveBeenCalled();
+    expect(below.updates).toEqual([]);
+
+    const due = transactionFixture({ currentPeriodCost: "5.01", billedOverageThisPeriod: "0" });
+    await checkAndBillMarketThreshold(due.client, "user_1");
+    expect(stripe.invoiceCreate).toHaveBeenCalledOnce();
+    expect(stripe.charges).toEqual([100]);
+    expect(due.updates).toEqual([expect.objectContaining({ billedOverageThisPeriod: "1" })]);
   });
 
   it("recovers provider payment after a local commit rollback and leaves newer usage unbilled", async () => {
@@ -202,6 +257,8 @@ describe("Studio-parity PAYG threshold settlement", () => {
     state.now = new Date("2026-08-31T00:00:00.000Z");
     const transaction = transactionFixture({ currentPeriodCost: "2", billedOverageThisPeriod: "0" });
     await checkAndBillMarketThreshold(transaction.client, "user_1");
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(stripe.invoiceList).not.toHaveBeenCalled();
     expect(stripe.invoiceCreate).not.toHaveBeenCalled();
     expect(transaction.updates).toEqual([]);
   });

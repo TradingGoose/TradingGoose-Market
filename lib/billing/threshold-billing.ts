@@ -304,7 +304,21 @@ export async function checkAndBillMarketThreshold(
   if (!stats) throw new Error("PAYG usage accumulator is missing");
 
   const currentNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
+  const storedBilledNano = decimalUsdToNanoUsd(stats.billedOverageThisPeriod);
+  if (storedBilledNano > currentNano) {
+    throw new Error("Billed overage exceeds current-period usage");
+  }
   if (!localSubscription.periodEnd) throw new Error("PAYG subscription period is missing");
+  // Routine reads need only local accrual. An ambiguous settlement leaves this
+  // remainder above its threshold; cycle/final settlement also recovers invoices
+  // when the threshold changes or this period closes before another retry.
+  if (
+    !nanoUsdMeetsDecimalThreshold(currentNano - storedBilledNano, config.billing.invoiceThresholdUsd) ||
+    (await databaseNow(tx)).getTime() >= localSubscription.periodEnd.getTime()
+  ) {
+    return;
+  }
+
   const stripe = requireEnabledStripeClient();
   const reconciledBilledUsd = await reconcileUsageInvoices(stripe, {
     customerId: localSubscription.stripeCustomerId,
@@ -321,8 +335,7 @@ export async function checkAndBillMarketThreshold(
   let settledThroughUsd = reconciledBilledUsd;
   // The cycle owner must first remove the closed period from this accumulator.
   // Reads admitted after its boundary belong to the next period.
-  if ((await databaseNow(tx)).getTime() < localSubscription.periodEnd.getTime() &&
-    nanoUsdMeetsDecimalThreshold(unbilledNano, config.billing.invoiceThresholdUsd)) {
+  if (nanoUsdMeetsDecimalThreshold(unbilledNano, config.billing.invoiceThresholdUsd)) {
     const amountCents = nanoUsdToCentsHalfUp(unbilledNano);
     if (amountCents > 0) {
       const billingPeriod = localSubscription.periodEnd.toISOString().slice(0, 7);
