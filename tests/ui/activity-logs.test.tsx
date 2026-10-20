@@ -149,6 +149,32 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
     expect(document.body.textContent).not.toMatch(/input tokens|output tokens|cost|AI model/iu);
   });
 
+  it.each(["Trends", "Explore"])("preserves %s selection across data reloads", async (tab) => {
+    const interaction = userEvent.setup();
+    market.state = { data: activity, error: null, isLoading: false };
+    const { rerender } = render(<ActivityPage />);
+    await interaction.click(screen.getByRole("tab", { name: tab }));
+    expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
+    await interaction.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(market.refresh).toHaveBeenCalledOnce();
+
+    // Loading, errors and empty results all unmount Tabs, but must not reset
+    // the page-owned selection when the next filter/metric result arrives.
+    for (const state of [
+      { data: activity, error: null, isLoading: true },
+      { data: null, error: new Error("failed"), isLoading: false },
+      { data: { ...activity, totalRequests: 0 }, error: null, isLoading: false },
+    ]) {
+      market.state = state;
+      rerender(<ActivityPage />);
+      expect(screen.queryByRole("tab", { name: tab })).toBeNull();
+      market.state = { data: activity, error: null, isLoading: false };
+      rerender(<ActivityPage />);
+      expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("false");
+    }
+  });
+
   it("renders explicit empty and error states", () => {
     market.state = {
       data: { ...activity, totalRequests: 0 },

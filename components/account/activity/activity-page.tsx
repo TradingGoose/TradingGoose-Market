@@ -185,6 +185,7 @@ function pivotSeries(series: UsageSeriesPoint[], metric: Metric) {
 
 export function ActivityPage() {
   const searchParams = useSearchParams();
+  const [selectedTab, setSelectedTab] = useState("overview");
   const [range, setRange] = useState("7d");
   const [keyId, setKeyId] = useState(searchParams.get("key") ?? "all");
   const [completion, setCompletion] = useState("all");
@@ -339,7 +340,7 @@ export function ActivityPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        <Tabs defaultValue="overview" className="space-y-4">
+        <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="trends">Trends</TabsTrigger>
