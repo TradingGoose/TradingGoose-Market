@@ -195,7 +195,33 @@ async function assertCatalogMatchesGeneratedSnapshot(
   snapshot: DrizzleSnapshot,
 ): Promise<void> {
   const tables = snapshotTables(snapshot);
-  const expectedTableNames = tables.map((table) => table.name);
+  const snapshotIdentifiers = tables.flatMap((table) => [
+    table.name,
+    `${table.name}_pkey`,
+    ...Object.values(table.columns).map((column) => column.name),
+    ...Object.values(table.indexes).map((index) => index.name),
+    ...Object.values(table.compositePrimaryKeys).map((constraint) => constraint.name),
+    ...Object.values(table.uniqueConstraints).map((constraint) => constraint.name),
+    ...Object.values(table.checkConstraints).map((constraint) => constraint.name),
+    ...Object.values(table.foreignKeys).flatMap((foreignKey) => [
+      foreignKey.name,
+      foreignKey.tableFrom,
+      foreignKey.tableTo,
+    ]),
+  ]);
+  // Let PostgreSQL apply its own identifier byte limit and encoding-aware truncation.
+  const catalogIdentifiers = new Map(
+    (await sql<{ source_name: string; catalog_name: string }[]>`
+      select source_name, source_name::name::text as catalog_name
+      from unnest(${sql.array([...new Set(snapshotIdentifiers)])}::text[]) as names(source_name)
+    `).map((row) => [row.source_name, row.catalog_name]),
+  );
+  function catalogIdentifier(name: string): string {
+    const identifier = catalogIdentifiers.get(name);
+    invariant(identifier !== undefined, `Missing expected catalog identifier ${name}.`);
+    return identifier;
+  }
+  const expectedTableNames = tables.map((table) => catalogIdentifier(table.name));
   const actualTables = await sql<{ table_name: string }[]>`
     select table_name
     from information_schema.tables
@@ -207,8 +233,8 @@ async function assertCatalogMatchesGeneratedSnapshot(
   const expectedColumns = tables
     .flatMap((table) =>
       Object.values(table.columns).map((column) => ({
-        table_name: table.name,
-        column_name: column.name,
+        table_name: catalogIdentifier(table.name),
+        column_name: catalogIdentifier(column.name),
         data_type: column.type,
         not_null: column.notNull,
       })),
@@ -244,28 +270,32 @@ async function assertCatalogMatchesGeneratedSnapshot(
   const expectedConstraints = tables
     .flatMap((table) => {
       const singlePrimaryKey = Object.values(table.columns).some((column) => column.primaryKey)
-        ? [{ table_name: table.name, constraint_name: `${table.name}_pkey`, constraint_type: "p" }]
+        ? [{
+            table_name: catalogIdentifier(table.name),
+            constraint_name: catalogIdentifier(`${table.name}_pkey`),
+            constraint_type: "p",
+          }]
         : [];
       return [
         ...singlePrimaryKey,
         ...Object.values(table.compositePrimaryKeys).map((constraint) => ({
-          table_name: table.name,
-          constraint_name: constraint.name,
+          table_name: catalogIdentifier(table.name),
+          constraint_name: catalogIdentifier(constraint.name),
           constraint_type: "p",
         })),
         ...Object.values(table.uniqueConstraints).map((constraint) => ({
-          table_name: table.name,
-          constraint_name: constraint.name,
+          table_name: catalogIdentifier(table.name),
+          constraint_name: catalogIdentifier(constraint.name),
           constraint_type: "u",
         })),
         ...Object.values(table.foreignKeys).map((constraint) => ({
-          table_name: table.name,
-          constraint_name: constraint.name,
+          table_name: catalogIdentifier(table.name),
+          constraint_name: catalogIdentifier(constraint.name),
           constraint_type: "f",
         })),
         ...Object.values(table.checkConstraints).map((constraint) => ({
-          table_name: table.name,
-          constraint_name: constraint.name,
+          table_name: catalogIdentifier(table.name),
+          constraint_name: catalogIdentifier(constraint.name),
           constraint_type: "c",
         })),
       ];
@@ -307,8 +337,8 @@ async function assertCatalogMatchesGeneratedSnapshot(
   const expectedIndexes = [
     ...tables.flatMap((table) =>
       Object.values(table.indexes).map((index) => ({
-        table_name: table.name,
-        index_name: index.name,
+        table_name: catalogIdentifier(table.name),
+        index_name: catalogIdentifier(index.name),
       })),
     ),
     ...constraintIndexNames,
@@ -332,9 +362,9 @@ async function assertCatalogMatchesGeneratedSnapshot(
   const expectedForeignKeys = tables
     .flatMap((table) =>
       Object.values(table.foreignKeys).map((foreignKey) => ({
-        constraint_name: foreignKey.name,
-        table_from: foreignKey.tableFrom,
-        table_to: foreignKey.tableTo,
+        constraint_name: catalogIdentifier(foreignKey.name),
+        table_from: catalogIdentifier(foreignKey.tableFrom),
+        table_to: catalogIdentifier(foreignKey.tableTo),
         on_delete: foreignKey.onDelete ?? "no action",
         on_update: foreignKey.onUpdate ?? "no action",
       })),
