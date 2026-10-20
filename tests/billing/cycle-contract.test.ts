@@ -8,6 +8,8 @@ const state = vi.hoisted(() => ({
   locked: null as Record<string, unknown> | null,
   stats: null as Record<string, unknown> | null,
   closedUsage: null as { requestQuantity: string; costUsd: string } | null,
+  closedUsageByEnd: new Map<string, { requestQuantity: string; costUsd: string }>(),
+  cycleHistory: [] as Stripe.Invoice[],
   subscriptionUpdates: [] as Array<Record<string, unknown>>,
   statsUpdates: [] as Array<Record<string, unknown>>,
   advanceRows: [{ id: "sub_default_user_1" }] as Array<{ id: string }>,
@@ -47,9 +49,10 @@ vi.mock("@/lib/billing/threshold-billing", () => ({
 
 vi.mock("@/lib/billing/user-stats", () => ({
   resolveRetainedUserStatsForSubscription: state.retained,
-  getClosedPeriodUsage: async () => state.closedUsage ?? {
-    requestQuantity: state.stats?.currentPeriodRequestQuantity,
-    costUsd: state.stats?.currentPeriodCost,
+  getClosedPeriodUsage: async (_tx: unknown, stats: Record<string, unknown>, end: Date) =>
+    state.closedUsageByEnd.get(end.toISOString()) ?? state.closedUsage ?? {
+    requestQuantity: stats.currentPeriodRequestQuantity,
+    costUsd: stats.currentPeriodCost,
   },
 }));
 
@@ -74,6 +77,8 @@ beforeEach(() => {
   state.locked = null;
   state.stats = usageStats();
   state.closedUsage = null;
+  state.closedUsageByEnd.clear();
+  state.cycleHistory = [];
   state.subscriptionUpdates.length = 0;
   state.statsUpdates.length = 0;
   state.advanceRows = [{ id: "sub_default_user_1" }];
@@ -116,7 +121,7 @@ describe("PAYG cycle webhook settlement", () => {
     expect(state.statsUpdates).toEqual([]);
   });
 
-  it("rejects a future boundary until the missing boundary settles", async () => {
+  it("rejects an invoice ahead of the provider's current period", async () => {
     await expect(
       handleMarketCycleInvoiceFinalized(
         stripeFixture(),
@@ -127,7 +132,7 @@ describe("PAYG cycle webhook settlement", () => {
       ),
     ).rejects.toThrow("ahead of the stored settlement boundary");
 
-    expect(state.stripeRetrieve).not.toHaveBeenCalled();
+    expect(state.stripeRetrieve).toHaveBeenCalledWith("sub_provider");
     expect(state.settle).not.toHaveBeenCalled();
     expect(state.subscriptionUpdates).toEqual([]);
     expect(state.statsUpdates).toEqual([]);
@@ -180,7 +185,7 @@ describe("PAYG cycle webhook settlement", () => {
     expect(state.statsUpdates).toHaveLength(1);
   });
 
-  it("rejects a provider period gap without consuming the accumulator", async () => {
+  it("rejects a gap in historical invoice periods without consuming the accumulator", async () => {
     state.stripeRetrieve.mockResolvedValueOnce(
       providerSubscription({
         current_period_start: epoch("2026-09-30T00:00:00.000Z"),
@@ -190,11 +195,43 @@ describe("PAYG cycle webhook settlement", () => {
 
     await expect(
       handleMarketCycleInvoiceFinalized(stripeFixture(), cycleInvoice()),
-    ).rejects.toThrow("not the next settlement period");
+    ).rejects.toThrow("settlement gap");
 
     expect(state.settle).not.toHaveBeenCalled();
     expect(state.subscriptionUpdates).toEqual([]);
     expect(state.statsUpdates).toEqual([]);
+  });
+
+  it("catches up multiple missed renewals from newest-first delivery without merging their usage", async () => {
+    state.stats = usageStats({ currentPeriodRequestQuantity: "6400", currentPeriodCost: "6.4" });
+    state.stripeRetrieve.mockResolvedValue(providerSubscription({
+      current_period_start: epoch("2026-10-31T00:00:00.000Z"),
+      current_period_end: epoch("2026-11-30T00:00:00.000Z"),
+    }));
+    state.cycleHistory = [
+      cycleInvoice({ period_start: epoch("2026-09-30T00:00:00.000Z"), period_end: epoch("2026-10-31T00:00:00.000Z") }),
+      cycleInvoice({ period_start: epoch("2026-08-31T00:00:00.000Z"), period_end: epoch("2026-09-30T00:00:00.000Z") }),
+      cycleInvoice(),
+    ];
+    state.closedUsageByEnd.set("2026-08-31T00:00:00.000Z", { requestQuantity: "1000", costUsd: "1" });
+    state.closedUsageByEnd.set("2026-09-30T00:00:00.000Z", { requestQuantity: "2000", costUsd: "2" });
+    state.closedUsageByEnd.set("2026-10-31T00:00:00.000Z", { requestQuantity: "3000", costUsd: "3" });
+
+    await handleMarketCycleInvoiceFinalized(stripeFixture(), state.cycleHistory[0]);
+
+    expect(state.settle.mock.calls.map(([, input]) => input.snapshot)).toEqual([
+      { fromUsd: "0", throughUsd: "1", requestQuantity: "1000" },
+      { fromUsd: "0", throughUsd: "2", requestQuantity: "2000" },
+      { fromUsd: "0", throughUsd: "3", requestQuantity: "3000" },
+    ]);
+    expect(state.subscriptionUpdates).toEqual([
+      { periodStart: new Date("2026-08-31T00:00:00.000Z"), periodEnd: new Date("2026-09-30T00:00:00.000Z") },
+      { periodStart: new Date("2026-09-30T00:00:00.000Z"), periodEnd: new Date("2026-10-31T00:00:00.000Z") },
+      { periodStart: new Date("2026-10-31T00:00:00.000Z"), periodEnd: new Date("2026-11-30T00:00:00.000Z") },
+    ]);
+    expect(state.statsUpdates.at(-1)).toEqual(expect.objectContaining({
+      currentPeriodRequestQuantity: "400", currentPeriodCost: "0.4", billedOverageThisPeriod: "0",
+    }));
   });
 
   it("validates the binding and atomically advances a zero cycle", async () => {
@@ -434,7 +471,7 @@ describe("PAYG subscription period projection", () => {
     ]);
   });
 
-  it("rejects a projection that skips an unsettled boundary", async () => {
+  it("projects current status after missed renewals without moving the unsettled watermark", async () => {
     state.stripeRetrieve.mockResolvedValueOnce(
       providerSubscription({
         current_period_start: epoch("2026-09-30T00:00:00.000Z"),
@@ -442,10 +479,12 @@ describe("PAYG subscription period projection", () => {
       }),
     );
 
-    await expect(
-      handleMarketSubscriptionProjection(stripeFixture(), "sub_provider"),
-    ).rejects.toThrow("misaligned with its settlement watermark");
-    expect(state.subscriptionUpdates).toEqual([]);
+    await handleMarketSubscriptionProjection(stripeFixture(), "sub_provider");
+    expect(state.subscriptionUpdates).toEqual([
+      expect.objectContaining({ status: "active" }),
+    ]);
+    expect(state.subscriptionUpdates[0]).not.toHaveProperty("periodStart");
+    expect(state.subscriptionUpdates[0]).not.toHaveProperty("periodEnd");
   });
 });
 
@@ -504,11 +543,15 @@ function updateQuery(table: unknown, value: Record<string, unknown>) {
 function stripeFixture() {
   return {
     subscriptions: { retrieve: state.stripeRetrieve },
+    invoices: { list: () => (async function* () {
+      for (const invoice of state.cycleHistory) yield invoice;
+    })() },
   } as unknown as Stripe;
 }
 
 function cycleInvoice(overrides: Record<string, unknown> = {}) {
   return {
+    status: "paid",
     billing_reason: "subscription_cycle",
     customer: "cus_1",
     period_start: epoch("2026-07-31T00:00:00.000Z"),

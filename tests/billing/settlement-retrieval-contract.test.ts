@@ -17,13 +17,13 @@ describe("usage settlement subscription retrieval", () => {
     expect(stripe.invoiceCreate).not.toHaveBeenCalled();
   });
 
-  it("uses only the signed deleted snapshot for final-deletion fallback", async () => {
+  it("uses the signed deleted identity and the live Customer payment preference for final settlement", async () => {
     const stripe = usageStripeFixture();
     const deletedSnapshot = {
       id: "sub_provider",
       customer: "cus_1",
       status: "canceled",
-      default_payment_method: null,
+      default_payment_method: "pm_old_subscription",
     } as Stripe.Subscription;
 
     await expect(
@@ -36,6 +36,31 @@ describe("usage settlement subscription retrieval", () => {
     expect(stripe.subscriptionRetrieve).not.toHaveBeenCalled();
     expect(stripe.customerRetrieve).toHaveBeenCalledWith("cus_1");
     expect(stripe.invoiceCreate).toHaveBeenCalledOnce();
+    expect(stripe.invoiceCreate.mock.calls[0][0].default_payment_method).toBe("pm_customer");
+    expect(stripe.payInvoice).toHaveBeenLastCalledWith("in_1", { payment_method: "pm_customer" });
+  });
+
+  it("retries a final invoice with the repaired Customer card, never the canceled snapshot's card", async () => {
+    const stripe = usageStripeFixture();
+    const deletedSubscriptionSnapshot = {
+      id: "sub_provider", customer: "cus_1", status: "canceled", default_payment_method: "pm_declined",
+    } as Stripe.Subscription;
+    stripe.customerRetrieve.mockResolvedValue({
+      id: "cus_1", invoice_settings: { default_payment_method: "pm_declined" },
+    });
+    stripe.state.paymentFailure = true;
+    const input = { ...settlementInput(), deletedSubscriptionSnapshot };
+    await expect(createAndSettleUsageInvoice(stripe.client, input)).rejects.toThrow("Card declined");
+    stripe.customerRetrieve.mockResolvedValue({
+      id: "cus_1", invoice_settings: { default_payment_method: "pm_repaired" },
+    });
+    stripe.state.paymentFailure = false;
+    await createAndSettleUsageInvoice(stripe.client, input);
+    expect(stripe.subscriptionRetrieve).not.toHaveBeenCalled();
+    expect(stripe.invoiceCreate).toHaveBeenCalledOnce();
+    expect(stripe.invoiceItemsCreate).toHaveBeenCalledOnce();
+    expect(stripe.payInvoice).toHaveBeenLastCalledWith("in_1", { payment_method: "pm_repaired" });
+    expect(stripe.charges).toEqual([100]);
   });
 
   it("requires the payment response to be definitively paid", async () => {

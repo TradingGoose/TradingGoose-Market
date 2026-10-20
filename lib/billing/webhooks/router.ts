@@ -3,7 +3,7 @@ import {
   requireStripeWebhookClient,
   validateMarketStripePrice,
 } from "../stripe-client";
-import { handleMarketCycleInvoiceFinalized } from "./invoices";
+import { handleMarketCycleInvoiceFinalized, handleMarketUsageInvoicePaid } from "./invoices";
 import {
   handleMarketSubscriptionDeleted,
   handleMarketSubscriptionProjection,
@@ -27,6 +27,9 @@ export async function dispatchMarketStripeEvent(event: Stripe.Event) {
       return;
     case "invoice.finalized":
       await handleMarketCycleInvoiceFinalized(client, event.data.object);
+      return;
+    case "invoice.paid":
+      await handleMarketUsageInvoicePaid(client, event.data.object);
       return;
     default:
       return;

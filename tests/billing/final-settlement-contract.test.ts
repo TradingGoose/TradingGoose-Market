@@ -23,6 +23,7 @@ interface SubscriptionState {
 
 interface StatsState {
   id: string;
+  usageOwnerId: string;
   currentPeriodRequestQuantity: string;
   currentPeriodCost: string;
   billedOverageThisPeriod: string;
@@ -48,6 +49,9 @@ const state = vi.hoisted(() => ({
   reconciledBilledUsd: null as string | null,
   realProvider: false,
   failCommitOnce: false,
+  events: null as Array<{ admittedAt: Date; billableQuantity: number; billableCostUsd: string }> | null,
+  closedUsageCutoff: new Date(0),
+  beforeTransaction: null as (() => void) | null,
   transaction: vi.fn(),
 }));
 
@@ -71,7 +75,7 @@ vi.mock("@/lib/billing/activation", () => ({
 
 vi.mock("@/lib/billing/subscription", () => ({
   getPaygSubscriptionByStripeId: vi.fn(async (providerId: string) =>
-    state.current?.stripeSubscriptionId === providerId ? state.current : null,
+    state.current?.stripeSubscriptionId === providerId ? cloneSubscription(state.current) : null,
   ),
   getPaygActivationAttemptId: vi.fn(() => null),
   withoutPaygActivationAttemptId: vi.fn((value: unknown) => {
@@ -93,13 +97,23 @@ vi.mock("@/lib/billing/threshold-billing", async importOriginal => {
   };
 });
 
-vi.mock("@/lib/billing/user-stats", () => ({
-  resolveRetainedUserStatsForSubscription: vi.fn(async () => ({ id: "stats_1" })),
-  getClosedPeriodUsage: async () => ({ requestQuantity: state.stats!.currentPeriodRequestQuantity, costUsd: state.stats!.currentPeriodCost }),
-}));
+vi.mock("@/lib/billing/user-stats", async importOriginal => {
+  const original = await importOriginal<typeof import("../../lib/billing/user-stats")>();
+  return {
+    ...original,
+    resolveRetainedUserStatsForSubscription: vi.fn(async () => ({ id: "stats_1" })),
+    getClosedPeriodUsage: (...args: Parameters<typeof original.getClosedPeriodUsage>) => {
+      if (!state.events) return Promise.resolve({
+        requestQuantity: state.stats!.currentPeriodRequestQuantity, costUsd: state.stats!.currentPeriodCost,
+      });
+      state.closedUsageCutoff = args[2];
+      return original.getClosedPeriodUsage(...args);
+    },
+  };
+});
 
 import { handleMarketSubscriptionDeleted } from "../../lib/billing/webhooks/subscription";
-import { handleMarketCycleInvoiceFinalized } from "../../lib/billing/webhooks/invoices";
+import { handleMarketCycleInvoiceFinalized, handleMarketUsageInvoicePaid } from "../../lib/billing/webhooks/invoices";
 
 beforeEach(() => {
   state.current = localSubscription();
@@ -112,8 +126,11 @@ beforeEach(() => {
   state.reconciledBilledUsd = null;
   state.realProvider = false;
   state.failCommitOnce = false;
+  state.events = null;
+  state.beforeTransaction = null;
   state.transaction.mockReset().mockImplementation(
     async (callback: (tx: MarketTransaction) => Promise<unknown>) => {
+      state.beforeTransaction?.();
       state.activeTransaction += 1;
       const transactionNumber = state.activeTransaction;
       const subscriptionBefore = cloneSubscription(state.current);
@@ -136,7 +153,146 @@ beforeEach(() => {
   );
 });
 
+describe("historical PAYG cycle recovery", () => {
+  it("reconciles paid prefixes after a later catch-up charge fails and excludes disabled usage", async () => {
+    state.realProvider = true;
+    state.stats = usageStats({ currentPeriodRequestQuantity: "4", currentPeriodCost: "4" });
+    state.events = [
+      { admittedAt: new Date("2026-08-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+      { admittedAt: new Date("2026-09-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+      { admittedAt: new Date("2026-09-20Z"), billableQuantity: 0, billableCostUsd: "0" },
+      { admittedAt: new Date("2026-10-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+      { admittedAt: new Date("2026-10-20Z"), billableQuantity: 0, billableCostUsd: "0" },
+      { admittedAt: new Date("2026-11-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+    ];
+    const stripe = usageStripeFixture();
+    const fresh = { ...deletedSnapshot(), status: "active", default_payment_method: "pm_subscription",
+      items: { data: [{ price: { id: "price_market_payg" }, quantity: 1,
+        current_period_start: Date.parse("2026-11-01Z") / 1000,
+        current_period_end: Date.parse("2026-12-01Z") / 1000 }] },
+    } as Stripe.Subscription;
+    stripe.subscriptionRetrieve.mockResolvedValue(fresh as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+    const history = [
+      historicalInvoice("in_cycle_3", "2026-10-01Z", "2026-11-01Z"),
+      historicalInvoice("in_cycle_2", "2026-09-01Z", "2026-10-01Z"),
+      historicalInvoice("in_cycle_1", "2026-08-01Z", "2026-09-01Z"),
+    ];
+    for (const invoice of history) stripe.invoices.set(invoice.id, invoice);
+    let declineSecondPeriod = true;
+    const pay = stripe.payInvoice.getMockImplementation()!;
+    stripe.payInvoice.mockImplementation(async (id, parameters) => {
+      if (declineSecondPeriod && stripe.invoices.get(id)?.metadata?.usagePeriodEnd === "2026-10-01T00:00:00.000Z") {
+        declineSecondPeriod = false;
+        throw new Error("Second period card declined");
+      }
+      return pay(id, parameters);
+    });
+
+    await expect(handleMarketCycleInvoiceFinalized(stripe.client, history[0])).rejects.toThrow("Second period card declined");
+    expect(state.current?.periodEnd?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+    expect(state.stats?.currentPeriodCost).toBe("4");
+    expect(stripe.charges).toEqual([100]);
+    expect(state.updates).toEqual([]);
+
+    await handleMarketCycleInvoiceFinalized(stripe.client, history[0]);
+    expect(stripe.charges).toEqual([100, 100, 100]);
+    expect(stripe.invoiceCreate).toHaveBeenCalledTimes(3);
+    expect(stripe.invoiceItemsCreate).toHaveBeenCalledTimes(3);
+    expect(state.current?.periodStart?.toISOString()).toBe("2026-11-01T00:00:00.000Z");
+    expect(state.current?.periodEnd?.toISOString()).toBe("2026-12-01T00:00:00.000Z");
+    expect(state.stats).toEqual(expect.objectContaining({
+      currentPeriodCost: "1", currentPeriodRequestQuantity: "1", billedOverageThisPeriod: "0",
+    }));
+    stripe.subscriptionRetrieve.mockClear();
+    await handleMarketCycleInvoiceFinalized(stripe.client, history[2]);
+    expect(stripe.subscriptionRetrieve).not.toHaveBeenCalled();
+    expect(stripe.charges).toEqual([100, 100, 100]);
+  });
+});
+
 describe("PAYG final cancellation settlement", () => {
+  it.each(["final_overage_billing", "overage_threshold_billing", "overage_billing"])(
+    "recovers canceled settlement after a %s invoice is paid outside deletion retries",
+    async type => {
+      state.realProvider = true;
+      state.stats = usageStats({ currentPeriodRequestQuantity: "1000", currentPeriodCost: "1" });
+      const stripe = usageStripeFixture();
+      const canceled = { ...deletedSnapshot(), default_payment_method: "pm_old" };
+      stripe.subscriptionRetrieve.mockResolvedValue(canceled as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+      stripe.state.paymentFailure = true;
+      await expect(handleMarketSubscriptionDeleted(stripe.client, canceled)).rejects.toThrow("Card declined");
+      expect(state.current?.status).toBe("canceled");
+      expect(state.current?.stripeSubscriptionId).toBe("sub_provider");
+
+      const invoice = stripe.invoices.get("in_1")!;
+      invoice.metadata!.type = type;
+      invoice.status = "paid"; // Portal paid the frozen invoice after deletion retries stopped.
+      stripe.payInvoice.mockClear();
+      stripe.invoiceCreate.mockClear();
+      await handleMarketUsageInvoicePaid(stripe.client, structuredClone(invoice));
+
+      expect(state.current?.stripeSubscriptionId).toBeNull();
+      expect(state.stats?.currentPeriodCost).toBe("0");
+      expect(stripe.invoiceCreate).not.toHaveBeenCalled();
+      expect(stripe.payInvoice).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not let a paid invoice from another Customer recover the current canceled binding", async () => {
+    state.current!.status = "canceled";
+    await expect(handleMarketUsageInvoicePaid({} as Stripe, {
+      customer: "cus_wrong", metadata: { type: "final_overage_billing", subscriptionId: "sub_provider" },
+    } as unknown as Stripe.Invoice)).rejects.toThrow("Customer does not match its binding");
+    expect(state.updates).toEqual([]);
+    expect(state.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(["sub_previous", "sub_reactivated"])("ignores paid invoices for non-current binding %s", async providerId => {
+    state.current!.status = "canceled";
+    await handleMarketUsageInvoicePaid({} as Stripe, {
+      customer: "cus_1", metadata: { type: "final_overage_billing", subscriptionId: providerId },
+    } as unknown as Stripe.Invoice);
+    expect(state.updates).toEqual([]);
+    expect(state.transaction).not.toHaveBeenCalled();
+  });
+
+  it("does not treat invoice payment as a new entitlement or final owner for an active subscription", async () => {
+    await handleMarketUsageInvoicePaid({} as Stripe, {
+      customer: "cus_1", metadata: { type: "overage_threshold_billing", subscriptionId: "sub_provider" },
+    } as unknown as Stripe.Invoice);
+    expect(state.updates).toEqual([]);
+    expect(state.transaction).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the current binding under the deletion owner's existing lock", async () => {
+    state.current!.status = "canceled";
+    const stripe = usageStripeFixture();
+    stripe.subscriptionRetrieve.mockResolvedValue(deletedSnapshot() as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+    state.beforeTransaction = () => {
+      state.current!.stripeSubscriptionId = "sub_reactivated";
+      state.current!.status = "active";
+    };
+    await handleMarketUsageInvoicePaid(stripe.client, {
+      customer: "cus_1", metadata: { type: "final_overage_billing", subscriptionId: "sub_provider" },
+    } as unknown as Stripe.Invoice);
+    expect(state.updates).toEqual([]);
+    expect(state.current?.stripeSubscriptionId).toBe("sub_reactivated");
+    expect(state.settle).not.toHaveBeenCalled();
+  });
+
+  it("does not finalize a canceled local binding from a non-canceled provider response", async () => {
+    state.current!.status = "canceled";
+    const stripe = usageStripeFixture();
+    stripe.subscriptionRetrieve.mockResolvedValue({
+      ...deletedSnapshot(), status: "active", default_payment_method: "pm_current",
+    } as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+    await expect(handleMarketUsageInvoicePaid(stripe.client, {
+      customer: "cus_1", metadata: { type: "final_overage_billing", subscriptionId: "sub_provider" },
+    } as unknown as Stripe.Invoice)).rejects.toThrow("does not contain a canceled subscription");
+    expect(state.updates).toEqual([]);
+    expect(state.settle).not.toHaveBeenCalled();
+  });
+
   it("reconciles a paid cycle after local rollback before deletion settles the new remainder", async () => {
     state.realProvider = true;
     state.stats = usageStats({ currentPeriodRequestQuantity: "1000", currentPeriodCost: "1" });
@@ -403,7 +559,16 @@ describe("PAYG final cancellation settlement", () => {
 
 function transactionFixture(transactionNumber: number) {
   return {
-    select: () => ({
+    select: (selection?: Record<string, unknown>) => {
+      if (selection?.requestQuantity && selection?.costUsd && state.events) {
+        return { from: () => ({ where: async () => {
+          const events = state.events!.filter(event => event.billableQuantity === 1 &&
+            event.admittedAt.getTime() >= state.closedUsageCutoff.getTime());
+          return [{ requestQuantity: events.length.toString(),
+            costUsd: events.reduce((sum, event) => sum + BigInt(event.billableCostUsd), 0n).toString() }];
+        } }) };
+      }
+      return {
       from: (table: unknown) => ({
         where: () => {
           const rows =
@@ -420,7 +585,8 @@ function transactionFixture(transactionNumber: number) {
           };
         },
       }),
-    }),
+    };
+    },
     update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({
         where: () => makeUpdateOperation(table, values, transactionNumber),
@@ -504,6 +670,7 @@ function localSubscription(): SubscriptionState {
 function usageStats(overrides: Partial<StatsState> = {}): StatsState {
   return {
     id: "stats_1",
+    usageOwnerId: "owner_1",
     currentPeriodRequestQuantity: "1",
     currentPeriodCost: "1",
     billedOverageThisPeriod: "0",
@@ -552,4 +719,12 @@ function deletedSnapshot() {
       ],
     },
   } as unknown as Stripe.Subscription;
+}
+
+function historicalInvoice(id: string, start: string, end: string) {
+  return {
+    id, status: "paid", billing_reason: "subscription_cycle", customer: "cus_1", metadata: {},
+    period_start: Date.parse(start) / 1000, period_end: Date.parse(end) / 1000,
+    parent: { subscription_details: { subscription: "sub_provider" } },
+  } as Stripe.Invoice;
 }

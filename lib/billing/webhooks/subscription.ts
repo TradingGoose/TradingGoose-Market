@@ -99,8 +99,9 @@ function classifyProviderPeriodProjection(
   ) {
     return "same";
   }
-  if (projectedStartMs === storedEndMs && projectedEndMs > projectedStartMs) {
-    // invoice.finalized owns crossing the settlement watermark.
+  if (projectedStartMs >= storedEndMs && projectedEndMs > projectedStartMs) {
+    // invoice.finalized owns crossing every unsettled boundary, including
+    // historical renewal periods missed while webhook sync was disabled.
     return "next-pending";
   }
   throw new Error("Current PAYG provider period is misaligned with its settlement watermark");

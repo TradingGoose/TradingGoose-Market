@@ -23,6 +23,10 @@ export interface UsageInvoiceSnapshot {
 
 const usageInvoiceTypes = ["overage_threshold_billing", "overage_billing", "final_overage_billing"];
 
+export function isUsageInvoiceType(type: string | undefined) {
+  return type !== undefined && usageInvoiceTypes.includes(type);
+}
+
 /** The existing Stripe invoice owns the frozen inputs for its retries. */
 export async function listUsageInvoices(
   stripe: Stripe,
@@ -83,9 +87,14 @@ async function usagePaymentMethod(
   if (providerSubscription.id !== stripeSubscriptionId || providerCustomerId !== customerId) {
     throw new Error("Stripe usage invoice subscription binding changed");
   }
-  const method = providerSubscription.default_payment_method;
-  const subscriptionMethod = typeof method === "string" ? method : method?.id;
-  if (subscriptionMethod) return subscriptionMethod;
+  // A canceled subscription is an immutable snapshot, not the customer's
+  // payment preference. Portal recovery updates the live Customer after that
+  // snapshot was captured; never pin a final retry to its old card.
+  if (providerSubscription.status !== "canceled") {
+    const method = providerSubscription.default_payment_method;
+    const subscriptionMethod = typeof method === "string" ? method : method?.id;
+    if (subscriptionMethod) return subscriptionMethod;
+  }
   const customer = await stripe.customers.retrieve(customerId);
   if (!("deleted" in customer && customer.deleted)) {
     const candidate = customer.invoice_settings.default_payment_method;
