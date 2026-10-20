@@ -8,7 +8,7 @@ import * as schema from "../../packages/db/schema";
 const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Better Auth email-change identity lifecycle", () => {
-  it("pins the installed verified-change branch to an in-place user-row update", () => {
+  it("pins the patched verified-change owner to immutable identity and a consumed challenge", () => {
     const packageJson = JSON.parse(
       readFileSync(`${projectRoot}/node_modules/better-auth/package.json`, "utf8"),
     ) as { version: string };
@@ -24,8 +24,13 @@ describe("Better Auth email-change identity lifecycle", () => {
     expect(branchStart).toBeGreaterThan(-1);
     expect(branchEnd).toBeGreaterThan(branchStart);
     expect(verifiedChangeBranch).toContain(
-      "internalAdapter.updateUserByEmail(parsed.email",
+      "internalAdapter.updateUser(currentUser.id",
     );
+    expect(verifiedChangeBranch).toContain("runWithTransaction");
+    expect(verifiedChangeBranch).toContain("currentUser.email !== parsed.email");
+    expect(verifiedChangeBranch).toContain("pending.value !== token");
+    expect(verifiedChangeBranch).toContain("deleteVerificationByIdentifier(identifier)");
+    expect(source).toContain("internalAdapter.findUserById(parsed.userId)");
     expect(verifiedChangeBranch).toContain("email: parsed.updateTo");
     expect(verifiedChangeBranch).toContain("emailVerified: true");
     expect(verifiedChangeBranch).not.toContain("createUser");

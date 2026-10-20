@@ -40,6 +40,11 @@ bun run db:migrate
 bun run dev
 ```
 
+The pinned Better Auth package includes the checked-in Bun patch in `patches/`.
+Keep `patchedDependencies` and `bun.lock` together: the patch fixes immutable-user
+email-change verification and single-use OTP challenges in Better Auth's existing
+routes. CI installs it with `bun install --frozen-lockfile`.
+
 `db:migrate` is the sole migration command. It applies the checked-in Drizzle
 chain to the configured empty database before the application starts. Drizzle
 migrations are generated from `packages/db/schema.ts`; migration SQL is never

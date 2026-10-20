@@ -88,5 +88,8 @@
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.6.3",
     "vitest": "4.1.10"
+  },
+  "patchedDependencies": {
+    "better-auth@1.4.18": "patches/better-auth@1.4.18.patch"
   }
 }
