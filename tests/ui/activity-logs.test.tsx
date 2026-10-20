@@ -8,6 +8,7 @@ const market = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
   urls: [] as string[],
   refresh: vi.fn(),
+  charts: [] as Array<Array<Record<string, string | number>>>,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -22,15 +23,19 @@ vi.mock("@/hooks/use-market-resource", () => ({
 vi.mock("recharts", () => {
   const Primitive = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   const Empty = () => null;
+  const Chart = ({ children, data }: { children?: React.ReactNode; data: Array<Record<string, string | number>> }) => {
+    market.charts.push(data);
+    return <div>{children}</div>;
+  };
   return {
     Area: Empty,
     AreaChart: Primitive,
     Bar: Empty,
-    BarChart: Primitive,
+    BarChart: Chart,
     CartesianGrid: Empty,
     Legend: Empty,
     Line: Empty,
-    LineChart: Primitive,
+    LineChart: Chart,
     ResponsiveContainer: Primitive,
     Tooltip: Empty,
     XAxis: Empty,
@@ -45,6 +50,7 @@ import type { ActivityResponse, LogsResponse } from "../../lib/account/contracts
 afterEach(() => {
   cleanup();
   market.urls.length = 0;
+  market.charts.length = 0;
   vi.clearAllMocks();
 });
 
@@ -173,6 +179,28 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
       expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
       expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("false");
     }
+  });
+
+  it.each(["Trends", "Explore"])("passes explicit zero-traffic periods and values to the %s chart", async (tab) => {
+    const interaction = userEvent.setup();
+    const timestamps = ["2026-07-20T00:00:00Z", "2026-07-21T00:00:00Z", "2026-07-22T00:00:00Z"];
+    const buckets = timestamps.map((timestamp, index) => ({
+      timestamp, requests: index === 1 ? 0 : 10, successes: 0, errors: 0,
+    }));
+    const series = timestamps.flatMap((timestamp, index) => [
+      { timestamp, seriesId: "country", seriesLabel: "Country", requests: index === 0 ? 10 : 0, successes: 0, errors: 0 },
+      { timestamp, seriesId: "exchange", seriesLabel: "Exchange", requests: index === 2 ? 10 : 0, successes: 0, errors: 0 },
+    ]);
+    market.state = { data: { ...activity, totalRequests: 20, buckets, series }, error: null, isLoading: false };
+    render(<ActivityPage />);
+    market.charts.length = 0;
+    await interaction.click(screen.getByRole("tab", { name: tab }));
+    const seriesChart = market.charts.find((points) => points.some((point) => Object.hasOwn(point, "series0")));
+    expect(seriesChart).toEqual([
+      { timestamp: timestamps[0], series0: 10, series1: 0 },
+      { timestamp: timestamps[1], series0: 0, series1: 0 },
+      { timestamp: timestamps[2], series0: 0, series1: 10 },
+    ]);
   });
 
   it("renders explicit empty and error states", () => {

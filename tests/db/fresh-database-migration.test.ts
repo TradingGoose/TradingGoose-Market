@@ -634,6 +634,8 @@ describe.sequential("fresh database migration", () => {
           await assertActivationSerialization(targetSql);
           const { assertAuthChallengeSecurity } = await import("../helpers/auth-challenge-security");
           await assertAuthChallengeSecurity(targetSql);
+          const { assertUsageBucketGaps } = await import("../helpers/usage-bucket-gaps");
+          await assertUsageBucketGaps(targetSql);
         } finally {
           try {
             if (applicationClient) await applicationClient.end({ timeout: 5 });

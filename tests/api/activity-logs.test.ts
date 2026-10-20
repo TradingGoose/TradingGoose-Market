@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UsageBucket } from "@/lib/account/contracts";
 
 const databaseState = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("@/lib/db/runtime", () => ({ requireDatabase: () => databaseState.current }));
@@ -17,7 +18,11 @@ import {
 
 beforeEach(() => {
   databaseState.current = null;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-23T12:00:00Z"));
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe("owner-safe Activity and Logs contracts", () => {
   it("accepts only bounded server-enumerated operational filters", () => {
@@ -144,9 +149,56 @@ describe("owner-safe Activity and Logs contracts", () => {
     }));
     expect(database.metricSelections()).toBe(1);
   });
+
+  it("fills the full UTC range and every selected series without changing recorded totals", async () => {
+    databaseState.current = activityDatabase({
+      buckets: [
+        { timestamp: "2026-07-20T00:00:00Z", requests: 10, successes: 9, errors: 1 },
+        { timestamp: "2026-07-22T00:00:00Z", requests: 10, successes: 8, errors: 2 },
+      ],
+      series: [
+        { timestamp: "2026-07-20T00:00:00Z", seriesId: "https://errors.example/app", requests: 10, successes: 9, errors: 1 },
+        { timestamp: "2026-07-22T00:00:00Z", seriesId: "__unattributed__", requests: 10, successes: 8, errors: 2 },
+      ],
+    });
+    const result = await getCustomerActivity("customer_1", { range: "7d", group: "app" });
+    expect(result.buckets).toHaveLength(8);
+    expect(result.buckets[0].timestamp).toBe("2026-07-16T00:00:00Z");
+    expect(result.buckets.at(-1)?.timestamp).toBe("2026-07-23T00:00:00Z");
+    expect(result.buckets.find((row) => row.timestamp === "2026-07-21T00:00:00Z")).toEqual({
+      timestamp: "2026-07-21T00:00:00Z", requests: 0, successes: 0, errors: 0,
+    });
+    expect(result.buckets.reduce((sum, row) => sum + row.requests, 0)).toBe(20);
+    expect(result.totalRequests).toBe(20);
+    expect(result.series).toHaveLength(16);
+    for (const bucket of result.buckets) {
+      const series = result.series.filter((row) => row.timestamp === bucket.timestamp);
+      expect(series.map((row) => row.seriesId)).toEqual(["https://errors.example/app", "Unattributed"]);
+      expect(series.reduce((sum, row) => sum + row.requests, 0)).toBe(bucket.requests);
+      expect(series.every((row) => [row.requests, row.successes, row.errors].every(Number.isFinite))).toBe(true);
+    }
+  });
+
+  it.each([
+    ["2026-07-23T12:00:00Z", 24, "2026-07-23T11:00:00Z"],
+    ["2026-07-23T12:30:00Z", 25, "2026-07-23T12:00:00Z"],
+  ])("keeps a complete empty hour axis with exclusive end at %s", async (now, length, last) => {
+    vi.setSystemTime(new Date(now));
+    databaseState.current = activityDatabase({ buckets: [], winners: [] });
+    const result = await getCustomerActivity("customer_1", { range: "24h", granularity: "hour" });
+    expect(result.buckets).toHaveLength(length);
+    expect(result.buckets.at(-1)?.timestamp).toBe(last);
+    expect(result.buckets.every((row) => row.requests === 0 && row.successes === 0 && row.errors === 0)).toBe(true);
+    expect(result.series).toEqual([]);
+    expect(result.totalRequests).toBe(0);
+  });
 });
 
-function activityDatabase() {
+function activityDatabase(input: {
+  buckets?: UsageBucket[];
+  series?: Array<UsageBucket & { seriesId: string }>;
+  winners?: Array<{ id: string; url: string | null; title: string | null; metric: number }>;
+} = {}) {
   let idOnlySelections = 0;
   let metricSelections = 0;
   const requestApplications = Array.from({ length: 10 }, (_, index) => ({
@@ -158,7 +210,7 @@ function activityDatabase() {
     const keys = Object.keys(selection);
     if (keys.includes("metric")) {
       metricSelections += 1;
-      return [
+      return input.winners ?? [
         {
           id: "https://errors.example/app",
           url: "https://errors.example/app",
@@ -169,7 +221,7 @@ function activityDatabase() {
       ];
     }
     if (keys.includes("seriesId")) {
-      return [{
+      return input.series ?? [{
         timestamp: "2026-07-20T00:00:00Z",
         seriesId: "https://errors.example/app",
         requests: 13,
@@ -178,11 +230,20 @@ function activityDatabase() {
       }];
     }
     if (keys.includes("activeKeys")) {
+      if (input.buckets) {
+        return [{
+          total: input.buckets.reduce((sum, row) => sum + row.requests, 0),
+          activeKeys: input.buckets.length ? 1 : 0,
+          successes: input.buckets.reduce((sum, row) => sum + row.successes, 0),
+          errors: input.buckets.reduce((sum, row) => sum + row.errors, 0),
+          pending: 0,
+        }];
+      }
       return [{ total: 20, activeKeys: 11, successes: 8, errors: 12, pending: 0 }];
     }
     if (keys.length === 1 && keys[0] === "total") return [{ total: 10 }];
     if (keys.includes("timestamp")) {
-      return [{ timestamp: "2026-07-20T00:00:00Z", requests: 20, successes: 8, errors: 12 }];
+      return input.buckets ?? [{ timestamp: "2026-07-20T00:00:00Z", requests: 20, successes: 8, errors: 12 }];
     }
     if (keys.includes("displayValue")) {
       if (keys.includes("requests")) {

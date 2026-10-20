@@ -20,7 +20,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { MarketDatabase } from "@tradinggoose/db";
-import type { UsageFacets } from "@/lib/account/contracts";
+import type { UsageBucket, UsageFacets } from "@/lib/account/contracts";
 import { requireDatabase } from "@/lib/db/runtime";
 import { appDisplayName } from "./attribution";
 
@@ -123,6 +123,7 @@ async function getActivity(scope: UsageScope, filters: UsageFilters) {
     .where(and(...usageConditions(scope, filters, previousStart, start)));
 
   const bucketUnit = chooseBucketUnit(range, filters.granularity);
+  const bucketTimestamps = utcBucketTimestamps(start, now, bucketUnit);
   const bucketTimestamp = utcBucketExpression(bucketUnit);
   const bucketRows = await database
     .select({
@@ -224,7 +225,6 @@ async function getActivity(scope: UsageScope, filters: UsageFilters) {
     parseMetric(filters.metric),
   );
   const topSeriesIds = topSeries.map((row) => row.id);
-  const seriesLabels = new Map(topSeries.map((row) => [row.id, row.label]));
   const seriesId =
     group === "app"
       ? sql<string>`coalesce(${marketApiUsageEvent.applicationUrl}, '__unattributed__')`
@@ -262,6 +262,13 @@ async function getActivity(scope: UsageScope, filters: UsageFilters) {
           .orderBy(bucketTimestamp, seriesId);
   const currentTotal = Number(aggregate?.total ?? 0);
   const previousTotal = Number(previousAggregate?.total ?? 0);
+  const seriesBuckets = topSeries.map((series) => ({
+    ...series,
+    buckets: fillUsageBuckets(
+      bucketTimestamps,
+      seriesRows.filter((row) => row.seriesId === series.id),
+    ),
+  }));
   return {
     totalRequests: currentTotal,
     completedSuccessCount: Number(aggregate?.successes ?? 0),
@@ -272,12 +279,7 @@ async function getActivity(scope: UsageScope, filters: UsageFilters) {
       previousTotal === 0
         ? null
         : ((currentTotal - previousTotal) / previousTotal) * 100,
-    buckets: bucketRows.map((row) => ({
-      timestamp: row.timestamp,
-      requests: Number(row.requests),
-      successes: Number(row.successes),
-      errors: Number(row.errors),
-    })),
+    buckets: fillUsageBuckets(bucketTimestamps, bucketRows),
     topKeys: keyRows.map((row) => ({
       id: row.id,
       label: row.name || row.displayValue,
@@ -298,17 +300,11 @@ async function getActivity(scope: UsageScope, filters: UsageFilters) {
       label: row.id,
       requests: Number(row.requests),
     })),
-    series: seriesRows.map((entry) => ({
-        timestamp: entry.timestamp,
-        seriesId: entry.seriesId === "__unattributed__" ? "Unattributed" : entry.seriesId,
-        requests: Number(entry.requests),
-        successes: Number(entry.successes),
-        errors: Number(entry.errors),
-        seriesLabel: seriesDisplayLabel(
-          entry.seriesId,
-          seriesLabels,
-        ),
-      })),
+    series: bucketTimestamps.flatMap((_, index) => seriesBuckets.map((series) => ({
+      ...series.buckets[index],
+      seriesId: series.id === "__unattributed__" ? "Unattributed" : series.id,
+      seriesLabel: series.label,
+    }))),
     facets,
   };
 }
@@ -516,12 +512,7 @@ async function getLogs(scope: UsageScope, filters: UsageFilters) {
       httpStatus: row.httpStatus,
       completedAt: row.completedAt?.toISOString() ?? null,
     })),
-    histogram: histogramRows.map((row) => ({
-      timestamp: row.timestamp,
-      requests: Number(row.requests),
-      successes: Number(row.successes),
-      errors: Number(row.errors),
-    })),
+    histogram: fillUsageBuckets(utcBucketTimestamps(start, now, "hour"), histogramRows),
     nextCursor: hasMore && last ? encodeCursor(last.admittedAt, last.id) : null,
     facets,
   };
@@ -670,11 +661,28 @@ function utcBucketExpression(unit: "hour" | "day") {
   return sql<string>`to_char(date_trunc(${literal}, ${marketApiUsageEvent.admittedAt} at time zone 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 }
 
-function seriesDisplayLabel(
-  id: string,
-  labels: Map<string, string>,
-) {
-  return labels.get(id) ?? (id === "__unattributed__" ? "Unattributed" : id);
+function utcBucketTimestamps(start: Date, end: Date, unit: "hour" | "day") {
+  const duration = unit === "hour" ? 3_600_000 : 86_400_000;
+  const timestamps: string[] = [];
+  // Include partial first/last buckets without extending the admission filter's
+  // half-open range. Epoch-aligned steps match date_trunc(... at time zone UTC).
+  for (let time = Math.floor(start.getTime() / duration) * duration; time < end.getTime(); time += duration) {
+    timestamps.push(new Date(time).toISOString().replace(".000Z", "Z"));
+  }
+  return timestamps;
+}
+
+function fillUsageBuckets(timestamps: string[], rows: UsageBucket[]): UsageBucket[] {
+  const byTimestamp = new Map(rows.map((row) => [row.timestamp, row]));
+  return timestamps.map((timestamp) => {
+    const row = byTimestamp.get(timestamp);
+    return {
+      timestamp,
+      requests: Number(row?.requests ?? 0),
+      successes: Number(row?.successes ?? 0),
+      errors: Number(row?.errors ?? 0),
+    };
+  });
 }
 
 function encodeCursor(admittedAt: Date, id: string) {
