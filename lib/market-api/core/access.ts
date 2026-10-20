@@ -382,7 +382,7 @@ async function enforceProviderSpendWindow(
 ): Promise<Response | null> {
   const config = getMarketRuntimeConfig();
   const codec = createSpendLimitCodec(key.spendLimitUsd!, key.spendWindowDays!);
-  const cutoff = sql`now() - (${key.spendWindowDays!} * interval '1 day')`;
+  const cutoff = new Date((await databaseNow(tx)).getTime() - codec.duration);
   const totals = await tx
     .select({
       cost: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)`,
@@ -458,9 +458,7 @@ async function requireExactSpendCapacity(
 ) {
   const config = getMarketRuntimeConfig();
   const codec = createSpendLimitCodec(key.spendLimitUsd!, key.spendWindowDays!);
-  const cutoff = new Date(
-    admittedAt.getTime() - key.spendWindowDays! * 86_400_000,
-  );
+  const cutoff = new Date(admittedAt.getTime() - codec.duration);
   const totals = await tx
     .select({
       cost: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)`,

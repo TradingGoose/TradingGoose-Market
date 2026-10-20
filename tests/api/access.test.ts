@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
   marketApiKeys,
   marketApiUsageCompletion,
@@ -404,6 +406,67 @@ describe("exclusive Market API actors", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["fall-back", "2026-11-01T12:00:00-07:00", "2026-10-31T19:00:00.000Z"],
+    ["spring-forward", "2026-03-08T12:00:00-06:00", "2026-03-07T18:00:00.000Z"],
+  ])("uses the same fixed 24-hour spend cutoff across %s", async (_label, now, cutoff) => {
+    accessState.config = {
+      billing: { enabled: true, usdPer1000Reads: "1", requestNanoUsd: 1_000_000n },
+      unkey: { anonymous: null },
+    };
+    const usageConditions: SQL[] = [];
+    accessState.database = publicAdmissionDatabase({
+      emailVerified: true,
+      ownerUserId: "user_1",
+      spendLimitUsd: "1",
+      spendWindowDays: 1,
+      now: new Date(now),
+      usageConditions,
+    });
+    const providerCalls: Array<{ cost: number; duration: number }> = [];
+    accessState.provider.verifyKey = vi.fn(async (input: {
+      ratelimit?: { name: string; cost: number; limit: number; duration: number };
+    }) => {
+      const ratelimit = input.ratelimit;
+      if (ratelimit) providerCalls.push(ratelimit);
+      return {
+        valid: true,
+        code: "VALID",
+        keyId: "provider_public",
+        permissions: ["market.public"],
+        ratelimits: ratelimit ? [{
+          ...ratelimit,
+          remaining: ratelimit.limit - ratelimit.cost,
+          reset: new Date(now).getTime() + ratelimit.duration,
+          autoApply: false,
+          exceeded: false,
+        }] : [],
+      };
+    });
+    const handler = vi.fn(async () => Response.json({ ok: true }));
+    const response = await handleKeyedMarketRoute(
+      new Request("https://market.example.com/api/search/cities?version=v1", {
+        headers: { "x-api-key": "public_secret" },
+      }),
+      resolveKeyedMarketRoute("/api/search/cities")!,
+      handler,
+    );
+
+    expect(response.status).toBe(200);
+    expect(handler).toHaveBeenCalledOnce();
+    const dialect = new PgDialect();
+    expect(usageConditions).toHaveLength(2);
+    for (const condition of usageConditions) {
+      const query = dialect.sqlToQuery(condition);
+      expect(query.params).toEqual(["local_public", cutoff]);
+      expect(query.sql).not.toMatch(/interval/i);
+    }
+    expect(providerCalls.map(({ cost, duration }) => ({ cost, duration }))).toEqual([
+      { cost: 0, duration: 86_400_000 },
+      { cost: 1_000_000, duration: 86_400_000 },
+    ]);
+  });
+
   it("redacts malformed verification and initial mapping failures", async () => {
     accessState.provider.verifyKey = vi.fn(async () => null);
     const route = resolveKeyedMarketRoute("/api/get/timezone")!;
@@ -544,6 +607,10 @@ function privateAdmissionDatabase(input: { emailVerified?: boolean } = {}) {
 function publicAdmissionDatabase(input: {
   emailVerified: boolean;
   ownerUserId: string;
+  spendLimitUsd?: string;
+  spendWindowDays?: number;
+  now?: Date;
+  usageConditions?: SQL[];
 }) {
   const key = {
     id: "local_public",
@@ -552,8 +619,8 @@ function publicAdmissionDatabase(input: {
     adminGrantId: null,
     unkeyKeyId: "provider_public",
     keyClass: "public",
-    spendLimitUsd: null,
-    spendWindowDays: null,
+    spendLimitUsd: input.spendLimitUsd ?? null,
+    spendWindowDays: input.spendWindowDays ?? null,
     revocationRequestedAt: null,
     providerRevokedAt: null,
   };
@@ -593,13 +660,20 @@ function publicAdmissionDatabase(input: {
               }];
             }
             if (table === marketApiUsageCompletion) return [];
+            if (table === marketApiUsageEvent) return [{ cost: "0" }];
             throw new Error("Unexpected public admission select table");
           };
           const builder = {
             innerJoin() { return builder; },
-            where() { return builder; },
+            where(condition: SQL) {
+              if (table === marketApiUsageEvent) input.usageConditions?.push(condition);
+              return builder;
+            },
             for() { return builder; },
             async limit(count: number) { return rows().slice(0, count); },
+            then(resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) {
+              return Promise.resolve(rows()).then(resolve, reject);
+            },
           };
           return builder;
         },
@@ -630,14 +704,16 @@ function publicAdmissionDatabase(input: {
         set() {
           return {
             async where() {
-              if (table !== userStats) throw new Error("Unexpected public update table");
+              if (table !== userStats && table !== marketApiKeys) {
+                throw new Error("Unexpected public update table");
+              }
             },
           };
         },
       };
     },
     async execute() {
-      return [{ now: new Date("2026-07-19T00:00:00.000Z") }];
+      return [{ now: input.now ?? new Date("2026-07-19T00:00:00.000Z") }];
     },
   };
   return {
