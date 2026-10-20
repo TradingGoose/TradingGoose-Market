@@ -23,16 +23,14 @@ export async function getListing(c: ApiContext) {
     }
 
     if (listingIds.length === 1) {
-      const listing = await fetchListingById(request, listingIds[0] ?? "", {
-        forceLogoRefresh: true
-      });
+      const listing = await fetchListingById(request, listingIds[0] ?? "");
       if (!listing) {
         return c.json({ data: null, error: "Listing not found." }, 404);
       }
       return c.json({ data: listing });
     }
 
-    const resolved = await fetchListingsByIds(request, listingIds, { forceLogoRefresh: true });
+    const resolved = await fetchListingsByIds(request, listingIds);
     const data: Record<string, Awaited<ReturnType<typeof fetchListingById>> | null> = {};
     for (const id of listingIds) {
       data[id] = resolved.get(id) ?? null;

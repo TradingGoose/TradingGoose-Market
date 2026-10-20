@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { schema } from "@tradinggoose/db";
 import { requireDatabase } from "@/lib/db/runtime";
+import { parsePositiveInt } from "@/lib/api-utils";
 
 import { fetchTimeZonesFromDb, type TimeZonesQuery } from "./lib";
 import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
@@ -19,14 +20,6 @@ type TimeZoneOptionRow = {
   offsetDst: string | null;
   observesDst: boolean;
 };
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
 
 export async function GET(request: Request) {
   const auth = await routePolicy.authorize(request);

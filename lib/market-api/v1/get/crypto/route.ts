@@ -23,16 +23,14 @@ export async function getCrypto(c: ApiContext) {
     }
 
     if (cryptoIds.length === 1) {
-      const crypto = await fetchCryptoById(request, cryptoIds[0] ?? "", {
-        forceLogoRefresh: true
-      });
+      const crypto = await fetchCryptoById(request, cryptoIds[0] ?? "");
       if (!crypto) {
         return c.json({ data: null, error: "Crypto not found." }, 404);
       }
       return c.json({ data: crypto });
     }
 
-    const resolved = await fetchCryptosByIds(request, cryptoIds, { forceLogoRefresh: true });
+    const resolved = await fetchCryptosByIds(request, cryptoIds);
     const data: Record<string, Awaited<ReturnType<typeof fetchCryptoById>> | null> = {};
     for (const id of cryptoIds) {
       data[id] = resolved.get(id) ?? null;

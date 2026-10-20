@@ -3,7 +3,7 @@ import type { ApiContext } from "@/lib/market-api/core/context";
 
 import { buildCurrencyPairs } from "./currency";
 import { toCryptoListing, toCurrencyListing } from "./mappers";
-import type { CryptoPair, Listing, ListingResult } from "./types";
+import type { CryptoPair, Listing } from "./types";
 import {
   LISTING_ASSET_CLASSES,
   expandAssetClasses,
@@ -19,7 +19,7 @@ import { searchListingRows } from "./listings/route";
 
 
 type RankedListing = {
-  listing: ListingResult;
+  listing: Listing;
   rankValue: number;
 };
 
@@ -192,7 +192,7 @@ export async function getSearch(c: ApiContext) {
 
     await Promise.all(tasks);
 
-    const merged: ListingResult[] = [];
+    const merged: Listing[] = [];
     if (results.listings?.length) {
       for (const listing of results.listings) {
         if (normalizedRegionCodes.length) {

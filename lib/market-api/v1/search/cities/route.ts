@@ -3,7 +3,7 @@ import type { ApiContext } from "@/lib/market-api/core/context";
 
 import { requireDatabase } from "@/lib/db/runtime";
 
-import { parseListParam } from "../parsing";
+import { parseListParam, parsePositiveInt } from "../parsing";
 import { resolveSearchParams } from "../params";
 
 
@@ -19,15 +19,6 @@ export type CitySearchParams = {
   countryIds?: string[] | null;
   limit?: string | null;
 };
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
 
 export async function searchCitiesRows(params: CitySearchParams) {
 

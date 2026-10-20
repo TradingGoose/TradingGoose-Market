@@ -6,6 +6,7 @@ import { requireDatabase } from "@/lib/db/runtime";
 import { resolveIconUrl } from "../utils";
 import type { CryptoPair } from "../types";
 import { resolveSearchParams } from "../params";
+import { parseListParam, parsePositiveInt, uniqueNonEmpty } from "../parsing";
 
 
 const DEFAULT_LIMIT = 50;
@@ -40,75 +41,6 @@ type CurrencyRow = {
 type QuoteCandidate =
   | ({ type: "crypto" } & CryptoRowMeta)
   | ({ type: "currency" } & CurrencyRow);
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
-function uniqueNonEmpty(values: Array<string | null | undefined>) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-function parseListParam(searchParams: URLSearchParams, key: string) {
-  const rawValues = [
-    ...searchParams.getAll(key),
-    ...searchParams.getAll(`${key}[]`)
-  ];
-  if (!rawValues.length) return [];
-
-  const tokens: string[] = [];
-  for (const raw of rawValues) {
-    if (!raw) continue;
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-
-    const pushToken = (value: string) => {
-      const cleaned = value.trim().replace(/^['"]|['"]$/g, "");
-      if (cleaned) tokens.push(cleaned);
-    };
-
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item === null || item === undefined) continue;
-            pushToken(String(item));
-          }
-          continue;
-        }
-      } catch {
-        // fall through
-      }
-      const inner = trimmed.slice(1, -1);
-      if (inner) {
-        inner.split(",").forEach((value) => pushToken(value));
-      }
-      continue;
-    }
-
-    if (trimmed.includes(",")) {
-      trimmed.split(",").forEach((value) => pushToken(value));
-      continue;
-    }
-
-    pushToken(trimmed);
-  }
-
-  return uniqueNonEmpty(tokens);
-}
 
 function normalizeQuoteType(value: string | null) {
   const normalized = value?.trim().toLowerCase();
@@ -198,8 +130,7 @@ async function fetchCurrencies(
 
 export async function fetchCryptoById(
   request: Request,
-  cryptoId: string,
-  options?: { forceLogoRefresh?: boolean }
+  cryptoId: string
 ): Promise<CryptoDetail | null> {
 
   const trimmedId = cryptoId.trim();
@@ -216,8 +147,7 @@ export async function fetchCryptoById(
 
 export async function fetchCryptosByIds(
   request: Request,
-  cryptoIds: string[],
-  options?: { forceLogoRefresh?: boolean }
+  cryptoIds: string[]
 ): Promise<Map<string, CryptoDetail>> {
 
   const ids = uniqueNonEmpty(

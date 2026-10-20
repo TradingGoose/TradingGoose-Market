@@ -1,22 +1,12 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { HttpStatusCode } from "@/lib/market-api/core/http";
 
 import { requireDatabase } from "@/lib/db/runtime";
 
 import { resolveIconUrl } from "../utils";
 import type { Listing } from "../types";
 import { resolveSearchParams } from "../params";
-
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
+import { parseListParam, parsePositiveInt, uniqueNonEmpty } from "../parsing";
 
 type CountrySearchRow = {
   id: string;
@@ -39,66 +29,6 @@ function intersectIds(current: string[] | null, next: string[]) {
   if (!next.length) return [];
   const nextSet = new Set(next);
   return current.filter((id) => nextSet.has(id));
-}
-
-function uniqueNonEmpty(values: Array<string | null | undefined>) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-function parseListParam(searchParams: URLSearchParams, key: string) {
-  const rawValues = [
-    ...searchParams.getAll(key),
-    ...searchParams.getAll(`${key}[]`)
-  ];
-  if (!rawValues.length) return [];
-
-  const tokens: string[] = [];
-  for (const raw of rawValues) {
-    if (!raw) continue;
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-
-    const pushToken = (value: string) => {
-      const cleaned = value.trim().replace(/^['"]|['"]$/g, "");
-      if (cleaned) tokens.push(cleaned);
-    };
-
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item === null || item === undefined) continue;
-            pushToken(String(item));
-          }
-          continue;
-        }
-      } catch {
-        // Fall through to manual parsing.
-      }
-      const inner = trimmed.slice(1, -1);
-      if (inner) {
-        inner.split(",").forEach((value) => pushToken(value));
-      }
-      continue;
-    }
-
-    if (trimmed.includes(",")) {
-      trimmed.split(",").forEach((value) => pushToken(value));
-      continue;
-    }
-
-    pushToken(trimmed);
-  }
-
-  return uniqueNonEmpty(tokens);
 }
 
 async function fetchCountryIdsByTokens(tokens: string[]) {
@@ -172,13 +102,6 @@ function buildPublicListings(
   return rows.map((row) => toPublicListing(withIconUrl(request, row)));
 }
 
-async function buildSearchListings(
-  request: Request,
-  rows: ListingSearchResult[]
-) {
-  return buildPublicListings(request, rows);
-}
-
 async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?: string) {
   if (!filters.length) return [] as ListingSearchResult[];
   const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
@@ -218,8 +141,7 @@ async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?
 
 export async function fetchListingById(
   request: Request,
-  listingId: string,
-  options?: { forceLogoRefresh?: boolean }
+  listingId: string
 ): Promise<Listing | null> {
 
   const trimmedId = listingId.trim();
@@ -234,8 +156,7 @@ export async function fetchListingById(
 
 export async function fetchListingsByIds(
   request: Request,
-  listingIds: string[],
-  options?: { forceLogoRefresh?: boolean }
+  listingIds: string[]
 ): Promise<Map<string, Listing>> {
 
   const ids = uniqueNonEmpty(
@@ -261,7 +182,7 @@ export async function fetchListingsByIds(
 
 type ListingSearchResponse = {
   data: Listing[] | Listing | null;
-  status: HttpStatusCode;
+  status: number;
   error?: string;
 };
 
@@ -457,7 +378,7 @@ async function runListingSearch(
     if (!rows.length) {
       return { data: [], status: 200 };
     }
-    return { data: await buildSearchListings(request, rows), status: 200 };
+    return { data: buildPublicListings(request, rows), status: 200 };
   }
 
   const orderByTerm = listingName ?? listingBase ?? undefined;
@@ -524,7 +445,7 @@ async function runListingSearch(
   for (const filters of rankedFilters) {
     const rows = await fetchListingsByFilters(filters, limit, orderByTerm);
     if (rows.length) {
-      return { data: await buildSearchListings(request, rows), status: 200 };
+      return { data: buildPublicListings(request, rows), status: 200 };
     }
   }
 
@@ -587,7 +508,7 @@ async function runListingSearch(
   }
 
   const rows = await fetchListingsByFilters(fallbackFilters, limit, listingName ?? undefined);
-  return { data: await buildSearchListings(request, rows), status: 200 };
+  return { data: buildPublicListings(request, rows), status: 200 };
 }
 
 export async function getSearchListings(c: ApiContext) {

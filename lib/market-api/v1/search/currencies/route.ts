@@ -4,7 +4,7 @@ import type { ApiContext } from "@/lib/market-api/core/context";
 import { requireDatabase } from "@/lib/db/runtime";
 
 import { resolveIconUrl } from "../utils";
-import { uniqueNonEmpty } from "../parsing";
+import { parsePositiveInt, uniqueNonEmpty } from "../parsing";
 import { resolveSearchParams } from "../params";
 
 
@@ -14,15 +14,6 @@ type CurrencySearchRow = {
   name: string;
   iconUrl: string | null;
 };
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
 
 export async function fetchCurrencyById(
   request: Request,
