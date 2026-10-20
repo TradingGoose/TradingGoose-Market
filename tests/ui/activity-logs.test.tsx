@@ -2,13 +2,14 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const market = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
   urls: [] as string[],
   refresh: vi.fn(),
   charts: [] as Array<Array<Record<string, string | number>>>,
+  resolve: null as ((url: string) => Record<string, unknown>) | null,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -17,7 +18,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/use-market-resource", () => ({
   useMarketResource: (url: string) => {
     market.urls.push(url);
-    return { ...market.state, refresh: market.refresh };
+    return { ...(market.resolve?.(url) ?? market.state), refresh: market.refresh };
   },
 }));
 vi.mock("recharts", () => {
@@ -47,10 +48,15 @@ import { ActivityPage } from "../../components/account/activity/activity-page";
 import { LogsPage } from "../../components/account/logs/logs-page";
 import type { ActivityResponse, LogsResponse } from "../../lib/account/contracts";
 
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
 afterEach(() => {
   cleanup();
   market.urls.length = 0;
   market.charts.length = 0;
+  market.resolve = null;
   vi.clearAllMocks();
 });
 
@@ -201,6 +207,40 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
       { timestamp: timestamps[1], series0: 0, series1: 0 },
       { timestamp: timestamps[2], series0: 0, series1: 10 },
     ]);
+  });
+
+  it("ranks Trends by requests without discarding Explore's selected metric", async () => {
+    const interaction = userEvent.setup();
+    const timestamp = "2026-07-20T00:00:00Z";
+    market.resolve = (url) => {
+      const metric = new URL(url, "https://market.example").searchParams.get("metric");
+      const series = metric === "errors"
+        ? Array.from({ length: 8 }, (_, index) => ({
+          timestamp, seriesId: `error-app-${index}`, seriesLabel: `Error app ${index}`,
+          requests: 2, successes: 0, errors: 2,
+        }))
+        : [{ timestamp, seriesId: "busy-app", seriesLabel: "Busy app", requests: 1000, successes: 1000, errors: 0 }];
+      return { data: { ...activity, series }, error: null, isLoading: false };
+    };
+    render(<ActivityPage />);
+    await interaction.click(screen.getByRole("tab", { name: "Explore" }));
+    const metricSelect = screen.getAllByRole("combobox").find((control) => control.textContent === "Requests");
+    expect(metricSelect).toBeTruthy();
+    metricSelect!.focus();
+    await interaction.keyboard("{ArrowDown}{End}{Enter}");
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("metric")).toBe("errors");
+    expect(screen.getByText("Error app 0")).toBeTruthy();
+
+    market.charts.length = 0;
+    await interaction.click(screen.getByRole("tab", { name: "Trends" }));
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("metric")).toBe("requests");
+    expect(market.charts.filter((points) => points.some((point) => Object.hasOwn(point, "series0"))).at(-1))
+      .toEqual([{ timestamp, series0: 1000 }]);
+
+    await interaction.click(screen.getByRole("tab", { name: "Explore" }));
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("metric")).toBe("errors");
+    expect(screen.getByText("Errors by application")).toBeTruthy();
+    expect(screen.getByText("Error app 0")).toBeTruthy();
   });
 
   it("renders explicit empty and error states", () => {

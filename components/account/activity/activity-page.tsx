@@ -194,13 +194,14 @@ export function ActivityPage() {
   const [routeId, setRouteId] = useState("all");
   const [group, setGroup] = useState<Group>("app");
   const [metric, setMetric] = useState<Metric>("requests");
+  const seriesMetric = selectedTab === "explore" ? metric : "requests";
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
       range,
       granularity: range === "24h" ? "hour" : "day",
       group,
-      metric
+      metric: seriesMetric
     });
     if (keyId !== "all") params.set("key", keyId);
     if (completion !== "all") params.set("completion", completion);
@@ -208,7 +209,7 @@ export function ActivityPage() {
     if (appUrl !== "all") params.set("app", appUrl);
     if (routeId !== "all") params.set("route", routeId);
     return params.toString();
-  }, [appUrl, completion, group, keyId, metric, range, resourceId, routeId]);
+  }, [appUrl, completion, group, keyId, range, resourceId, routeId, seriesMetric]);
 
   const resource = useMarketResource<ActivityResponse>(`/api/account/activity?${query}`);
   const data = resource.data;
