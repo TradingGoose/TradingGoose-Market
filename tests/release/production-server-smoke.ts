@@ -87,7 +87,7 @@ function captureOutput(current: string, chunk: Buffer | string): string {
     : combined.slice(combined.length - MAX_CAPTURED_OUTPUT);
 }
 
-function requireBaseEnvironment(environment: NodeJS.ProcessEnv): ReleaseBaseEnvironment {
+export function requireBaseEnvironment(environment: NodeJS.ProcessEnv): ReleaseBaseEnvironment {
   const entries = RELEASE_REQUIRED_BASE_ENV_KEYS.map((key) => {
     const value = environment[key];
     invariant(value !== undefined && value.trim().length > 0, `${key} is required for release validation.`);
@@ -99,8 +99,8 @@ function requireBaseEnvironment(environment: NodeJS.ProcessEnv): ReleaseBaseEnvi
   const authUrl = new URL(base.BETTER_AUTH_URL);
   invariant(appUrl.origin === authUrl.origin, "Release validation origins must match.");
   invariant(
-    appUrl.protocol === "https:" && ["127.0.0.1", "localhost"].includes(appUrl.hostname),
-    "Release validation must use an explicit loopback HTTPS public origin.",
+    appUrl.protocol === "https:" && appUrl.hostname === "localhost",
+    "Release validation must use an explicit localhost HTTPS public origin.",
   );
   invariant(appUrl.port.length > 0, "Release validation origin must include an isolated port.");
   return base;
@@ -519,6 +519,7 @@ async function runMode(
   const publicOrigin = new URL(base.NEXT_PUBLIC_APP_URL);
   const serverOrigin = new URL(publicOrigin);
   serverOrigin.protocol = "http:";
+  serverOrigin.hostname = "127.0.0.1";
   const port = Number(serverOrigin.port);
   invariant(Number.isSafeInteger(port) && port > 0, "Release validation port is invalid.");
 

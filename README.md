@@ -167,6 +167,9 @@ owns all four `REGISTRATION_MODE=open|close` ×
 exact route and registration-policy probes—including two rejected
 closed-registration POSTs and one successful local signup in
 open-registration/billing-disabled mode—and always terminates each server.
+The shared public/auth origin is `https://localhost:3000`; transport binds to
+`http://127.0.0.1:3000` and sends canonical forwarded headers, preserving the
+real HTTPS redirect check while matching Next.js's loopback-host normalization.
 Publication requires both gates.
 
 ## License

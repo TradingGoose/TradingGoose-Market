@@ -96,8 +96,8 @@ describe("release workflow contract", () => {
     ]) {
       expect(validation).toContain(`${key}:`);
     }
-    expect(validation).toContain("NEXT_PUBLIC_APP_URL: https://127.0.0.1:3000");
-    expect(validation).toContain("BETTER_AUTH_URL: https://127.0.0.1:3000");
+    expect(validation).toContain("NEXT_PUBLIC_APP_URL: https://localhost:3000");
+    expect(validation).toContain("BETTER_AUTH_URL: https://localhost:3000");
     const authSecretLine = validation
       .split("\n")
       .find((line) => line.trimStart().startsWith("BETTER_AUTH_SECRET:"));
@@ -199,6 +199,7 @@ describe("release workflow contract", () => {
     expect(harness).toContain('request(target, "/api/health", "GET")');
     expect(harness).toContain('appUrl.protocol === "https:"');
     expect(harness).toContain('serverOrigin.protocol = "http:"');
+    expect(harness).toContain('serverOrigin.hostname = "127.0.0.1"');
     expect(harness).toContain('headers.set("x-forwarded-proto"');
     expect(harness).toContain('headers.set("x-forwarded-host"');
     expect(harness).toContain('headers.set("x-forwarded-port"');
