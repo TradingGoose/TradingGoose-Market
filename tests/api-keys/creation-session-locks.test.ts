@@ -10,8 +10,10 @@ vi.mock("@tradinggoose/db", () => ({
 }));
 
 vi.mock("@/lib/db/runtime", () => ({
+  getDatabaseClientOptions: () => ({ parsers: {}, serializers: {} }),
   requireDatabase: vi.fn(),
   reserveDatabaseConnection: mocks.reserveConnection,
+  withDatabaseContext: (_database: unknown, callback: () => Promise<unknown>) => callback(),
 }));
 
 vi.mock("drizzle-orm/postgres-js", () => ({
@@ -149,6 +151,54 @@ beforeEach(() => {
 });
 
 describe("API-key creation session locks", () => {
+  it("keeps the reservation out of the pool when transaction rollback remains unconfirmed", async () => {
+    const reserved = createReservedConnection();
+    const failure = new Error("transaction callback failed");
+    const unsafe = vi.fn(async (query: string) => {
+      if (query === "rollback") throw new Error("rollback response lost");
+      return [];
+    });
+    Object.assign(reserved.connection, { unsafe });
+    mocks.reserveConnection.mockResolvedValue(reserved.connection);
+    mocks.drizzle.mockImplementation((client) => ({
+      transaction: client.begin,
+    }));
+
+    await expect(withAdminGrantHandlerLock("grant_1", async (database) => {
+      await database.transaction(async () => { throw failure; });
+    })).rejects.toBe(failure);
+
+    expect(unsafe.mock.calls.map(([query]) => query)).toEqual([
+      "begin", "rollback", "rollback",
+    ]);
+    expect(reserved.events.at(-1)?.operation).toBe("unlock");
+    expect(reserved.release).not.toHaveBeenCalled();
+  });
+
+  it("returns a reservation only after the owner confirms a previously ambiguous rollback", async () => {
+    const reserved = createReservedConnection();
+    const failure = new Error("transaction callback failed");
+    let rollbacks = 0;
+    const unsafe = vi.fn(async (query: string) => {
+      if (query === "rollback" && ++rollbacks === 1) {
+        throw new Error("rollback response lost");
+      }
+      return [];
+    });
+    Object.assign(reserved.connection, { unsafe });
+    mocks.reserveConnection.mockResolvedValue(reserved.connection);
+    mocks.drizzle.mockImplementation((client) => ({
+      transaction: client.begin,
+    }));
+
+    await expect(withAdminGrantHandlerLock("grant_1", async (database) => {
+      await database.transaction(async () => { throw failure; });
+    })).rejects.toBe(failure);
+
+    expect(rollbacks).toBe(2);
+    expect(reserved.release).toHaveBeenCalledOnce();
+  });
+
   it("uses one reserved connection for public billing-subject then local-key locking and reverse release", async () => {
     const reserved = createReservedConnection();
     const database = { marker: "reserved-database" };

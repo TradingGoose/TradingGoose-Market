@@ -1,14 +1,15 @@
 import { sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
 import {
-  schema,
   type MarketDatabase,
   type MarketTransaction
 } from "@tradinggoose/db";
 import {
+  getDatabaseClientOptions,
   requireDatabase,
   reserveDatabaseConnection,
+  withDatabaseContext,
 } from "@/lib/db/runtime";
+import { createReservedDatabaseSession } from "@/lib/db/reserved";
 
 const BILLING_SUBJECT_LOCK_NAMESPACE = 1_847_001;
 const ADMIN_GRANT_LOCK_NAMESPACE = 1_847_002;
@@ -149,6 +150,7 @@ async function withReservedSessionLockOwner<T>(
   let callbackResult: T | undefined;
   let hasPrimaryError = false;
   let primaryError: unknown;
+  let session: ReturnType<typeof createReservedDatabaseSession> | undefined;
 
   const acquireSessionLock: AcquireSessionLock = async (lock) => {
     const attempt: SessionLockAttempt = { ...lock, held: false };
@@ -163,11 +165,14 @@ async function withReservedSessionLockOwner<T>(
   };
 
   try {
-    const database = drizzle(connection, { schema }) as MarketDatabase;
+    session = createReservedDatabaseSession(connection, getDatabaseClientOptions());
+    const { database } = session;
     for (const lock of initialLocks) {
       await acquireSessionLock(lock);
     }
-    callbackResult = await callback(database, acquireSessionLock);
+    callbackResult = await withDatabaseContext(database, () =>
+      callback(database, acquireSessionLock),
+    );
   } catch (error) {
     hasPrimaryError = true;
     primaryError = error;
@@ -182,6 +187,14 @@ async function withReservedSessionLockOwner<T>(
       cleanupError = error;
     }
   };
+
+  let transactionCleanupConfirmed = true;
+  try {
+    await session?.rollbackOpenTransaction();
+  } catch (error) {
+    transactionCleanupConfirmed = false;
+    recordCleanupError(error);
+  }
 
   for (const attempt of attemptedLocks.reverse()) {
     try {
@@ -218,7 +231,7 @@ async function withReservedSessionLockOwner<T>(
     }
   }
 
-  if (cleanupConfirmed) {
+  if (cleanupConfirmed && transactionCleanupConfirmed) {
     try {
       connection.release();
     } catch (error) {

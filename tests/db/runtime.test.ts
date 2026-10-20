@@ -25,6 +25,7 @@ vi.mock("@/lib/environment", () => ({
 import {
   requireDatabase,
   reserveDatabaseConnection,
+  withDatabaseContext,
 } from "../../lib/db/runtime";
 
 describe("database runtime composition", () => {
@@ -41,5 +42,16 @@ describe("database runtime composition", () => {
     );
     expect(mocks.reserve).toHaveBeenCalledOnce();
     expect(mocks.createMarketDatabase).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a session's database context through awaits without leaking between requests", async () => {
+    const first = { marker: "first" } as unknown as ReturnType<typeof requireDatabase>;
+    const second = { marker: "second" } as unknown as ReturnType<typeof requireDatabase>;
+    await Promise.all([first, second].map((scoped) => withDatabaseContext(scoped, async () => {
+      expect(requireDatabase()).toBe(scoped);
+      await Promise.resolve();
+      expect(requireDatabase()).toBe(scoped);
+    })));
+    expect(requireDatabase()).toBe(mocks.database);
   });
 });
