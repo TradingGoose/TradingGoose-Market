@@ -37,7 +37,10 @@ export async function assertAuthChallengeSecurity(database: ReturnType<typeof po
     return message.otp;
   }
   async function changeEmail(newEmail: string, cookie: string, redirect = false) {
-    const response = await post("/change-email", { newEmail }, cookie);
+    const response = await post("/change-email", {
+      newEmail,
+      ...(redirect ? { callbackURL: "/account/api-keys?settings=profile" } : {}),
+    }, cookie);
     expect(response.status, await response.clone().text()).toBe(200);
     const message = sent.at(-1);
     if (!message || message.kind !== "email-change-verification" || !message.url) throw new Error("Email-change delivery was not captured.");
@@ -47,6 +50,24 @@ export async function assertAuthChallengeSecurity(database: ReturnType<typeof po
   }
   function verify(link: URL) {
     return route.GET(new Request(link));
+  }
+  async function requestReset(email: string) {
+    const response = await post("/request-password-reset", { email, redirectTo: "/reset-password" });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const message = sent.at(-1);
+    if (!message || message.kind !== "password-reset" || !message.url) throw new Error("Reset delivery was not captured.");
+    return new URL(message.url).pathname.split("/").at(-1)!;
+  }
+  async function assertConcurrentFailuresExhaust(email: string) {
+    const otp = await sendOtp(email);
+    const incorrectOtp = otp === "000000" ? "999999" : "000000";
+    const failures = await Promise.all(Array.from({ length: 10 }, () => (
+      post("/sign-in/email-otp", { email, otp: incorrectOtp })
+    )));
+    expect(failures.every((response) => response.status === 400 || response.status === 403)).toBe(true);
+    const correctAfterFailures = await post("/sign-in/email-otp", { email, otp });
+    expect(correctAfterFailures.status).toBe(400);
+    expect(await database`select id from verification where identifier = ${`sign-in-otp-${email}`}`).toHaveLength(0);
   }
 
   try {
@@ -66,27 +87,107 @@ export async function assertAuthChallengeSecurity(database: ReturnType<typeof po
     expect(oldOtp.status).toBe(400);
     expect(await database`select id from session where user_id = ${aliceId}`).toHaveLength(1);
 
+    // Email-change retirement rolls back with a failed unique-address update.
+    const retiringOtp = await sendOtp(originalEmail);
+    const retiringReset = await requestReset(originalEmail);
+    const unavailableEmail = `occupied-${randomUUID()}@example.com`;
+    const rollbackLink = await changeEmail(unavailableEmail, cookie);
+    await signup(unavailableEmail, "Occupied after link issuance");
+    const failedChange = await verify(rollbackLink);
+    expect(failedChange.status).toBe(500);
+    expect((await database<{ email: string }[]>`select email from "user" where id = ${aliceId}`)[0].email).toBe(originalEmail);
+    expect(await database`select id from verification where identifier = ${`sign-in-otp-${originalEmail}`}`).toHaveLength(1);
+    expect(await database`select id from verification where identifier = ${`reset-password:${retiringReset}`}`).toHaveLength(1);
+    expect(await database`select id from verification where identifier = ${`change-email-${aliceId}`}`).toHaveLength(1);
+    expect(await database`select id from session where user_id = ${aliceId}`).toHaveLength(1);
+
     // Only the latest link survives; successful verification keeps Alice's ID.
     const supersededEmail = `superseded-${randomUUID()}@example.com`;
     const currentEmail = `current-${randomUUID()}@example.com`;
-    const supersededLink = await changeEmail(supersededEmail, cookie);
+    const supersededLink = await changeEmail(supersededEmail, cookie, true);
     const currentLink = await changeEmail(currentEmail, cookie);
-    expect((await verify(supersededLink)).status).toBe(401);
-    const changed = await verify(currentLink);
+    const staleCallback = await verify(supersededLink);
+    expect(staleCallback.status).toBe(302);
+    expect(staleCallback.headers.get("location")).toBe("/account/api-keys?settings=profile&error=invalid_token");
+    // Queue verification first behind a real identity row lock, then queue
+    // issuance and redemption which have already read the old identity/token.
+    // They must recheck after the change wins, not recreate or use old proofs.
+    const racing: Promise<Response>[] = [];
+    try {
+      await database.begin(async (tx) => {
+        await tx.unsafe('select id from "user" where id = $1 for update', [aliceId]);
+        racing.push(verify(currentLink));
+        async function waitForIdentityWaiters(count: number) {
+          await vi.waitFor(async () => {
+            const waiting = await database`
+              select pid from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'
+                and query like 'update "user"%'
+            `;
+            expect(waiting).toHaveLength(count);
+          }, { timeout: 5_000 });
+        }
+        await waitForIdentityWaiters(1);
+        racing.push(
+          post("/request-password-reset", { email: originalEmail, redirectTo: "/reset-password" }),
+          post("/email-otp/send-verification-otp", { email: originalEmail, type: "sign-in" }),
+          post("/sign-in/email-otp", { email: originalEmail, otp: retiringOtp }),
+          post("/reset-password", { token: retiringReset, newPassword: "Racing-password-must-not-win-123!" }),
+        );
+        await waitForIdentityWaiters(5);
+      });
+    } catch (error) {
+      await Promise.allSettled(racing);
+      throw error;
+    }
+    const [changed, resetIssuance, otpIssuance, otpRedemption, resetRedemption] = await Promise.all(racing);
     expect(changed.status, await changed.clone().text()).toBe(200);
     expect((await changed.json() as { user: { id: string } }).user.id).toBe(aliceId);
+    expect(resetIssuance.status).toBe(200);
+    expect(otpIssuance.status).toBe(200);
+    expect(otpRedemption.status).toBe(400);
+    expect(resetRedemption.status).toBe(400);
+    expect(await database`select id from verification where identifier = ${`sign-in-otp-${originalEmail}`}`).toHaveLength(0);
+    expect(await database`select id from verification where identifier = ${`reset-password:${retiringReset}`}`).toHaveLength(0);
 
     // Bob claims the freed email. Neither Alice's older link nor the consumed
     // successful link may change Bob's address or create a session for Bob.
     const bobId = await signup(originalEmail, "Bob");
     expect(bobId).not.toBe(aliceId);
-    expect((await verify(supersededLink)).status).toBe(401);
+    expect((await verify(supersededLink)).status).toBe(302);
     expect((await verify(currentLink)).status).toBe(401);
+    const replayOtp = await post("/sign-in/email-otp", { email: originalEmail, otp: retiringOtp });
+    expect(replayOtp.status).toBe(400);
+    const [originalCredential] = await database<{ password: string }[]>`select password from account where user_id = ${aliceId} and provider_id = 'credential'`;
+    const replayReset = await post("/reset-password", { token: retiringReset, newPassword: "Replayed-password-must-not-win-123!" });
+    expect(replayReset.status).toBe(400);
+    expect((await database<{ password: string }[]>`select password from account where user_id = ${aliceId} and provider_id = 'credential'`)[0].password).toBe(originalCredential.password);
     expect(await database`select id from session where user_id = ${bobId}`).toHaveLength(0);
     const [bob] = await database<{ email: string }[]>`select email from "user" where id = ${bobId}`;
     expect(bob.email).toBe(originalEmail);
     const [alice] = await database<{ email: string }[]>`select email from "user" where id = ${aliceId}`;
     expect(alice.email).toBe(currentEmail);
+
+    // Every failure counts across workers, including Studio's supported
+    // missing-user OTP signup. Neither exhausted challenge creates a session.
+    const sessionsBeforeFailures = await database`select id from session where user_id = ${aliceId}`;
+    const expiredOtp = await sendOtp(currentEmail);
+    await database`update verification set expires_at = now() - interval '1 second' where identifier = ${`sign-in-otp-${currentEmail}`}`;
+    const expired = await post("/sign-in/email-otp", { email: currentEmail, otp: expiredOtp });
+    expect(expired.status).toBe(400);
+    expect(await expired.json()).toMatchObject({ code: "OTP_EXPIRED" });
+    await assertConcurrentFailuresExhaust(currentEmail);
+    expect(await database`select id from session where user_id = ${aliceId}`).toHaveLength(sessionsBeforeFailures.length);
+    const unknownEmail = `otp-only-${randomUUID()}@example.com`;
+    await assertConcurrentFailuresExhaust(unknownEmail);
+    expect(await database`select id from "user" where email = ${unknownEmail}`).toHaveLength(0);
+    const freshUnknownOtp = await sendOtp(unknownEmail);
+    expect((await post("/sign-in/email-otp", { email: unknownEmail, otp: freshUnknownOtp })).status).toBe(200);
+
+    // A fresh reset at the new email still uses Better Auth's one-time owner.
+    const currentReset = await requestReset(currentEmail);
+    expect((await post("/reset-password", { token: currentReset, newPassword: "Current-password-accepted-123!" })).status).toBe(200);
+    expect((await post("/reset-password", { token: currentReset, newPassword: "Current-password-replay-123!" })).status).toBe(400);
 
     // Concurrent OTP redemption is single-use through the actual adapter, not
     // merely a mocked find-then-delete sequence.
@@ -111,7 +212,7 @@ export async function assertAuthChallengeSecurity(database: ReturnType<typeof po
     const redirectLink = await changeEmail(redirectEmail, cookie, true);
     const redirected = await verify(redirectLink);
     expect(redirected.status).toBe(302);
-    expect(redirected.headers.get("location")).toBe("/");
+    expect(redirected.headers.get("location")).toBe("/account/api-keys?settings=profile");
     const [redirectAlice] = await database<{ email: string }[]>`select email from "user" where id = ${aliceId}`;
     expect(redirectAlice.email).toBe(redirectEmail);
     const session = await route.GET(new Request(`${origin}/api/auth/get-session`, { headers: { cookie } }));
