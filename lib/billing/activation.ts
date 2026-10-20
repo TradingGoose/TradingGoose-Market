@@ -1,17 +1,12 @@
 import { subscription, user } from "@tradinggoose/db/schema";
-import type { MarketTransaction } from "@tradinggoose/db";
+import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type Stripe from "stripe";
-import {
-  acquireBillingSubjectLock,
-  withBillingSubjectHandlerLock,
-} from "@/lib/db/locks";
-import { requireDatabase } from "@/lib/db/runtime";
+import { withBillingSubjectHandlerLock } from "@/lib/db/locks";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import {
   ensureMarketCustomerState,
   ensureStripeUserCustomer,
-  getStripeCustomerDefaultPaymentMethodId,
 } from "./customer-state";
 import {
   requireEnabledStripeClient,
@@ -19,6 +14,7 @@ import {
 } from "./stripe-client";
 import {
   getPaygActivationAttemptId,
+  getPaygActivationPriceId,
   PAYG_ACTIVATION_ATTEMPT_METADATA_KEY,
   withPaygActivationAttemptId,
   withoutPaygActivationAttemptId,
@@ -44,13 +40,11 @@ export async function activateMarketPayg(userId: string) {
   const stripe = requireEnabledStripeClient();
   await validateMarketStripePrice(stripe);
   // Keep retirement and provider creation serialized across the committed
-  // attempt and binding transactions. Both helpers use this same reserved
-  // connection, so their transaction locks are reentrant rather than competing.
+  // attempt and binding transactions on the same reserved connection.
   return withBillingSubjectHandlerLock(userId, async (database) => {
     await ensureMarketCustomerState(userId, database);
 
     const activationState = await database.transaction(async (tx) => {
-      await acquireBillingSubjectLock(tx, userId);
       const rows = await tx
         .select()
         .from(subscription)
@@ -73,11 +67,20 @@ export async function activateMarketPayg(userId: string) {
         );
       }
       const existingAttempt = getPaygActivationAttemptId(current.metadata);
+      if (existingAttempt && getPaygActivationPriceId(current.metadata) !== priceId) {
+        // Never replay a committed key with a changed create payload. The
+        // configured Price must match the pending request before recovery.
+        throw new PaygActivationError(
+          "The pending PAYG activation requires its original configured Price",
+          409,
+          "PAYG_ACTIVATION_RETRY_REQUIRED",
+        );
+      }
       const attemptId = existingAttempt ?? crypto.randomUUID();
       if (!existingAttempt) {
         const initialized = await tx
           .update(subscription)
-          .set({ metadata: withPaygActivationAttemptId(current.metadata, attemptId) })
+          .set({ metadata: withPaygActivationAttemptId(current.metadata, attemptId, priceId) })
           .where(
             and(
               eq(subscription.id, current.id),
@@ -90,7 +93,7 @@ export async function activateMarketPayg(userId: string) {
           throw new PaygActivationError("PAYG activation state changed", 409);
         }
       }
-      return { current, attemptId };
+      return { current, attemptId, existingAttempt };
     });
 
     const customer = await ensureStripeUserCustomer(userId, database);
@@ -110,19 +113,22 @@ export async function activateMarketPayg(userId: string) {
     if (inventory.valid.length === 1) {
       providerSubscription = inventory.valid[0];
     } else {
-      const paymentMethodId = getStripeCustomerDefaultPaymentMethodId(customer);
-      if (!paymentMethodId) {
-        const cleared = await clearActivationAttempt(
-          userId,
-          activationState.current.id,
-          activationState.attemptId,
-        );
-        if (!cleared) {
-          throw new PaygActivationError(
-            "PAYG activation state changed while checking the payment method",
-            409,
-            "PAYG_ACTIVATION_RETRY_REQUIRED",
+      if (!customer.invoice_settings.default_payment_method) {
+        // An earlier call may have sent this attempt before losing its
+        // response. Removing the Customer's card does not disprove that create.
+        if (!activationState.existingAttempt) {
+          const cleared = await clearActivationAttempt(
+            database,
+            activationState.current.id,
+            activationState.attemptId,
           );
+          if (!cleared) {
+            throw new PaygActivationError(
+              "PAYG activation state changed while checking the payment method",
+              409,
+              "PAYG_ACTIVATION_RETRY_REQUIRED",
+            );
+          }
         }
         throw new PaygActivationError(
           "Add a default payment method before activating PAYG",
@@ -134,7 +140,8 @@ export async function activateMarketPayg(userId: string) {
         providerSubscription = await stripe.subscriptions.create(
           {
             customer: customer.id,
-            default_payment_method: paymentMethodId,
+            // Use the Customer's current default instead of snapshotting a
+            // mutable card into this attempt's immutable idempotent request.
             items: [{ price: priceId, quantity: 1 }],
             metadata: {
               userId,
@@ -145,7 +152,10 @@ export async function activateMarketPayg(userId: string) {
             payment_behavior: "error_if_incomplete",
           },
           {
-            idempotencyKey: `payg-activate:${activationState.current.id}:${activationState.attemptId}`,
+            // A provider-confirmed deleted Customer can be replaced while
+            // unbound. Its subscriptions are canceled, so the replacement is
+            // a distinct create identity, not a changed replay of the old one.
+            idempotencyKey: `payg-activate:${activationState.current.id}:${activationState.attemptId}:${customer.id}`,
           },
         );
       } catch (error) {
@@ -166,7 +176,7 @@ export async function activateMarketPayg(userId: string) {
             );
           }
           const cleared = await clearActivationAttempt(
-            userId,
+            database,
             activationState.current.id,
             activationState.attemptId,
           );
@@ -179,7 +189,7 @@ export async function activateMarketPayg(userId: string) {
           }
           throw new PaygActivationError(
             "The payment method could not activate PAYG. Review billing details and try again.",
-            getStripeStatus(error) === 402 ? 402 : 409,
+            error.statusCode === 402 ? 402 : 409,
             "PAYG_PROVIDER_REJECTED",
           );
         }
@@ -189,7 +199,6 @@ export async function activateMarketPayg(userId: string) {
 
     const candidateId = providerSubscription.id;
     const persisted = await database.transaction(async (tx) => {
-      await acquireBillingSubjectLock(tx, userId);
       const rows = await tx
         .select({ subscription, stripeCustomerId: user.stripeCustomerId })
         .from(subscription)
@@ -303,30 +312,20 @@ export function isExactMarketSubscription(
     userId: string;
   },
 ) {
-  const rawCustomer = candidate.customer as unknown;
-  const customerId =
-    typeof rawCustomer === "string"
-      ? rawCustomer
-      : rawCustomer &&
-          typeof rawCustomer === "object" &&
-          "id" in rawCustomer &&
-          typeof rawCustomer.id === "string"
-        ? rawCustomer.id
-        : null;
+  const customerId = typeof candidate.customer === "string"
+    ? candidate.customer
+    : candidate.customer?.id;
   const items = Array.isArray(candidate.items?.data) ? candidate.items.data : [];
   const item = items[0];
-  const metadata =
-    candidate.metadata && typeof candidate.metadata === "object"
-      ? candidate.metadata
-      : {};
+  const metadata = candidate.metadata;
   return (
     customerId === expected.customerId &&
     items.length === 1 &&
     item?.price?.id === expected.priceId &&
     item.quantity === 1 &&
-    metadata.userId === expected.userId &&
-    metadata.subscriptionId === expected.localSubscriptionId &&
-    metadata.referenceId === expected.userId
+    metadata?.userId === expected.userId &&
+    metadata?.subscriptionId === expected.localSubscriptionId &&
+    metadata?.referenceId === expected.userId
   );
 }
 
@@ -382,13 +381,11 @@ function assertUnambiguousActivationInventory(inventory: ActivationInventory) {
 }
 
 async function clearActivationAttempt(
-  userId: string,
+  database: MarketDatabase,
   subscriptionId: string,
   expectedAttemptId: string,
 ) {
-  const database = requireDatabase();
   return database.transaction(async (tx) => {
-    await acquireBillingSubjectLock(tx, userId);
     const rows = await tx
       .select()
       .from(subscription)
@@ -418,7 +415,9 @@ async function clearLockedActivationAttempt(
   return cleared.length === 1;
 }
 
-function isAuthoritativeActivationRejection(error: unknown) {
+function isAuthoritativeActivationRejection(
+  error: unknown,
+): error is { type: string; statusCode?: number } {
   if (!error || typeof error !== "object") return false;
   const value = error as { type?: unknown; statusCode?: unknown; code?: unknown };
   // A conflicting idempotent create may still be running after its owner lost
@@ -430,10 +429,4 @@ function isAuthoritativeActivationRejection(error: unknown) {
       typeof value.statusCode === "number" &&
       value.statusCode < 500)
   );
-}
-
-function getStripeStatus(error: unknown) {
-  return error && typeof error === "object" && "statusCode" in error
-    ? Number((error as { statusCode?: unknown }).statusCode)
-    : 0;
 }

@@ -30,8 +30,8 @@ export async function assertCustomerRowLockOrder(
   applicationClient.options.debug = (_connection, query) => {
     emittedQueries.push(query);
   };
-  const [customer] = await monitor<{ id: string; owner_id: string }[]>`
-    select "user".id, owner.id as owner_id
+  const [customer] = await monitor<{ id: string; owner_id: string; email: string; name: string }[]>`
+    select "user".id, owner.id as owner_id, "user".email, "user".name
     from "user"
     join market_usage_owner owner on owner.user_id = "user".id
   `;
@@ -76,7 +76,7 @@ export async function assertCustomerRowLockOrder(
             select id from market_usage_owner
             where id = ${customer.owner_id} for update nowait
           `;
-          return { id: "cus_row_lock" };
+          return { id: "cus_row_lock", email: customer.email, name: customer.name };
         }),
       },
     } as unknown as Stripe);

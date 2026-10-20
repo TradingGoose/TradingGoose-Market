@@ -140,13 +140,6 @@ export function getStripeCustomerReplacementIdempotencyKey(
   return `billing-portal:user-customer-replacement:${digest}`;
 }
 
-export function getStripeCustomerDefaultPaymentMethodId(
-  customer: Stripe.Customer | null | undefined
-) {
-  const candidate = customer?.invoice_settings?.default_payment_method;
-  return typeof candidate === "string" ? candidate : candidate?.id ?? null;
-}
-
 export async function ensureStripeUserCustomer(
   userId: string,
   database: MarketDatabase = requireDatabase()
@@ -154,7 +147,7 @@ export async function ensureStripeUserCustomer(
   const stripe = getOptionalStripeClient();
   if (!stripe) throw new Error("Stripe Customer provisioning is not configured.");
 
-  return withBillingSubjectLock(
+  const identity = await withBillingSubjectLock(
     userId,
     async (transaction) => {
       // The billing-subject lock protects the subscription bridge. Only the
@@ -196,10 +189,13 @@ export async function ensureStripeUserCustomer(
       if (storedCustomerId) {
         try {
           const existing = await stripe.customers.retrieve(storedCustomerId);
-          if (!("deleted" in existing && existing.deleted)) return existing;
+          if (!("deleted" in existing && existing.deleted)) {
+            return { customer: existing, email: record.user.email, name: record.user.name };
+          }
           staleCustomerId = storedCustomerId;
         } catch (error) {
-          if (!isMissingStripeCustomerError(error)) throw error;
+          if (!error || typeof error !== "object" ||
+            !("code" in error) || error.code !== "resource_missing") throw error;
           staleCustomerId = storedCustomerId;
         }
       }
@@ -210,8 +206,8 @@ export async function ensureStripeUserCustomer(
 
       const customer = await stripe.customers.create(
         {
-          email: record.user.email,
-          name: record.user.name,
+          // A lost create response must be retryable after any profile edit.
+          // Only immutable identity participates in this stable idempotent call.
           metadata: {
             userId,
             usageOwnerId: record.usageOwner.id,
@@ -229,26 +225,18 @@ export async function ensureStripeUserCustomer(
         .update(schema.user)
         .set({ stripeCustomerId: customer.id, updatedAt: new Date() })
         .where(eq(schema.user.id, userId));
-      return customer;
+      return { customer, email: record.user.email, name: record.user.name };
     },
     database
   );
-}
 
-function isMissingStripeCustomerError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const stripeError = error as {
-    code?: unknown;
-    type?: unknown;
-    statusCode?: unknown;
-    param?: unknown;
-    message?: unknown;
-  };
-  return (
-    stripeError.code === "resource_missing" ||
-    (stripeError.type === "StripeInvalidRequestError" &&
-      stripeError.statusCode === 404 &&
-      stripeError.param === "customer" &&
-      /no such customer/i.test(String(stripeError.message ?? "")))
-  );
+  // Commit the recovered Customer mapping before mutable profile projection.
+  // A failed update can then retry against that Customer, never another create.
+  if (identity.customer.email !== identity.email || identity.customer.name !== identity.name) {
+    return stripe.customers.update(identity.customer.id, {
+      email: identity.email,
+      name: identity.name,
+    });
+  }
+  return identity.customer;
 }

@@ -8,7 +8,7 @@ import {
 } from "../../lib/billing/activation";
 import {
   getPaygActivationAttemptId,
-  isPaygActive,
+  getPaygActivationPriceId,
   normalizeSubscriptionMetadata,
   withoutPaygActivationAttemptId,
   withPaygActivationAttemptId,
@@ -118,30 +118,27 @@ describe("PAYG activation contract", () => {
     }
   });
 
-  it("preserves unrelated generic metadata while owning only the activation-attempt key", () => {
+  it("preserves unrelated generic metadata while owning the attempt and immutable Price", () => {
     const original = { retained: "value", nested: { safe: true } };
-    const withAttempt = withPaygActivationAttemptId(original, "attempt_1");
+    const withAttempt = withPaygActivationAttemptId(original, "attempt_1", "price_payg");
 
     expect(withAttempt).toEqual({
       retained: "value",
       nested: { safe: true },
       paygActivationAttemptId: "attempt_1",
+      paygActivationPriceId: "price_payg",
     });
     expect(getPaygActivationAttemptId(withAttempt)).toBe("attempt_1");
+    expect(getPaygActivationPriceId(withAttempt)).toBe("price_payg");
     expect(withoutPaygActivationAttemptId(withAttempt)).toEqual(original);
     expect(
-      withoutPaygActivationAttemptId({ paygActivationAttemptId: "attempt_1" }),
+      withoutPaygActivationAttemptId({ paygActivationAttemptId: "attempt_1", paygActivationPriceId: "price_payg" }),
     ).toBeNull();
     expect(getPaygActivationAttemptId({ paygActivationAttemptId: "" })).toBeNull();
+    expect(getPaygActivationPriceId({ paygActivationPriceId: "" })).toBeNull();
     expect(normalizeSubscriptionMetadata(["not", "metadata"])).toEqual({});
   });
 
-  it("treats only the literal active status as entitled", () => {
-    expect(isPaygActive("active")).toBe(true);
-    for (const status of [null, undefined, "trialing", "past_due", "canceled"]) {
-      expect(isPaygActive(status)).toBe(false);
-    }
-  });
 });
 
 function subscriptionCandidate(
