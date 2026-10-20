@@ -1,9 +1,26 @@
-import type Stripe from "stripe";
+import Stripe from "stripe";
 import { describe, expect, it } from "vitest";
-import { createAndSettleUsageInvoice } from "../../lib/billing/threshold-billing";
+import { createAndSettleUsageInvoice, UsageInvoicePaymentFailedError } from "../../lib/billing/threshold-billing";
 import { usageStripeFixture } from "./stripe-usage-fixture";
 
 describe("usage settlement subscription retrieval", () => {
+  it("distinguishes authoritative card declines from transient payment uncertainty", async () => {
+    const stripe = usageStripeFixture();
+    const decline = new Stripe.errors.StripeCardError({
+      type: "card_error", code: "card_declined", message: "Your card was declined",
+    });
+    stripe.payInvoice.mockRejectedValueOnce(decline);
+    await expect(createAndSettleUsageInvoice(stripe.client, settlementInput()))
+      .rejects.toMatchObject({
+        name: "UsageInvoicePaymentFailedError", cause: decline,
+        invoice: { id: "in_1", customer: "cus_1", metadata: { subscriptionId: "sub_provider" } },
+      });
+    const uncertain = new Stripe.errors.StripeConnectionError({ type: "api_error", message: "Connection timed out" });
+    stripe.payInvoice.mockRejectedValueOnce(uncertain);
+    await expect(createAndSettleUsageInvoice(stripe.client, settlementInput()))
+      .rejects.toBe(uncertain);
+    expect(uncertain).not.toBeInstanceOf(UsageInvoicePaymentFailedError);
+  });
   it("propagates exact-current retrieval failure before Customer or invoice work", async () => {
     const unavailable = new Error("subscription retrieval unavailable");
     const stripe = usageStripeFixture();

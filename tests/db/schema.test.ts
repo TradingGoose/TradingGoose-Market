@@ -19,7 +19,8 @@ describe("Market standalone authored schema", () => {
     expect(schema.userStats.usageOwnerId).toBeDefined();
     expect(schema.userStats.billingReferenceId).toBeDefined();
     expect("customUsageLimit" in schema.userStats).toBe(false);
-    expect("billingBlocked" in schema.userStats).toBe(false);
+    expect(schema.userStats.billingBlocked.notNull).toBe(true);
+    expect(schema.userStats.billingBlocked.default).toBe(false);
 
     const statsForeignKeys = getTableConfig(schema.userStats).foreignKeys;
     expect(

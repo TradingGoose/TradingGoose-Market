@@ -41,6 +41,7 @@ export async function GET(request: Request) {
   const stats = state.userStats;
   return Response.json({
     billingEnabled: config.billing.enabled,
+    billingBlocked: stats.billingBlocked,
     plan: "payg",
     rateUsdPer1000Reads: config.billing.usdPer1000Reads,
     currentPeriodRequestQuantity: Number(stats.currentPeriodRequestQuantity),

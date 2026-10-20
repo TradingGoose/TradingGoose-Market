@@ -3,13 +3,19 @@ import {
   marketApiUsageEvent,
   marketUsageOwner,
   subscription,
+  userStats,
   systemAdmin,
   user,
 } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { nanoUsdToDecimalUsd } from "@/lib/billing/money";
-import { checkAndBillMarketThreshold } from "@/lib/billing/threshold-billing";
+import {
+  checkAndBillMarketThreshold,
+  UsageInvoicePaymentFailedError,
+} from "@/lib/billing/threshold-billing";
+import { requireEnabledStripeClient } from "@/lib/billing/stripe-client";
+import { handleMarketUsageInvoicePayment } from "@/lib/billing/webhooks/invoices";
 import {
   acquireAdminGrantLock,
   acquireApiKeyLock,
@@ -303,6 +309,17 @@ async function admitPublicRequest(input: {
           checkAndBillMarketThreshold(tx, userId),
         );
       } catch (error) {
+        if (error instanceof UsageInvoicePaymentFailedError) {
+          // Admission is already committed. Save the authoritative failure in a
+          // separate transaction while the same subject lock is still held.
+          try {
+            await handleMarketUsageInvoicePayment(requireEnabledStripeClient(), error.invoice, lockedDatabase);
+          } catch (persistenceError) {
+            console.error("Market payment failure projection deferred to its webhook", {
+              errorClass: persistenceError instanceof Error ? persistenceError.name : "UnknownError",
+            });
+          }
+        }
         console.error("Market threshold billing deferred after committed admission", {
           errorClass: error instanceof Error ? error.name : "UnknownError",
         });
@@ -348,9 +365,15 @@ async function reloadAuthorizedPublicKey(
   }
 
   if (requireActiveBilling) {
-    const subscriptions = await tx
-      .select()
+    const [payg] = await tx
+      .select({
+        status: subscription.status,
+        stripeCustomerId: subscription.stripeCustomerId,
+        stripeSubscriptionId: subscription.stripeSubscriptionId,
+        billingBlocked: userStats.billingBlocked,
+      })
       .from(subscription)
+      .innerJoin(userStats, eq(userStats.userId, subscription.referenceId))
       .where(
         and(
           eq(subscription.referenceType, "user"),
@@ -358,17 +381,17 @@ async function reloadAuthorizedPublicKey(
           eq(subscription.plan, "payg"),
         ),
       )
-      .for("update")
+      .for("update", { of: subscription })
       .limit(1);
-    const payg = subscriptions[0];
     if (
       !payg ||
       payg.status !== "active" ||
       !payg.stripeCustomerId ||
-      !payg.stripeSubscriptionId
+      !payg.stripeSubscriptionId ||
+      payg.billingBlocked
     ) {
       throw new AccessResponseError(
-        jsonError("Active billing is required", 402, "BILLING_REQUIRED"),
+        jsonError("Active billing without outstanding payment failures is required", 402, "BILLING_REQUIRED"),
       );
     }
   }

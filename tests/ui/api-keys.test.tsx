@@ -70,6 +70,7 @@ const detail: MarketApiKeyDetail = {
 function billing(enabled: boolean) {
   return {
     billingEnabled: enabled,
+    billingBlocked: false,
     plan: "payg",
     rateUsdPer1000Reads: "1",
     currentPeriodRequestQuantity: 1250,
@@ -91,6 +92,17 @@ function renderPage(page: React.ReactElement) {
 }
 
 describe("OpenRouter-shaped Market API-key canvases", () => {
+  it("explains payment-paused access without blocking customer key management", async () => {
+    const interaction = userEvent.setup();
+    market.resources.set("/api/account/api-keys", { data: { keys: [summary] }, error: null, isLoading: false });
+    market.resources.set("/api/account/billing", { data: { ...billing(true), billingBlocked: true }, error: null, isLoading: false });
+    renderPage(<ApiKeysPage />);
+    expect(screen.getByText(/API access is paused because a usage payment failed/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Studio client" })).toBeTruthy();
+    await interaction.click(screen.getByRole("button", { name: "New Key" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create key" })).toBeTruthy();
+  });
   it("renders real key fields, search/count hierarchy, and disabled-billing notice", () => {
     market.resources.set("/api/account/api-keys", {
       data: { keys: [summary] },

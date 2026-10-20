@@ -24,6 +24,7 @@ afterEach(() => {
 
 const base = {
   billingEnabled: true,
+  billingBlocked: false,
   rateUsdPer1000Reads: "1",
   requestNanoUsd: "1000000",
   status: "inactive",
@@ -44,6 +45,15 @@ function setResource(data: unknown, options?: { loading?: boolean; error?: Error
 }
 
 describe("Studio-shaped PAYG settings", () => {
+  it("shows failed-payment recovery while retaining the literal active subscription and Portal action", () => {
+    setResource({ ...base, status: "active", billingBlocked: true, activationAvailable: false, portalAvailable: true });
+    render(<SubscriptionSettings onOpenChange={vi.fn()} />);
+    expect(screen.getByText("active")).toBeTruthy();
+    expect(screen.getByText("Payment recovery required")).toBeTruthy();
+    expect(screen.getByText(/API access is paused because a usage payment failed/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Manage Billing/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Activate PAYG" })).toBeNull();
+  });
   it("keeps key usage available while removing billing actions in disabled mode", () => {
     setResource({ ...base, billingEnabled: false, activationAvailable: false });
     render(<SubscriptionSettings onOpenChange={vi.fn()} />);

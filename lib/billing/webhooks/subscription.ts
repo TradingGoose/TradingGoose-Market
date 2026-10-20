@@ -322,6 +322,12 @@ export async function handleMarketSubscriptionDeleted(
         })
         .where(eq(userStats.id, stats.id));
     }
+    // This binding can be removed only after every retained usage slice has
+    // settled, so its payment block must not leak into a later activation.
+    if (stats.billingBlocked) {
+      await tx.update(userStats).set({ billingBlocked: false, updatedAt: new Date() })
+        .where(eq(userStats.id, stats.id));
+    }
     const cleared = await tx
       .update(subscription)
       .set({

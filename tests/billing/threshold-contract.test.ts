@@ -2,6 +2,7 @@ import type { MarketTransaction } from "@tradinggoose/db";
 import type Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { usageStripeFixture } from "./stripe-usage-fixture";
+import { nanoUsdToDecimalUsd } from "../../lib/billing/money";
 
 const state = vi.hoisted(() => ({
   enabled: true,
@@ -72,7 +73,7 @@ describe("Studio-parity PAYG threshold settlement", () => {
     ]);
   });
 
-  it("does nothing below threshold and waives a threshold-reaching sub-cent amount", async () => {
+  it("keeps threshold-reaching sub-cent balances pending without provider work", async () => {
     const stripe = usageStripeFixture();
     state.stripe = stripe.client;
     const below = transactionFixture({
@@ -86,14 +87,55 @@ describe("Studio-parity PAYG threshold settlement", () => {
     expect(stripe.invoiceCreate).not.toHaveBeenCalled();
     expect(below.updates).toEqual([]);
 
-    const waiver = transactionFixture({
-      currentPeriodCost: "0.001",
-      billedOverageThisPeriod: "0",
-    });
-    await checkAndBillMarketThreshold(waiver.client, "user_1");
+    for (const currentPeriodCost of ["0.001", "0.004", "0.005", "0.009999999"]) {
+      const pending = transactionFixture({ currentPeriodCost, billedOverageThisPeriod: "0" });
+      await checkAndBillMarketThreshold(pending.client, "user_1");
+      expect(pending.updates).toEqual([]);
+    }
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(stripe.invoiceList).not.toHaveBeenCalled();
     expect(stripe.invoiceCreate).not.toHaveBeenCalled();
-    expect(waiver.updates).toEqual([
-      expect.objectContaining({ billedOverageThisPeriod: "0.001" }),
+  });
+
+  it("collects exactly one dollar for a thousand milli-dollar reads with a sub-cent threshold", async () => {
+    const stripe = usageStripeFixture();
+    state.stripe = stripe.client;
+    state.threshold = "0.001";
+    let billedOverageThisPeriod = "0";
+    for (let quantity = 1; quantity <= 1000; quantity += 1) {
+      const currentPeriodCost = nanoUsdToDecimalUsd(BigInt(quantity) * 1_000_000n);
+      const transaction = transactionFixture({ currentPeriodCost, billedOverageThisPeriod });
+      await checkAndBillMarketThreshold(transaction.client, "user_1");
+      if (quantity % 10 === 0) {
+        expect(transaction.updates).toEqual([
+          expect.objectContaining({ billedOverageThisPeriod: currentPeriodCost }),
+        ]);
+        billedOverageThisPeriod = String(transaction.updates[0].billedOverageThisPeriod);
+      } else {
+        expect(transaction.updates).toEqual([]);
+      }
+    }
+    expect(billedOverageThisPeriod).toBe("1");
+    expect(stripe.charges).toHaveLength(100);
+    expect(stripe.charges.every(amount => amount === 1)).toBe(true);
+    expect(stripe.charges.reduce((sum, cents) => sum + cents, 0)).toBe(100);
+  });
+
+  it("retains a new sub-cent remainder after reconciling a paid invoice", async () => {
+    const stripe = usageStripeFixture();
+    state.stripe = stripe.client;
+    state.threshold = "0.001";
+    stripe.state.lostResponse = "pay";
+    await expect(checkAndBillMarketThreshold(transactionFixture({
+      currentPeriodCost: "0.01", billedOverageThisPeriod: "0",
+    }).client, "user_1")).rejects.toThrow("pay response lost");
+
+    const retry = transactionFixture({ currentPeriodCost: "0.015", billedOverageThisPeriod: "0" });
+    await checkAndBillMarketThreshold(retry.client, "user_1");
+    expect(stripe.charges).toEqual([1]);
+    expect(stripe.invoiceCreate).toHaveBeenCalledOnce();
+    expect(retry.updates).toEqual([
+      expect.objectContaining({ billedOverageThisPeriod: "0.01" }),
     ]);
   });
 

@@ -1,7 +1,7 @@
 import { subscription, userStats } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq } from "drizzle-orm";
-import type Stripe from "stripe";
+import Stripe from "stripe";
 import { createHash } from "node:crypto";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import { databaseNow } from "@/lib/db/clock";
@@ -13,18 +13,25 @@ import {
 } from "./money";
 import { requireEnabledStripeClient } from "./stripe-client";
 
-type BillingTransaction = MarketTransaction;
-
 export interface UsageInvoiceSnapshot {
   fromUsd: string;
   throughUsd: string;
   requestQuantity: string;
 }
 
-const usageInvoiceTypes = ["overage_threshold_billing", "overage_billing", "final_overage_billing"];
+export const usageInvoiceTypes = ["overage_threshold_billing", "overage_billing", "final_overage_billing"];
+const minimumThresholdNanoUsd = 10_000_000n;
 
 export function isUsageInvoiceType(type: string | undefined) {
   return type !== undefined && usageInvoiceTypes.includes(type);
+}
+
+/** A provider-confirmed decline, never a timeout or an ambiguous response. */
+export class UsageInvoicePaymentFailedError extends Error {
+  override readonly name = "UsageInvoicePaymentFailedError";
+  constructor(readonly invoice: Stripe.Invoice, cause: unknown) {
+    super("Market usage invoice payment failed", { cause });
+  }
 }
 
 /** The existing Stripe invoice owns the frozen inputs for its retries. */
@@ -33,7 +40,7 @@ export async function listUsageInvoices(
   input: {
     customerId: string;
     stripeSubscriptionId: string;
-    periodEnd: string;
+    periodEnd?: string;
     types: readonly string[];
   },
 ) {
@@ -44,7 +51,7 @@ export async function listUsageInvoices(
     if (
       metadata && input.types.includes(metadata.type) &&
       metadata.subscriptionId === input.stripeSubscriptionId &&
-      metadata.usagePeriodEnd === input.periodEnd
+      (input.periodEnd === undefined || metadata.usagePeriodEnd === input.periodEnd)
     ) {
       const customerId = typeof invoice.customer === "string"
         ? invoice.customer : invoice.customer?.id;
@@ -114,7 +121,7 @@ async function settleUsageInvoice(
   const invoiceKey = invoice.metadata?.usageInvoiceKey;
   const itemKey = invoice.metadata?.usageItemKey;
   if (!invoiceKey || !itemKey) throw new Error("Stripe usage invoice retry keys are missing");
-  let current = await stripe.invoices.retrieve(invoice.id);
+  let current: Stripe.Invoice = await stripe.invoices.retrieve(invoice.id);
   // A paid/finalized invoice must never receive another item, even if the local
   // transaction rolled back or Stripe's original response was lost.
   if (current.status === "draft") {
@@ -153,8 +160,16 @@ async function settleUsageInvoice(
     const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer!.id;
     const method = await usagePaymentMethod(stripe, customerId,
       invoice.metadata!.subscriptionId, deletedSubscriptionSnapshot);
-    const paid = await stripe.invoices.pay(current.id,
-      method ? { payment_method: method } : {});
+    let paid: Stripe.Invoice;
+    try {
+      paid = await stripe.invoices.pay(current.id,
+        method ? { payment_method: method } : {});
+    } catch (error) {
+      if (error instanceof Stripe.errors.StripeCardError) {
+        throw new UsageInvoicePaymentFailedError(current, error);
+      }
+      throw error;
+    }
     if (paid.status !== "paid") throw new Error("Stripe usage invoice payment did not complete");
     current = paid;
   }
@@ -272,7 +287,7 @@ export async function createAndSettleUsageInvoice(
 }
 
 export async function checkAndBillMarketThreshold(
-  tx: BillingTransaction,
+  tx: MarketTransaction,
   userId: string,
 ) {
   const config = getMarketRuntimeConfig();
@@ -321,7 +336,11 @@ export async function checkAndBillMarketThreshold(
   // Routine reads need only local accrual. An ambiguous settlement leaves this
   // remainder above its threshold; cycle/final settlement also recovers invoices
   // when the threshold changes or this period closes before another retry.
+  // A threshold below one USD cent must not repeatedly waive sub-cent
+  // usage or round half a cent up on every few reads. Leave that exact balance
+  // in the existing accumulator until at least one full USD cent is due.
   if (
+    currentNano - storedBilledNano < minimumThresholdNanoUsd ||
     !nanoUsdMeetsDecimalThreshold(currentNano - storedBilledNano, config.billing.invoiceThresholdUsd) ||
     (await databaseNow(tx)).getTime() >= localSubscription.periodEnd.getTime()
   ) {
@@ -344,33 +363,30 @@ export async function checkAndBillMarketThreshold(
   let settledThroughUsd = reconciledBilledUsd;
   // The cycle owner must first remove the closed period from this accumulator.
   // Reads admitted after its boundary belong to the next period.
-  if (nanoUsdMeetsDecimalThreshold(unbilledNano, config.billing.invoiceThresholdUsd)) {
+  if (unbilledNano >= minimumThresholdNanoUsd &&
+    nanoUsdMeetsDecimalThreshold(unbilledNano, config.billing.invoiceThresholdUsd)) {
     const amountCents = nanoUsdToCentsHalfUp(unbilledNano);
-    if (amountCents > 0) {
-      const billingPeriod = localSubscription.periodEnd.toISOString().slice(0, 7);
-      const covered = await createAndSettleUsageInvoice(stripe, {
-        customerId: localSubscription.stripeCustomerId,
-        stripeSubscriptionId: localSubscription.stripeSubscriptionId,
-        amountCents,
-        description: `Market usage threshold – ${billingPeriod}`,
-        itemDescription: `Market data API usage – ${billingPeriod}`,
-        metadata: {
-          type: "overage_threshold_billing",
-          userId,
-          subscriptionId: localSubscription.stripeSubscriptionId,
-          billingPeriod,
-          usagePeriodEnd: localSubscription.periodEnd.toISOString(),
-        },
-        snapshot: {
-          fromUsd: reconciledBilledUsd,
-          throughUsd: stats.currentPeriodCost,
-          requestQuantity: stats.currentPeriodRequestQuantity,
-        },
-      });
-      settledThroughUsd = covered.throughUsd;
-    } else {
-      settledThroughUsd = stats.currentPeriodCost;
-    }
+    const billingPeriod = localSubscription.periodEnd.toISOString().slice(0, 7);
+    const covered = await createAndSettleUsageInvoice(stripe, {
+      customerId: localSubscription.stripeCustomerId,
+      stripeSubscriptionId: localSubscription.stripeSubscriptionId,
+      amountCents,
+      description: `Market usage threshold – ${billingPeriod}`,
+      itemDescription: `Market data API usage – ${billingPeriod}`,
+      metadata: {
+        type: "overage_threshold_billing",
+        userId,
+        subscriptionId: localSubscription.stripeSubscriptionId,
+        billingPeriod,
+        usagePeriodEnd: localSubscription.periodEnd.toISOString(),
+      },
+      snapshot: {
+        fromUsd: reconciledBilledUsd,
+        throughUsd: stats.currentPeriodCost,
+        requestQuantity: stats.currentPeriodRequestQuantity,
+      },
+    });
+    settledThroughUsd = covered.throughUsd;
   }
   if (settledThroughUsd === stats.billedOverageThisPeriod) return;
   await tx

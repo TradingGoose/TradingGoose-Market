@@ -18,6 +18,8 @@ const accessState = vi.hoisted(() => ({
   database: null as unknown,
   anonymousFactory: vi.fn(),
   thresholdBilling: vi.fn(),
+  recordPaymentFailure: vi.fn(),
+  stripe: {},
   billingLocks: vi.fn(),
 }));
 
@@ -28,12 +30,17 @@ vi.mock("@/lib/unkey/runtime", () => ({
   getMarketKeyProvider: () => accessState.provider,
 }));
 vi.mock("@/lib/db/runtime", () => ({ requireDatabase: () => accessState.database }));
+vi.mock("@/lib/billing/stripe-client", () => ({ requireEnabledStripeClient: () => accessState.stripe }));
 vi.mock("@/lib/unkey/anonymous", () => ({
   createAnonymousLimiter: (...args: unknown[]) => accessState.anonymousFactory(...args),
 }));
-vi.mock("@/lib/billing/threshold-billing", () => ({
+vi.mock("@/lib/billing/threshold-billing", async importOriginal => ({
+  ...await importOriginal<typeof import("../../lib/billing/threshold-billing")>(),
   checkAndBillMarketThreshold: (...args: unknown[]) =>
     accessState.thresholdBilling(...args),
+}));
+vi.mock("@/lib/billing/webhooks/invoices", () => ({
+  handleMarketUsageInvoicePayment: (...args: unknown[]) => accessState.recordPaymentFailure(...args),
 }));
 vi.mock("@/lib/db/locks", () => ({
   acquireAdminGrantLock: vi.fn(async () => undefined),
@@ -47,6 +54,7 @@ vi.mock("@/lib/db/locks", () => ({
 }));
 
 import { handleKeyedMarketRoute } from "../../lib/market-api/core/access";
+import { UsageInvoicePaymentFailedError } from "../../lib/billing/threshold-billing";
 import { resolveKeyedMarketRoute } from "../../lib/market-api/core/manifest";
 
 beforeEach(() => {
@@ -58,6 +66,7 @@ beforeEach(() => {
   accessState.database = null;
   accessState.anonymousFactory.mockReset();
   accessState.thresholdBilling.mockReset().mockResolvedValue(undefined);
+  accessState.recordPaymentFailure.mockReset().mockResolvedValue(undefined);
   accessState.billingLocks.mockReset().mockImplementation(
     async (_userId: string, _keyId: string, callback: (database: unknown) => unknown) =>
       callback(accessState.database),
@@ -404,6 +413,38 @@ describe("exclusive Market API actors", () => {
     expect(retry.status).toBe(200);
     expect(accessState.thresholdBilling).toHaveBeenCalledTimes(2);
     expect(handler).toHaveBeenCalledTimes(2);
+    expect(accessState.recordPaymentFailure).not.toHaveBeenCalled();
+  });
+
+  it("preserves the admitted response but blocks later usage after an authoritative payment failure", async () => {
+    accessState.config = {
+      billing: { enabled: true, usdPer1000Reads: "1", requestNanoUsd: 1_000_000n },
+      unkey: { anonymous: null },
+    };
+    accessState.provider.verifyKey = vi.fn(async () => ({
+      valid: true, code: "VALID", keyId: "provider_public", permissions: ["market.public"], ratelimits: [],
+    }));
+    const billingBlocked = { value: false };
+    accessState.database = publicAdmissionDatabase({
+      emailVerified: true, ownerUserId: "user_1", billingBlocked,
+    });
+    const failure = new UsageInvoicePaymentFailedError({
+      id: "in_declined", customer: "cus_1", metadata: { subscriptionId: "sub_provider" },
+    } as never, new Error("Card declined"));
+    accessState.thresholdBilling.mockRejectedValueOnce(failure);
+    accessState.recordPaymentFailure.mockImplementationOnce(async () => { billingBlocked.value = true; });
+    const handler = vi.fn(async () => Response.json({ ok: true }));
+    const request = () => new Request("https://market.example.com/api/search/cities?version=v1", {
+      headers: { "x-api-key": "tg_public" },
+    });
+    const route = resolveKeyedMarketRoute("/api/search/cities")!;
+    expect((await handleKeyedMarketRoute(request(), route, handler)).status).toBe(200);
+    expect(accessState.recordPaymentFailure).toHaveBeenCalledWith(accessState.stripe, failure.invoice, accessState.database);
+    const second = await handleKeyedMarketRoute(request(), route, handler);
+    expect(second.status).toBe(402);
+    expect(await second.json()).toMatchObject({ code: "BILLING_REQUIRED" });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(accessState.thresholdBilling).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -611,6 +652,7 @@ function publicAdmissionDatabase(input: {
   spendWindowDays?: number;
   now?: Date;
   usageConditions?: SQL[];
+  billingBlocked?: { value: boolean };
 }) {
   const key = {
     id: "local_public",
@@ -649,6 +691,7 @@ function publicAdmissionDatabase(input: {
                 status: "active",
                 stripeCustomerId: "cus_1",
                 stripeSubscriptionId: "sub_provider",
+                billingBlocked: input.billingBlocked?.value ?? false,
               }];
             }
             if (table === userStats) {
@@ -657,6 +700,7 @@ function publicAdmissionDatabase(input: {
                 userId: "user_1",
                 usageOwnerId: "owner_1",
                 billingReferenceId: "user_1",
+                billingBlocked: input.billingBlocked?.value ?? false,
               }];
             }
             if (table === marketApiUsageCompletion) return [];

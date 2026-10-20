@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SNAPSHOT_PATH = resolve(
   PROJECT_ROOT,
-  "packages/db/migrations/meta/0008_snapshot.json",
+  "packages/db/migrations/meta/0007_snapshot.json",
 );
 const REQUIRED_CONTROL_DATABASE = "market_quality";
 const GENERATED_DATABASE_PREFIX = "market_fresh_";
@@ -632,6 +632,8 @@ describe.sequential("fresh database migration", () => {
           await assertCustomerRowLockOrder(targetSql, applicationClient);
           const { assertActivationSerialization } = await import("../helpers/activation-serialization");
           await assertActivationSerialization(targetSql);
+          const { assertBillingPaymentBlock } = await import("../helpers/billing-payment-block");
+          await assertBillingPaymentBlock(targetSql);
           const { assertAuthChallengeSecurity } = await import("../helpers/auth-challenge-security");
           await assertAuthChallengeSecurity(targetSql);
           const { assertUsageBucketGaps } = await import("../helpers/usage-bucket-gaps");

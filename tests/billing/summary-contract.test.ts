@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const summaryState = vi.hoisted(() => ({
   billingEnabled: true,
+  billingBlocked: false,
   recovery: "ready" as "ready" | "settlement_pending" | "unavailable",
   stripeSubscriptionId: null as string | null,
 }));
@@ -24,6 +25,7 @@ vi.mock("@/lib/billing/customer-state", () => {
         stripeSubscriptionId: summaryState.stripeSubscriptionId,
       },
       userStats: {
+        billingBlocked: summaryState.billingBlocked,
         currentPeriodRequestQuantity: "0",
         currentPeriodCost: "0",
       },
@@ -61,12 +63,24 @@ import { GET } from "../../app/api/account/billing/route";
 
 beforeEach(() => {
   summaryState.billingEnabled = true;
+  summaryState.billingBlocked = false;
   summaryState.recovery = "ready";
   summaryState.stripeSubscriptionId = null;
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
 describe("billing summary action availability", () => {
+  it("exposes payment recovery without rewriting the subscription status or removing Portal access", async () => {
+    summaryState.billingBlocked = true;
+    summaryState.stripeSubscriptionId = "sub_provider";
+    const response = await GET(new Request("http://localhost/api/account/billing"));
+    expect(await response.json()).toMatchObject({
+      billingBlocked: true,
+      status: null,
+      activationAvailable: false,
+      portalAvailable: true,
+    });
+  });
   it.each([
     [true, "ready", null, true],
     [true, "unavailable", null, false],

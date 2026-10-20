@@ -200,15 +200,6 @@ CREATE TABLE "market_api_usage_events" (
 	CONSTRAINT "market_api_usage_events_attribution_check" CHECK ("market_api_usage_events"."application_title" is null or "market_api_usage_events"."application_url" is not null)
 );
 --> statement-breakpoint
-CREATE TABLE "market_system_state" (
-	"id" text PRIMARY KEY NOT NULL,
-	"status" text NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"completed_at" timestamp with time zone,
-	CONSTRAINT "market_system_state_fixed_id_check" CHECK ("market_system_state"."id" = 'standalone-v1'),
-	CONSTRAINT "market_system_state_completion_check" CHECK (("market_system_state"."status" = 'preparing' and "market_system_state"."completed_at" is null) or ("market_system_state"."status" = 'ready' and "market_system_state"."completed_at" is not null))
-);
---> statement-breakpoint
 CREATE TABLE "market_usage_owner" (
 	"id" text PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" text,
@@ -258,6 +249,7 @@ CREATE TABLE "user_stats" (
 	"current_period_cost" numeric DEFAULT '0' NOT NULL,
 	"last_period_cost" numeric DEFAULT '0' NOT NULL,
 	"billed_overage_this_period" numeric DEFAULT '0' NOT NULL,
+	"billing_blocked" boolean DEFAULT false NOT NULL,
 	"last_active" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "user_stats_quantities_check" CHECK (

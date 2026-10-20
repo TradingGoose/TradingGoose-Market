@@ -1,1 +1,0 @@
-DROP TABLE "market_system_state" CASCADE;

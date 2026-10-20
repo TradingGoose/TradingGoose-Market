@@ -214,6 +214,7 @@ export const userStats = pgTable(
     currentPeriodCost: numeric("current_period_cost").notNull().default("0"),
     lastPeriodCost: numeric("last_period_cost").notNull().default("0"),
     billedOverageThisPeriod: numeric("billed_overage_this_period").notNull().default("0"),
+    billingBlocked: boolean("billing_blocked").notNull().default(false),
     lastActive: timestamp("last_active", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },

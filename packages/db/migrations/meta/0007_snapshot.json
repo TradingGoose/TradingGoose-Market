@@ -1,5 +1,5 @@
 {
-  "id": "4099052a-8a97-4f19-a9d5-ac8055e94f33",
+  "id": "c81ffd0e-b7b5-4c61-a00c-1d3ffa8a0ac8",
   "prevId": "5a8cd016-2916-483b-8c76-c936b81932c2",
   "version": "7",
   "dialect": "postgresql",
@@ -2139,53 +2139,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.market_system_state": {
-      "name": "market_system_state",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "market_system_state_fixed_id_check": {
-          "name": "market_system_state_fixed_id_check",
-          "value": "\"market_system_state\".\"id\" = 'standalone-v1'"
-        },
-        "market_system_state_completion_check": {
-          "name": "market_system_state_completion_check",
-          "value": "(\"market_system_state\".\"status\" = 'preparing' and \"market_system_state\".\"completed_at\" is null) or (\"market_system_state\".\"status\" = 'ready' and \"market_system_state\".\"completed_at\" is not null)"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.market_usage_owner": {
       "name": "market_usage_owner",
       "schema": "",
@@ -3057,6 +3010,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'0'"
+        },
+        "billing_blocked": {
+          "name": "billing_blocked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "last_active": {
           "name": "last_active",

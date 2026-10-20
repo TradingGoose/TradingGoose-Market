@@ -37,6 +37,7 @@ export type MarketApiKeyDetail = MarketApiKeySummary & {
 
 export type BillingSummary = {
   billingEnabled: boolean;
+  billingBlocked: boolean;
   plan: "payg";
   rateUsdPer1000Reads: string;
   currentPeriodRequestQuantity: number;

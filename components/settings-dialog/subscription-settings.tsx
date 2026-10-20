@@ -142,6 +142,7 @@ export function SubscriptionSettings({ onOpenChange }: { onOpenChange: (open: bo
           </div>
         </CardContent>
       </Card>
+      {data.billingBlocked ? <Alert variant="destructive"><AlertDescription>API access is paused because a usage payment failed. Use Manage Billing to resolve outstanding invoices; your API keys and usage history are retained.</AlertDescription></Alert> : null}
       {data.customerRecoveryState === "settlement_pending" ? <Alert variant="warning" appearance="light"><AlertDescription>The prior billing Customer remains locked until subscription settlement completes. Activation and Billing stay unavailable until Stripe retries the final settlement event.</AlertDescription></Alert> : null}
       {data.customerRecoveryState === "unavailable" ? <Alert variant="destructive"><AlertDescription>Billing Customer recovery is temporarily unavailable. Your existing Market usage and keys are unchanged.</AlertDescription></Alert> : null}
       {data.cancelAtPeriodEnd ? <Alert variant="warning" appearance="light"><AlertDescription>Your subscription is scheduled to cancel at period end. Restore it through Manage Billing while it remains active.</AlertDescription></Alert> : null}
@@ -150,7 +151,7 @@ export function SubscriptionSettings({ onOpenChange }: { onOpenChange: (open: bo
         <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
             <p className="text-sm font-medium">
-              {data.cancelAtPeriodEnd ? "Cancellation scheduled" : data.status === "active" ? "Subscription active" : "Activate usage billing"}
+              {data.billingBlocked ? "Payment recovery required" : data.cancelAtPeriodEnd ? "Cancellation scheduled" : data.status === "active" ? "Subscription active" : "Activate usage billing"}
             </p>
             <p className="max-w-xl text-xs text-muted-foreground">
               Stripe Customer Portal is the sole place to view invoices, payments, payment methods, cancellation, and restoration.
