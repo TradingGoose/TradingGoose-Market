@@ -87,12 +87,6 @@ const DialogContent = React.forwardRef<
           }
           event.stopPropagation()
         }}
-        onPointerDown={(event) => {
-          event.stopPropagation()
-        }}
-        onPointerUp={(event) => {
-          event.stopPropagation()
-        }}
         {...props}
       >
         {children}

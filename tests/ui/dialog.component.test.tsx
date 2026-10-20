@@ -41,6 +41,28 @@ function SheetFixture() {
   );
 }
 
+function NestedDialogFixture() {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button type="button">Open parent</button>
+      </DialogTrigger>
+      <DialogContent aria-describedby={undefined}>
+        <DialogTitle>Parent settings</DialogTitle>
+        <Dialog>
+          <DialogTrigger asChild>
+            <button type="button">Open child</button>
+          </DialogTrigger>
+          <DialogContent aria-describedby={undefined}>
+            <DialogTitle>Child settings</DialogTitle>
+            <button type="button">Child control</button>
+          </DialogContent>
+        </Dialog>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function overlayWithBlur(value: string): HTMLElement {
   const overlay = Array.from(document.querySelectorAll<HTMLElement>("[data-state='open']"))
     .find((element) => element.style.backdropFilter === value);
@@ -49,6 +71,65 @@ function overlayWithBlur(value: string): HTMLElement {
 }
 
 describe("TradingGoose Dialog behavior", () => {
+  it.each(["mouse", "touch"] as const)(
+    "dismisses on the first outside %s interaction after using an inner control",
+    async (pointerType) => {
+      const interaction = userEvent.setup();
+      render(<DialogFixture />);
+      const trigger = screen.getByRole("button", { name: "Open settings" });
+      await interaction.click(trigger);
+
+      await waitFor(() => {
+        expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(false);
+      });
+
+      const control = screen.getByRole("button", { name: "Focusable content" });
+      const overlay = overlayWithBlur("blur(1.5px)");
+      if (pointerType === "touch") {
+        await interaction.pointer([
+          { keys: "[TouchA>]", target: control },
+          { keys: "[/TouchA]" },
+        ]);
+        expect(screen.getByRole("dialog")).toBeTruthy();
+        await interaction.pointer([
+          { keys: "[TouchA>]", target: overlay },
+          { keys: "[/TouchA]" },
+        ]);
+      } else {
+        await interaction.click(control);
+        expect(screen.getByRole("dialog")).toBeTruthy();
+        await interaction.click(overlay);
+      }
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(document.activeElement).toBe(trigger);
+      });
+    },
+  );
+
+  it("dismisses only the nested dialog on one outside click and preserves its parent's focus", async () => {
+    const interaction = userEvent.setup();
+    render(<NestedDialogFixture />);
+    await interaction.click(screen.getByRole("button", { name: "Open parent" }));
+    const childTrigger = screen.getByRole("button", { name: "Open child" });
+    await interaction.click(childTrigger);
+
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    await interaction.click(screen.getByRole("button", { name: "Child control" }));
+    const overlays = Array.from(document.querySelectorAll<HTMLElement>("[data-state='open']"))
+      .filter((element) => element.style.backdropFilter === "blur(1.5px)");
+    await interaction.click(overlays[overlays.length - 1]);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Child settings" })).toBeNull();
+      expect(screen.getByRole("dialog", { name: "Parent settings" })).toBeTruthy();
+      expect(document.activeElement).toBe(childTrigger);
+    });
+  });
+
   it("guards initial Escape, then closes and returns focus to its trigger", async () => {
     vi.useFakeTimers();
     render(<DialogFixture />);
