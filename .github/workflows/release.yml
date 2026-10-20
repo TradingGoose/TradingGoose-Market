@@ -70,8 +70,8 @@ jobs:
       - run: bun run test:release
         env:
           DATABASE_URL: postgres://market:market@127.0.0.1:5432/market_release
-          NEXT_PUBLIC_APP_URL: https://localhost:3000
-          BETTER_AUTH_URL: https://localhost:3000
+          NEXT_PUBLIC_APP_URL: https://market.example.test:3000
+          BETTER_AUTH_URL: https://market.example.test:3000
           BETTER_AUTH_SECRET: 51d365045e0022c3c710f22e1d4133321ae9eb5e081d6eee119c09cacf145dfb
           PAYG_USD_PER_1000_READS: "1.00"
           UNKEY_API_ID: api_release_validation

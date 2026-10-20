@@ -14,16 +14,30 @@ function isProtectedUiPath(pathname: string) {
   );
 }
 
+function hasCanonicalOrigin(request: NextRequest, canonicalOrigin: string) {
+  // Next's proxy URL can contain its internal listening hostname and port.
+  // Headers describe the public request only; the configured origin remains
+  // the sole allowed origin and the sole source of redirect destinations.
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? request.nextUrl.host;
+  const protocol = request.headers.get("x-forwarded-proto") ?? request.nextUrl.protocol.slice(0, -1);
+  if ((protocol !== "http" && protocol !== "https") || /[\s,\\/#?@]/u.test(host)) return false;
+  try {
+    return new URL(`${protocol}://${host}`).origin === canonicalOrigin;
+  } catch {
+    return false;
+  }
+}
+
 export function proxy(request: NextRequest) {
   const canonicalOrigin = getCanonicalOrigin();
   if (
-    canonicalOrigin !== request.nextUrl.origin &&
+    !hasCanonicalOrigin(request, canonicalOrigin) &&
     (request.method === "GET" || request.method === "HEAD")
   ) {
-    return NextResponse.redirect(
-      new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, canonicalOrigin),
-      308,
-    );
+    const canonicalUrl = new URL(canonicalOrigin);
+    canonicalUrl.pathname = request.nextUrl.pathname;
+    canonicalUrl.search = request.nextUrl.search;
+    return NextResponse.redirect(canonicalUrl, 308);
   }
 
   if (isProtectedUiPath(request.nextUrl.pathname) && !getSessionCookie(request)) {

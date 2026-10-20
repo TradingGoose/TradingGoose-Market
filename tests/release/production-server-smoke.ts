@@ -99,8 +99,8 @@ export function requireBaseEnvironment(environment: NodeJS.ProcessEnv): ReleaseB
   const authUrl = new URL(base.BETTER_AUTH_URL);
   invariant(appUrl.origin === authUrl.origin, "Release validation origins must match.");
   invariant(
-    appUrl.protocol === "https:" && appUrl.hostname === "localhost",
-    "Release validation must use an explicit localhost HTTPS public origin.",
+    appUrl.protocol === "https:" && appUrl.hostname === "market.example.test",
+    "Release validation must use the isolated market.example.test HTTPS public origin.",
   );
   invariant(appUrl.port.length > 0, "Release validation origin must include an isolated port.");
   return base;
@@ -223,6 +223,7 @@ async function request(
 ): Promise<Response> {
   const headers = new Headers(options.headers);
   if (options.canonical !== false) {
+    headers.set("host", target.publicOrigin.host);
     headers.set("x-forwarded-proto", target.publicOrigin.protocol.slice(0, -1));
     headers.set("x-forwarded-host", target.publicOrigin.host);
     headers.set("x-forwarded-port", target.publicOrigin.port || "443");
@@ -300,6 +301,10 @@ async function smokeCanonicalRedirect(target: SmokeTarget): Promise<void> {
     response.headers.get("location") === new URL(path, target.publicOrigin).toString(),
     "Raw loopback UI request did not redirect to the canonical HTTPS URL.",
   );
+
+  const canonical = await request(target, path, "GET");
+  invariant(canonical.status === 200, `Canonical proxied UI request returned ${canonical.status}.`);
+  invariant(!canonical.headers.has("location"), "Canonical proxied UI request redirected to itself.");
 }
 
 async function smokeAllowedOwners(target: SmokeTarget): Promise<void> {

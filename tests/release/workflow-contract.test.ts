@@ -96,8 +96,8 @@ describe("release workflow contract", () => {
     ]) {
       expect(validation).toContain(`${key}:`);
     }
-    expect(validation).toContain("NEXT_PUBLIC_APP_URL: https://localhost:3000");
-    expect(validation).toContain("BETTER_AUTH_URL: https://localhost:3000");
+    expect(validation).toContain("NEXT_PUBLIC_APP_URL: https://market.example.test:3000");
+    expect(validation).toContain("BETTER_AUTH_URL: https://market.example.test:3000");
     const authSecretLine = validation
       .split("\n")
       .find((line) => line.trimStart().startsWith("BETTER_AUTH_SECRET:"));
@@ -200,11 +200,13 @@ describe("release workflow contract", () => {
     expect(harness).toContain('appUrl.protocol === "https:"');
     expect(harness).toContain('serverOrigin.protocol = "http:"');
     expect(harness).toContain('serverOrigin.hostname = "127.0.0.1"');
+    expect(harness).toContain('headers.set("host", target.publicOrigin.host)');
     expect(harness).toContain('headers.set("x-forwarded-proto"');
     expect(harness).toContain('headers.set("x-forwarded-host"');
     expect(harness).toContain('headers.set("x-forwarded-port"');
     expect(harness).toContain("async function smokeCanonicalRedirect");
     expect(harness).toContain("canonical: false");
+    expect(harness).toContain("Canonical proxied UI request redirected to itself.");
     expect(harness).toContain("async function smokeAllowedOwners");
     expect(harness).toContain('"OPTIONS"');
     expect(harness).toContain('"/api/search/cities?version=v1&city_name=release-smoke-no-match-7f70b2"');
