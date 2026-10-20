@@ -1,4 +1,5 @@
 import { subscription, user } from "@tradinggoose/db/schema";
+import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { acquireBillingSubjectLock } from "@/lib/db/locks";
@@ -180,23 +181,7 @@ export async function activateMarketPayg(userId: string) {
     }
   }
 
-  if (providerSubscription.status !== "active") {
-    throw new PaygActivationError(
-      "Stripe returned a PAYG activation result that requires recovery",
-      409,
-      "PAYG_ACTIVATION_RETRY_REQUIRED",
-    );
-  }
-  if (!isUsableMarketSubscription(providerSubscription, expectedProviderShape)) {
-    throw new PaygActivationError(
-      "Stripe returned an active PAYG subscription that requires reconciliation",
-      409,
-      "PAYG_AMBIGUOUS",
-    );
-  }
-  const item = providerSubscription.items.data[0];
-  if (!item) throw new Error("Stripe PAYG subscription has no item");
-
+  const candidateId = providerSubscription.id;
   const persisted = await database.transaction(async (tx) => {
     await acquireBillingSubjectLock(tx, userId);
     const rows = await tx
@@ -227,6 +212,34 @@ export async function activateMarketPayg(userId: string) {
     ) {
       throw new PaygActivationError("PAYG activation state changed", 409);
     }
+
+    // Idempotent create retries return the original response. Read current
+    // provider state only after acquiring the binding lock, not before a wait.
+    providerSubscription = await stripe.subscriptions.retrieve(candidateId);
+    if (providerSubscription.id !== candidateId ||
+      !isUsableMarketSubscription(providerSubscription, expectedProviderShape)) {
+      throw new PaygActivationError(
+        "Stripe returned a PAYG subscription that requires reconciliation",
+        409,
+        "PAYG_AMBIGUOUS",
+      );
+    }
+    if (providerSubscription.status === "canceled") {
+      // Commit retirement of only this unbound attempt. Throwing here would
+      // roll it back and permanently reuse the canceled create's cached result.
+      if (!await clearLockedActivationAttempt(tx, current.subscription, activationState.attemptId)) {
+        throw new PaygActivationError("PAYG activation state changed", 409);
+      }
+      return null;
+    }
+    if (providerSubscription.status !== "active") {
+      throw new PaygActivationError(
+        "Stripe returned a PAYG activation result that requires recovery",
+        409,
+        "PAYG_ACTIVATION_RETRY_REQUIRED",
+      );
+    }
+    const item = providerSubscription.items.data[0];
     const values = {
       stripeCustomerId: customer.id,
       stripeSubscriptionId: providerSubscription.id,
@@ -260,6 +273,13 @@ export async function activateMarketPayg(userId: string) {
     return bound[0];
   });
 
+  if (!persisted) {
+    throw new PaygActivationError(
+      "The canceled PAYG activation was retired. Try activating again.",
+      409,
+      "PAYG_ACTIVATION_RETRY_REQUIRED",
+    );
+  }
   return {
     success: true,
     status: "activated",
@@ -369,26 +389,26 @@ async function clearActivationAttempt(
       .for("update")
       .limit(1);
     const current = rows[0];
-    if (
-      current &&
-      !current.stripeSubscriptionId &&
-      getPaygActivationAttemptId(current.metadata) === expectedAttemptId
-    ) {
-      const cleared = await tx
-        .update(subscription)
-        .set({ metadata: withoutPaygActivationAttemptId(current.metadata) })
-        .where(
-          and(
-            eq(subscription.id, subscriptionId),
-            isNull(subscription.stripeSubscriptionId),
-            sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} = ${expectedAttemptId}`,
-          ),
-        )
-        .returning({ id: subscription.id });
-      return cleared.length === 1;
-    }
-    return false;
+    return current ? clearLockedActivationAttempt(tx, current, expectedAttemptId) : false;
   });
+}
+
+async function clearLockedActivationAttempt(
+  tx: MarketTransaction,
+  current: typeof subscription.$inferSelect,
+  expectedAttemptId: string,
+) {
+  if (current.stripeSubscriptionId ||
+    getPaygActivationAttemptId(current.metadata) !== expectedAttemptId) return false;
+  const cleared = await tx.update(subscription)
+    .set({ metadata: withoutPaygActivationAttemptId(current.metadata) })
+    .where(and(
+      eq(subscription.id, current.id),
+      isNull(subscription.stripeSubscriptionId),
+      sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} = ${expectedAttemptId}`,
+    ))
+    .returning({ id: subscription.id });
+  return cleared.length === 1;
 }
 
 function isAuthoritativeActivationRejection(error: unknown) {

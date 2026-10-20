@@ -3,6 +3,7 @@ import { subscription, user, userStats } from "@tradinggoose/db/schema";
 import type Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { usageStripeFixture } from "./stripe-usage-fixture";
+import { acquireBillingSubjectLock } from "../../lib/db/locks";
 
 interface SubscriptionState {
   id: string;
@@ -112,7 +113,7 @@ vi.mock("@/lib/billing/user-stats", async importOriginal => {
   };
 });
 
-import { handleMarketSubscriptionDeleted } from "../../lib/billing/webhooks/subscription";
+import { classifyUnboundMarketSubscription, handleMarketSubscriptionDeleted } from "../../lib/billing/webhooks/subscription";
 import { handleMarketCycleInvoiceFinalized, handleMarketUsageInvoicePaid } from "../../lib/billing/webhooks/invoices";
 
 beforeEach(() => {
@@ -153,31 +154,149 @@ beforeEach(() => {
   );
 });
 
+describe("webhook ownership during PAYG activation", () => {
+  it.each(["active", "canceled"])(
+    "retries a %s event when activation binds its provider ID while classification waits",
+    async status => {
+      state.current!.stripeSubscriptionId = null;
+      const stripe = usageStripeFixture();
+      vi.mocked(acquireBillingSubjectLock).mockImplementationOnce(async () => {
+        state.current!.stripeSubscriptionId = "sub_provider";
+      });
+      await expect(classifyUnboundMarketSubscription(stripe.client, {
+        ...deletedSnapshot(), status,
+      } as Stripe.Subscription)).rejects.toThrow("retry its current owner");
+      expect(acquireBillingSubjectLock).toHaveBeenLastCalledWith(expect.anything(), "user_1");
+      expect(state.updates).toEqual([]);
+      expect(stripe.subscriptionRetrieve).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still ignores a prior provider ID after a different activation binds", async () => {
+    state.current!.stripeSubscriptionId = null;
+    vi.mocked(acquireBillingSubjectLock).mockImplementationOnce(async () => {
+      state.current!.stripeSubscriptionId = "sub_reactivated";
+    });
+    await classifyUnboundMarketSubscription({} as Stripe, deletedSnapshot());
+    expect(state.current?.stripeSubscriptionId).toBe("sub_reactivated");
+    expect(state.updates).toEqual([]);
+  });
+
+  it("does not acknowledge a deletion that initially arrived before activation committed its binding", async () => {
+    state.current!.stripeSubscriptionId = null;
+    vi.mocked(acquireBillingSubjectLock).mockImplementationOnce(async () => {
+      state.current!.stripeSubscriptionId = "sub_provider";
+    });
+    await expect(handleMarketSubscriptionDeleted({} as Stripe, deletedSnapshot())).rejects.toThrow("retry its current owner");
+    expect(acquireBillingSubjectLock).toHaveBeenLastCalledWith(expect.anything(), "user_1");
+    expect(state.updates).toEqual([]);
+    expect(state.settle).not.toHaveBeenCalled();
+  });
+});
+
 describe("historical PAYG cycle recovery", () => {
+  it.each(["deletion retry", "invoice.paid"])(
+    "does not recharge later paid periods after catch-up rollback and cancellation via %s",
+    async recovery => {
+      const { stripe, fresh, history } = historicalRecoveryFixture();
+      let declineThirdPeriod = true;
+      const pay = stripe.payInvoice.getMockImplementation()!;
+      stripe.payInvoice.mockImplementation(async (id, parameters) => {
+        if (declineThirdPeriod && stripe.invoices.get(id)?.metadata?.usagePeriodEnd === "2026-11-01T00:00:00.000Z") {
+          throw new Error("Third period card declined");
+        }
+        return pay(id, parameters);
+      });
+
+      await expect(handleMarketCycleInvoiceFinalized(stripe.client, history[0])).rejects.toThrow("Third period card declined");
+      expect(stripe.charges).toEqual([100, 100]);
+      expect(state.current?.periodEnd?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+      expect(state.stats?.currentPeriodCost).toBe("4");
+
+      const canceled = { ...fresh, status: "canceled", ended_at: Date.parse("2026-11-20Z") / 1000 } as Stripe.Subscription;
+      stripe.subscriptionRetrieve.mockResolvedValue(canceled as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+      await expect(handleMarketSubscriptionDeleted(stripe.client, canceled)).rejects.toThrow("Third period card declined");
+      // Cancellation must preserve denial and the entire retryable accumulator,
+      // not charge the aggregate over already-paid September/October slices.
+      expect(stripe.charges).toEqual([100, 100]);
+      expect(state.current?.status).toBe("canceled");
+      expect(state.current?.stripeSubscriptionId).toBe("sub_provider");
+      expect(state.current?.periodEnd?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+      expect(state.stats?.currentPeriodCost).toBe("4");
+
+      declineThirdPeriod = false;
+      if (recovery === "invoice.paid") {
+        const invoice = [...stripe.invoices.values()].find(candidate =>
+          candidate.metadata?.usagePeriodEnd === "2026-11-01T00:00:00.000Z")!;
+        await stripe.payInvoice(invoice.id, { payment_method: "pm_customer_repaired" });
+        await handleMarketUsageInvoicePaid(stripe.client, structuredClone(invoice));
+      } else {
+        await handleMarketSubscriptionDeleted(stripe.client, canceled);
+      }
+      expect(stripe.charges).toEqual([100, 100, 100, 100]);
+      expect(stripe.invoiceCreate).toHaveBeenCalledTimes(4);
+      expect(stripe.invoiceItemsCreate).toHaveBeenCalledTimes(4);
+      expect(state.current?.stripeSubscriptionId).toBeNull();
+      expect(state.stats?.currentPeriodCost).toBe("0");
+      const finalInvoice = [...stripe.invoices.values()].find(invoice => invoice.metadata?.type === "final_overage_billing")!;
+      expect(finalInvoice.metadata).toEqual(expect.objectContaining({
+        usagePeriodEnd: "2026-12-01T00:00:00.000Z", usageFromUsd: "0", usageThroughUsd: "1",
+      }));
+      await handleMarketSubscriptionDeleted(stripe.client, canceled);
+      await handleMarketUsageInvoicePaid(stripe.client, finalInvoice);
+      expect(stripe.charges).toEqual([100, 100, 100, 100]);
+    },
+  );
+
+  it("requires a complete cancellation boundary chain before any historical payment", async () => {
+    const { stripe, fresh, history } = historicalRecoveryFixture();
+    stripe.invoices.delete(history[1].id);
+    await expect(handleMarketSubscriptionDeleted(stripe.client, {
+      ...fresh, status: "canceled", ended_at: Date.parse("2026-11-20Z") / 1000,
+    } as Stripe.Subscription)).rejects.toThrow("settlement gap");
+    expect(stripe.invoiceCreate).not.toHaveBeenCalled();
+    expect(stripe.payInvoice).not.toHaveBeenCalled();
+    expect(state.current?.status).toBe("canceled");
+    expect(state.current?.stripeSubscriptionId).toBe("sub_provider");
+    expect(state.stats?.currentPeriodCost).toBe("4");
+  });
+
+  it.each(["compare-and-set", "commit"])(
+    "recovers all paid historical and final invoices after final %s failure",
+    async failure => {
+      const { stripe, fresh } = historicalRecoveryFixture();
+      const canceled = { ...fresh, status: "canceled", ended_at: Date.parse("2026-11-20Z") / 1000 } as Stripe.Subscription;
+      stripe.subscriptionRetrieve.mockResolvedValue(canceled as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+      state.clearCasMiss = failure === "compare-and-set";
+      if (failure === "commit") {
+        state.beforeTransaction = () => {
+          if (state.activeTransaction === 1) state.failCommitOnce = true;
+        };
+      }
+      await expect(handleMarketSubscriptionDeleted(stripe.client, canceled)).rejects.toThrow(
+        failure === "compare-and-set" ? "binding changed before final settlement cleanup" : "Database commit failed",
+      );
+      expect(stripe.charges).toEqual([100, 100, 100, 100]);
+      expect(state.current?.status).toBe("canceled");
+      expect(state.current?.stripeSubscriptionId).toBe("sub_provider");
+      expect(state.current?.periodEnd?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+      expect(state.stats?.currentPeriodCost).toBe("4");
+
+      state.clearCasMiss = false;
+      state.beforeTransaction = null;
+      const finalInvoice = [...stripe.invoices.values()].find(invoice => invoice.metadata?.type === "final_overage_billing")!;
+      stripe.payInvoice.mockClear();
+      await handleMarketUsageInvoicePaid(stripe.client, finalInvoice);
+      expect(stripe.payInvoice).not.toHaveBeenCalled();
+      expect(stripe.charges).toEqual([100, 100, 100, 100]);
+      expect(stripe.invoiceCreate).toHaveBeenCalledTimes(4);
+      expect(state.current?.stripeSubscriptionId).toBeNull();
+      expect(state.stats?.currentPeriodCost).toBe("0");
+    },
+  );
+
   it("reconciles paid prefixes after a later catch-up charge fails and excludes disabled usage", async () => {
-    state.realProvider = true;
-    state.stats = usageStats({ currentPeriodRequestQuantity: "4", currentPeriodCost: "4" });
-    state.events = [
-      { admittedAt: new Date("2026-08-15Z"), billableQuantity: 1, billableCostUsd: "1" },
-      { admittedAt: new Date("2026-09-15Z"), billableQuantity: 1, billableCostUsd: "1" },
-      { admittedAt: new Date("2026-09-20Z"), billableQuantity: 0, billableCostUsd: "0" },
-      { admittedAt: new Date("2026-10-15Z"), billableQuantity: 1, billableCostUsd: "1" },
-      { admittedAt: new Date("2026-10-20Z"), billableQuantity: 0, billableCostUsd: "0" },
-      { admittedAt: new Date("2026-11-15Z"), billableQuantity: 1, billableCostUsd: "1" },
-    ];
-    const stripe = usageStripeFixture();
-    const fresh = { ...deletedSnapshot(), status: "active", default_payment_method: "pm_subscription",
-      items: { data: [{ price: { id: "price_market_payg" }, quantity: 1,
-        current_period_start: Date.parse("2026-11-01Z") / 1000,
-        current_period_end: Date.parse("2026-12-01Z") / 1000 }] },
-    } as Stripe.Subscription;
-    stripe.subscriptionRetrieve.mockResolvedValue(fresh as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
-    const history = [
-      historicalInvoice("in_cycle_3", "2026-10-01Z", "2026-11-01Z"),
-      historicalInvoice("in_cycle_2", "2026-09-01Z", "2026-10-01Z"),
-      historicalInvoice("in_cycle_1", "2026-08-01Z", "2026-09-01Z"),
-    ];
-    for (const invoice of history) stripe.invoices.set(invoice.id, invoice);
+    const { stripe, history } = historicalRecoveryFixture();
     let declineSecondPeriod = true;
     const pay = stripe.payInvoice.getMockImplementation()!;
     stripe.payInvoice.mockImplementation(async (id, parameters) => {
@@ -209,6 +328,32 @@ describe("historical PAYG cycle recovery", () => {
     expect(stripe.charges).toEqual([100, 100, 100]);
   });
 });
+
+function historicalRecoveryFixture() {
+  state.realProvider = true;
+  state.stats = usageStats({ currentPeriodRequestQuantity: "4", currentPeriodCost: "4" });
+  state.events = [
+    { admittedAt: new Date("2026-08-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+    { admittedAt: new Date("2026-09-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+    { admittedAt: new Date("2026-09-20Z"), billableQuantity: 0, billableCostUsd: "0" },
+    { admittedAt: new Date("2026-10-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+    { admittedAt: new Date("2026-11-15Z"), billableQuantity: 1, billableCostUsd: "1" },
+  ];
+  const stripe = usageStripeFixture();
+  const fresh = { ...deletedSnapshot(), status: "active", default_payment_method: "pm_subscription",
+    items: { data: [{ price: { id: "price_market_payg" }, quantity: 1,
+      current_period_start: Date.parse("2026-11-01Z") / 1000,
+      current_period_end: Date.parse("2026-12-01Z") / 1000 }] },
+  } as Stripe.Subscription;
+  stripe.subscriptionRetrieve.mockResolvedValue(fresh as Awaited<ReturnType<typeof stripe.subscriptionRetrieve>>);
+  const history = [
+    historicalInvoice("in_cycle_3", "2026-10-01Z", "2026-11-01Z"),
+    historicalInvoice("in_cycle_2", "2026-09-01Z", "2026-10-01Z"),
+    historicalInvoice("in_cycle_1", "2026-08-01Z", "2026-09-01Z"),
+  ];
+  for (const invoice of history) stripe.invoices.set(invoice.id, invoice);
+  return { stripe, fresh, history };
+}
 
 describe("PAYG final cancellation settlement", () => {
   it.each(["final_overage_billing", "overage_threshold_billing", "overage_billing"])(
@@ -538,9 +683,11 @@ describe("PAYG final cancellation settlement", () => {
 
     await handleMarketSubscriptionDeleted({} as Stripe, oldSnapshot);
     const transactionCountAfterClear = state.transaction.mock.calls.length;
+    const updatesAfterClear = [...state.updates];
     await handleMarketSubscriptionDeleted({} as Stripe, oldSnapshot);
 
-    expect(state.transaction).toHaveBeenCalledTimes(transactionCountAfterClear);
+    expect(state.transaction).toHaveBeenCalledTimes(transactionCountAfterClear + 1);
+    expect(state.updates).toEqual(updatesAfterClear);
     expect(state.settle).toHaveBeenCalledOnce();
 
     state.current = {
@@ -551,7 +698,8 @@ describe("PAYG final cancellation settlement", () => {
     };
     await handleMarketSubscriptionDeleted({} as Stripe, oldSnapshot);
 
-    expect(state.transaction).toHaveBeenCalledTimes(transactionCountAfterClear);
+    expect(state.transaction).toHaveBeenCalledTimes(transactionCountAfterClear + 2);
+    expect(state.updates).toEqual(updatesAfterClear);
     expect(state.current.stripeSubscriptionId).toBe("sub_reactivated");
     expect(state.current.status).toBe("active");
   });

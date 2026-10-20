@@ -14,6 +14,7 @@ import {
 import { createAndSettleUsageInvoice, reconcileUsageInvoices } from "../threshold-billing";
 import { resolveRetainedUserStatsForSubscription } from "../user-stats";
 import { isExactMarketSubscription } from "../activation";
+import { settleClosedMarketUsagePeriods } from "./closed-period-settlement";
 
 export async function handleMarketSubscriptionProjection(
   stripe: Stripe,
@@ -116,62 +117,69 @@ export async function classifyUnboundMarketSubscription(
   const metadataUserId = fresh.metadata.userId;
   const referenceId = fresh.metadata.referenceId;
   if (!localId || !metadataUserId || referenceId !== metadataUserId) return;
-  const localRows = await database
-    .select({ local: subscription, stripeCustomerId: user.stripeCustomerId })
-    .from(subscription)
-    .innerJoin(user, eq(user.id, subscription.referenceId))
-    .where(
-      and(
+  await database.transaction(async tx => {
+    // Activation binds under this same lock. A webhook that observed no binding
+    // must wait for that decision before acknowledging its provider ID as stale.
+    await acquireBillingSubjectLock(tx, metadataUserId);
+    const localRows = await tx
+      .select()
+      .from(subscription)
+      .where(and(
         eq(subscription.id, localId),
         eq(subscription.referenceType, "user"),
         eq(subscription.referenceId, metadataUserId),
         eq(subscription.plan, "payg"),
-      ),
-    )
-    .limit(2);
-  if (localRows.length !== 1) return;
-  const local = localRows[0].local;
-  if (!local || local.stripeSubscriptionId) return;
-  if (!getPaygActivationAttemptId(local.metadata)) return;
-  if (fresh.status !== "active") return;
+      ))
+      .limit(2);
+    if (localRows.length !== 1) return;
+    const local = localRows[0];
+    if (local.stripeSubscriptionId === fresh.id) {
+      throw new Error("PAYG binding changed during webhook classification; retry its current owner");
+    }
+    if (local.stripeSubscriptionId) return;
+    if (!getPaygActivationAttemptId(local.metadata)) return;
+    if (fresh.status !== "active") return;
 
-  const customerId = providerCustomerId(fresh);
-  if (
-    localRows[0].stripeCustomerId !== customerId ||
-    !isExactMarketSubscription(fresh, {
-      customerId,
-      localSubscriptionId: local.id,
-      priceId: getMarketRuntimeConfig().billing.stripePriceId!,
-      userId: local.referenceId,
-    })
-  ) {
-    return;
-  }
-  const validIds: string[] = [];
-  for await (const candidate of stripe.subscriptions.list({
-    customer: customerId,
-    status: "active",
-    limit: 100,
-  })) {
-    const candidateFresh = await stripe.subscriptions.retrieve(candidate.id);
+    const liveUsers = await selectLiveUserCustomerBridge(tx, metadataUserId);
+    const customerId = providerCustomerId(fresh);
     if (
-      candidateFresh.status === "active" &&
-      isExactMarketSubscription(candidateFresh, {
+      liveUsers.length !== 1 ||
+      liveUsers[0].stripeCustomerId !== customerId ||
+      !isExactMarketSubscription(fresh, {
         customerId,
         localSubscriptionId: local.id,
         priceId: getMarketRuntimeConfig().billing.stripePriceId!,
         userId: local.referenceId,
       })
     ) {
-      validIds.push(candidateFresh.id);
+      return;
     }
-  }
-  if (validIds.length > 1) {
-    throw new Error("Multiple active PAYG recovery candidates are ambiguous");
-  }
-  if (validIds.length === 1 && validIds[0] === fresh.id) {
-    throw new Error("PAYG activation must bind the unique active recovery candidate");
-  }
+    const validIds: string[] = [];
+    for await (const candidate of stripe.subscriptions.list({
+      customer: customerId,
+      status: "active",
+      limit: 100,
+    })) {
+      const candidateFresh = await stripe.subscriptions.retrieve(candidate.id);
+      if (
+        candidateFresh.status === "active" &&
+        isExactMarketSubscription(candidateFresh, {
+          customerId,
+          localSubscriptionId: local.id,
+          priceId: getMarketRuntimeConfig().billing.stripePriceId!,
+          userId: local.referenceId,
+        })
+      ) {
+        validIds.push(candidateFresh.id);
+      }
+    }
+    if (validIds.length > 1) {
+      throw new Error("Multiple active PAYG recovery candidates are ambiguous");
+    }
+    if (validIds.length === 1 && validIds[0] === fresh.id) {
+      throw new Error("PAYG activation must bind the unique active recovery candidate");
+    }
+  });
 }
 
 export async function handleMarketSubscriptionDeleted(
@@ -180,7 +188,10 @@ export async function handleMarketSubscriptionDeleted(
 ) {
   const database = requireDatabase();
   const current = await getPaygSubscriptionByStripeId(snapshot.id);
-  if (!current) return;
+  if (!current) {
+    await classifyUnboundMarketSubscription(stripe, snapshot);
+    return;
+  }
 
   const retainedBinding = await database.transaction(async (tx) => {
     await acquireBillingSubjectLock(tx, current.referenceId);
@@ -246,14 +257,19 @@ export async function handleMarketSubscriptionDeleted(
       .where(eq(userStats.id, retainedStats.id))
       .for("update")
       .limit(1);
-    const stats = statsRows[0];
-    if (!stats) throw new Error("Retained PAYG usage accumulator is missing");
+    const initialStats = statsRows[0];
+    if (!initialStats) throw new Error("Retained PAYG usage accumulator is missing");
+    // A catch-up transaction can roll back after paying more than one historical
+    // period. Recover every such slice through the cycle owner before the final
+    // remainder; reconciling only the oldest period would charge later slices twice.
+    const { stats, periodEnd } = await settleClosedMarketUsagePeriods(
+      tx, stripe, locked, snapshot, customerId, initialStats,
+    );
     const currentNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
-    if (!locked.periodEnd) throw new Error("Canceled PAYG subscription period is missing");
     const billedUsd = await reconcileUsageInvoices(stripe, {
       customerId,
       stripeSubscriptionId: snapshot.id,
-      periodEnd: locked.periodEnd.toISOString(),
+      periodEnd: periodEnd.toISOString(),
       billedUsd: stats.billedOverageThisPeriod,
       currentUsd: stats.currentPeriodCost,
       deletedSubscriptionSnapshot: snapshot,
@@ -283,7 +299,7 @@ export async function handleMarketSubscriptionDeleted(
           type: "final_overage_billing",
           subscriptionId: snapshot.id,
           billingPeriod,
-          usagePeriodEnd: locked.periodEnd.toISOString(),
+          usagePeriodEnd: periodEnd.toISOString(),
         },
         snapshot: { fromUsd: billedUsd, throughUsd: stats.currentPeriodCost, requestQuantity: stats.currentPeriodRequestQuantity },
         deletedSubscriptionSnapshot: snapshot,

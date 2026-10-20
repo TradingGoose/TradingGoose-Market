@@ -88,7 +88,9 @@ describe("PAYG activation lifecycle", () => {
 
   it("binds one exact active provider result and removes only the attempt metadata", async () => {
     state.listResults.push([]);
-    state.create.mockResolvedValue(providerSubscription());
+    const provider = providerSubscription();
+    state.providers.set(String(provider.id), provider);
+    state.create.mockResolvedValue(provider);
 
     const result = await activateMarketPayg("user_1");
 
@@ -196,7 +198,9 @@ describe("PAYG activation lifecycle", () => {
 
   it("retains the attempt when a resolved create returns an unusable provider object", async () => {
     state.listResults.push([]);
-    state.create.mockResolvedValue(providerSubscription({ invalidPeriod: true }));
+    const provider = providerSubscription({ invalidPeriod: true });
+    state.providers.set(String(provider.id), provider);
+    state.create.mockResolvedValue(provider);
 
     await expect(activateMarketPayg("user_1")).rejects.toMatchObject({
       code: "PAYG_AMBIGUOUS",
@@ -209,7 +213,9 @@ describe("PAYG activation lifecycle", () => {
 
   it("retains the attempt when a resolved create has a non-active outcome", async () => {
     state.listResults.push([]);
-    state.create.mockResolvedValue(providerSubscription({ status: "incomplete" }));
+    const provider = providerSubscription({ status: "incomplete" });
+    state.providers.set(String(provider.id), provider);
+    state.create.mockResolvedValue(provider);
 
     await expect(activateMarketPayg("user_1")).rejects.toMatchObject({
       code: "PAYG_ACTIVATION_RETRY_REQUIRED",
@@ -255,6 +261,61 @@ describe("PAYG activation lifecycle", () => {
       code: "PAYG_ACTIVATION_RETRY_REQUIRED",
     } satisfies Partial<PaygActivationError>);
     expect(getPaygActivationAttemptId(state.local?.metadata)).toBe("attempt_other");
+  });
+
+  it("never binds a cached active create response after its subscription was canceled", async () => {
+    const cached = providerSubscription();
+    state.providers.set(String(cached.id), cached);
+    state.create.mockResolvedValue(cached);
+    state.beforeTransaction = (number) => {
+      if (number === 2) throw new Error("local binding failed");
+    };
+    await expect(activateMarketPayg("user_1")).rejects.toThrow("local binding failed");
+    const firstAttempt = getPaygActivationAttemptId(state.local?.metadata);
+    expect(firstAttempt).toEqual(expect.any(String));
+
+    state.beforeTransaction = null;
+    state.providers.set(String(cached.id), providerSubscription({ status: "canceled" }));
+    await expect(activateMarketPayg("user_1")).rejects.toMatchObject({
+      code: "PAYG_ACTIVATION_RETRY_REQUIRED",
+    });
+    expect(state.local?.stripeSubscriptionId).toBeNull();
+    expect(state.local?.status).toBeNull();
+    expect(getPaygActivationAttemptId(state.local?.metadata)).toBeNull();
+    expect(state.create.mock.calls[0][1].idempotencyKey).toBe(state.create.mock.calls[1][1].idempotencyKey);
+
+    // The canceled attempt is retired, not reused indefinitely. A later
+    // explicit activation can create a genuinely active replacement.
+    const replacement = { ...providerSubscription(), id: "sub_replacement" };
+    state.providers.set(replacement.id, replacement);
+    state.create.mockResolvedValue(replacement);
+    await expect(activateMarketPayg("user_1")).resolves.toMatchObject({ stripeSubscriptionId: replacement.id });
+    expect(state.create.mock.calls[2][1].idempotencyKey).not.toBe(state.create.mock.calls[0][1].idempotencyKey);
+  });
+
+  it("retains the attempt on an uncertain fresh retrieval instead of trusting create", async () => {
+    const cached = providerSubscription();
+    state.create.mockResolvedValue(cached);
+    state.retrieve.mockRejectedValueOnce(new Error("fresh retrieval timeout"));
+    await expect(activateMarketPayg("user_1")).rejects.toThrow("fresh retrieval timeout");
+    expect(state.local?.stripeSubscriptionId).toBeNull();
+    expect(getPaygActivationAttemptId(state.local?.metadata)).toEqual(expect.any(String));
+  });
+
+  it("reads provider state after waiting for the binding lock", async () => {
+    const cached = providerSubscription();
+    state.create.mockResolvedValue(cached);
+    state.providers.set(String(cached.id), cached);
+    state.beforeTransaction = (number) => {
+      if (number === 2) {
+        state.providers.set(String(cached.id), providerSubscription({ status: "canceled" }));
+      }
+    };
+    await expect(activateMarketPayg("user_1")).rejects.toMatchObject({
+      code: "PAYG_ACTIVATION_RETRY_REQUIRED",
+    });
+    expect(state.local?.stripeSubscriptionId).toBeNull();
+    expect(getPaygActivationAttemptId(state.local?.metadata)).toBeNull();
   });
 });
 
