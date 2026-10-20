@@ -2,7 +2,10 @@ import { subscription, user } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type Stripe from "stripe";
-import { acquireBillingSubjectLock } from "@/lib/db/locks";
+import {
+  acquireBillingSubjectLock,
+  withBillingSubjectHandlerLock,
+} from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import {
@@ -40,125 +43,75 @@ export async function activateMarketPayg(userId: string) {
   const priceId = config.billing.stripePriceId!;
   const stripe = requireEnabledStripeClient();
   await validateMarketStripePrice(stripe);
-  const database = requireDatabase();
-  await ensureMarketCustomerState(userId);
+  // Keep retirement and provider creation serialized across the committed
+  // attempt and binding transactions. Both helpers use this same reserved
+  // connection, so their transaction locks are reentrant rather than competing.
+  return withBillingSubjectHandlerLock(userId, async (database) => {
+    await ensureMarketCustomerState(userId, database);
 
-  const activationState = await database.transaction(async (tx) => {
-    await acquireBillingSubjectLock(tx, userId);
-    const rows = await tx
-      .select()
-      .from(subscription)
-      .where(
-        and(
-          eq(subscription.referenceType, "user"),
-          eq(subscription.referenceId, userId),
-          eq(subscription.plan, "payg"),
-        ),
-      )
-      .for("update")
-      .limit(1);
-    const current = rows[0];
-    if (!current) throw new PaygActivationError("PAYG subscription is missing", 500);
-    if (current.stripeSubscriptionId) {
-      throw new PaygActivationError(
-        "Manage the existing subscription through Billing",
-        409,
-        "SUBSCRIPTION_ALREADY_BOUND",
-      );
-    }
-    const existingAttempt = getPaygActivationAttemptId(current.metadata);
-    const attemptId = existingAttempt ?? crypto.randomUUID();
-    if (!existingAttempt) {
-      const initialized = await tx
-        .update(subscription)
-        .set({ metadata: withPaygActivationAttemptId(current.metadata, attemptId) })
+    const activationState = await database.transaction(async (tx) => {
+      await acquireBillingSubjectLock(tx, userId);
+      const rows = await tx
+        .select()
+        .from(subscription)
         .where(
           and(
-            eq(subscription.id, current.id),
-            isNull(subscription.stripeSubscriptionId),
-            sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} is null`,
+            eq(subscription.referenceType, "user"),
+            eq(subscription.referenceId, userId),
+            eq(subscription.plan, "payg"),
           ),
         )
-        .returning({ id: subscription.id });
-      if (initialized.length !== 1) {
-        throw new PaygActivationError("PAYG activation state changed", 409);
-      }
-    }
-    return { current, attemptId };
-  });
-
-  const customer = await ensureStripeUserCustomer(userId);
-  const expectedProviderShape = {
-    customerId: customer.id,
-    localSubscriptionId: activationState.current.id,
-    priceId,
-    userId,
-  };
-  const inventory = await inspectActiveMarketSubscriptions(
-    stripe,
-    expectedProviderShape,
-  );
-  assertUnambiguousActivationInventory(inventory);
-
-  let providerSubscription: Stripe.Subscription;
-  if (inventory.valid.length === 1) {
-    providerSubscription = inventory.valid[0];
-  } else {
-    const paymentMethodId = getStripeCustomerDefaultPaymentMethodId(customer);
-    if (!paymentMethodId) {
-      const cleared = await clearActivationAttempt(
-        userId,
-        activationState.current.id,
-        activationState.attemptId,
-      );
-      if (!cleared) {
+        .for("update")
+        .limit(1);
+      const current = rows[0];
+      if (!current) throw new PaygActivationError("PAYG subscription is missing", 500);
+      if (current.stripeSubscriptionId) {
         throw new PaygActivationError(
-          "PAYG activation state changed while checking the payment method",
+          "Manage the existing subscription through Billing",
           409,
-          "PAYG_ACTIVATION_RETRY_REQUIRED",
+          "SUBSCRIPTION_ALREADY_BOUND",
         );
       }
-      throw new PaygActivationError(
-        "Add a default payment method before activating PAYG",
-        409,
-        "PAYMENT_METHOD_REQUIRED",
-      );
-    }
-    try {
-      providerSubscription = await stripe.subscriptions.create(
-        {
-          customer: customer.id,
-          default_payment_method: paymentMethodId,
-          items: [{ price: priceId, quantity: 1 }],
-          metadata: {
-            userId,
-            subscriptionId: activationState.current.id,
-            referenceId: userId,
-          },
-          off_session: true,
-          payment_behavior: "error_if_incomplete",
-        },
-        {
-          idempotencyKey: `payg-activate:${activationState.current.id}:${activationState.attemptId}`,
-        },
-      );
-    } catch (error) {
-      if (isAuthoritativeActivationRejection(error)) {
-        // A provider error alone is not proof that no subscription exists. The
-        // attempt remains reusable unless a second complete inventory read proves
-        // that the Customer has no active subscription after the rejected create.
-        const rejectionInventory = await inspectActiveMarketSubscriptions(
-          stripe,
-          expectedProviderShape,
-        );
-        assertUnambiguousActivationInventory(rejectionInventory);
-        if (rejectionInventory.valid.length !== 0) {
-          throw new PaygActivationError(
-            "PAYG activation is pending provider recovery",
-            409,
-            "PAYG_ACTIVATION_RETRY_REQUIRED",
-          );
+      const existingAttempt = getPaygActivationAttemptId(current.metadata);
+      const attemptId = existingAttempt ?? crypto.randomUUID();
+      if (!existingAttempt) {
+        const initialized = await tx
+          .update(subscription)
+          .set({ metadata: withPaygActivationAttemptId(current.metadata, attemptId) })
+          .where(
+            and(
+              eq(subscription.id, current.id),
+              isNull(subscription.stripeSubscriptionId),
+              sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} is null`,
+            ),
+          )
+          .returning({ id: subscription.id });
+        if (initialized.length !== 1) {
+          throw new PaygActivationError("PAYG activation state changed", 409);
         }
+      }
+      return { current, attemptId };
+    });
+
+    const customer = await ensureStripeUserCustomer(userId, database);
+    const expectedProviderShape = {
+      customerId: customer.id,
+      localSubscriptionId: activationState.current.id,
+      priceId,
+      userId,
+    };
+    const inventory = await inspectActiveMarketSubscriptions(
+      stripe,
+      expectedProviderShape,
+    );
+    assertUnambiguousActivationInventory(inventory);
+
+    let providerSubscription: Stripe.Subscription;
+    if (inventory.valid.length === 1) {
+      providerSubscription = inventory.valid[0];
+    } else {
+      const paymentMethodId = getStripeCustomerDefaultPaymentMethodId(customer);
+      if (!paymentMethodId) {
         const cleared = await clearActivationAttempt(
           userId,
           activationState.current.id,
@@ -166,125 +119,179 @@ export async function activateMarketPayg(userId: string) {
         );
         if (!cleared) {
           throw new PaygActivationError(
-            "PAYG activation state changed after provider rejection",
+            "PAYG activation state changed while checking the payment method",
             409,
             "PAYG_ACTIVATION_RETRY_REQUIRED",
           );
         }
         throw new PaygActivationError(
-          "The payment method could not activate PAYG. Review billing details and try again.",
-          getStripeStatus(error) === 402 ? 402 : 409,
-          "PAYG_PROVIDER_REJECTED",
+          "Add a default payment method before activating PAYG",
+          409,
+          "PAYMENT_METHOD_REQUIRED",
         );
       }
-      throw error;
-    }
-  }
-
-  const candidateId = providerSubscription.id;
-  const persisted = await database.transaction(async (tx) => {
-    await acquireBillingSubjectLock(tx, userId);
-    const rows = await tx
-      .select({ subscription, stripeCustomerId: user.stripeCustomerId })
-      .from(subscription)
-      .innerJoin(user, eq(user.id, subscription.referenceId))
-      .where(eq(subscription.id, activationState.current.id))
-      .for("update")
-      .limit(1);
-    const current = rows[0];
-    if (!current) throw new Error("PAYG subscription disappeared during activation");
-    if (current.subscription.stripeSubscriptionId) {
-      if (current.subscription.stripeSubscriptionId === providerSubscription.id) {
-        if (current.subscription.stripeCustomerId !== customer.id) {
+      try {
+        providerSubscription = await stripe.subscriptions.create(
+          {
+            customer: customer.id,
+            default_payment_method: paymentMethodId,
+            items: [{ price: priceId, quantity: 1 }],
+            metadata: {
+              userId,
+              subscriptionId: activationState.current.id,
+              referenceId: userId,
+            },
+            off_session: true,
+            payment_behavior: "error_if_incomplete",
+          },
+          {
+            idempotencyKey: `payg-activate:${activationState.current.id}:${activationState.attemptId}`,
+          },
+        );
+      } catch (error) {
+        if (isAuthoritativeActivationRejection(error)) {
+          // A provider error alone is not proof that no subscription exists. The
+          // attempt remains reusable unless a second complete inventory read proves
+          // that the Customer has no active subscription after the rejected create.
+          const rejectionInventory = await inspectActiveMarketSubscriptions(
+            stripe,
+            expectedProviderShape,
+          );
+          assertUnambiguousActivationInventory(rejectionInventory);
+          if (rejectionInventory.valid.length !== 0) {
+            throw new PaygActivationError(
+              "PAYG activation is pending provider recovery",
+              409,
+              "PAYG_ACTIVATION_RETRY_REQUIRED",
+            );
+          }
+          const cleared = await clearActivationAttempt(
+            userId,
+            activationState.current.id,
+            activationState.attemptId,
+          );
+          if (!cleared) {
+            throw new PaygActivationError(
+              "PAYG activation state changed after provider rejection",
+              409,
+              "PAYG_ACTIVATION_RETRY_REQUIRED",
+            );
+          }
           throw new PaygActivationError(
-            "The concurrent PAYG binding has a different Customer",
-            409,
+            "The payment method could not activate PAYG. Review billing details and try again.",
+            getStripeStatus(error) === 402 ? 402 : 409,
+            "PAYG_PROVIDER_REJECTED",
           );
         }
-        return current.subscription;
+        throw error;
       }
-      throw new PaygActivationError("PAYG subscription was concurrently rebound", 409);
-    }
-    if (
-      current.stripeCustomerId !== customer.id ||
-      getPaygActivationAttemptId(current.subscription.metadata) !==
-        activationState.attemptId
-    ) {
-      throw new PaygActivationError("PAYG activation state changed", 409);
     }
 
-    // Idempotent create retries return the original response. Read current
-    // provider state only after acquiring the binding lock, not before a wait.
-    providerSubscription = await stripe.subscriptions.retrieve(candidateId);
-    if (providerSubscription.id !== candidateId ||
-      !isUsableMarketSubscription(providerSubscription, expectedProviderShape)) {
-      throw new PaygActivationError(
-        "Stripe returned a PAYG subscription that requires reconciliation",
-        409,
-        "PAYG_AMBIGUOUS",
-      );
-    }
-    if (providerSubscription.status === "canceled") {
-      // Commit retirement of only this unbound attempt. Throwing here would
-      // roll it back and permanently reuse the canceled create's cached result.
-      if (!await clearLockedActivationAttempt(tx, current.subscription, activationState.attemptId)) {
+    const candidateId = providerSubscription.id;
+    const persisted = await database.transaction(async (tx) => {
+      await acquireBillingSubjectLock(tx, userId);
+      const rows = await tx
+        .select({ subscription, stripeCustomerId: user.stripeCustomerId })
+        .from(subscription)
+        .innerJoin(user, eq(user.id, subscription.referenceId))
+        .where(eq(subscription.id, activationState.current.id))
+        .for("update")
+        .limit(1);
+      const current = rows[0];
+      if (!current) throw new Error("PAYG subscription disappeared during activation");
+      if (current.subscription.stripeSubscriptionId) {
+        if (current.subscription.stripeSubscriptionId === providerSubscription.id) {
+          if (current.subscription.stripeCustomerId !== customer.id) {
+            throw new PaygActivationError(
+              "The concurrent PAYG binding has a different Customer",
+              409,
+            );
+          }
+          return current.subscription;
+        }
+        throw new PaygActivationError("PAYG subscription was concurrently rebound", 409);
+      }
+      if (
+        current.stripeCustomerId !== customer.id ||
+        getPaygActivationAttemptId(current.subscription.metadata) !==
+          activationState.attemptId
+      ) {
         throw new PaygActivationError("PAYG activation state changed", 409);
       }
-      return null;
-    }
-    if (providerSubscription.status !== "active") {
+
+      // Idempotent create retries return the original response. Read current
+      // provider state only after acquiring the binding lock, not before a wait.
+      providerSubscription = await stripe.subscriptions.retrieve(candidateId);
+      if (providerSubscription.id !== candidateId ||
+        !isUsableMarketSubscription(providerSubscription, expectedProviderShape)) {
+        throw new PaygActivationError(
+          "Stripe returned a PAYG subscription that requires reconciliation",
+          409,
+          "PAYG_AMBIGUOUS",
+        );
+      }
+      if (providerSubscription.status === "canceled") {
+        // Commit retirement of only this unbound attempt. Throwing here would
+        // roll it back and permanently reuse the canceled create's cached result.
+        if (!await clearLockedActivationAttempt(tx, current.subscription, activationState.attemptId)) {
+          throw new PaygActivationError("PAYG activation state changed", 409);
+        }
+        return null;
+      }
+      if (providerSubscription.status !== "active") {
+        throw new PaygActivationError(
+          "Stripe returned a PAYG activation result that requires recovery",
+          409,
+          "PAYG_ACTIVATION_RETRY_REQUIRED",
+        );
+      }
+      const item = providerSubscription.items.data[0];
+      const values = {
+        stripeCustomerId: customer.id,
+        stripeSubscriptionId: providerSubscription.id,
+        status: providerSubscription.status,
+        periodStart: new Date(item.current_period_start * 1_000),
+        periodEnd: new Date(item.current_period_end * 1_000),
+        cancelAtPeriodEnd: providerSubscription.cancel_at_period_end,
+        seats: 1,
+        trialStart: providerSubscription.trial_start
+          ? new Date(providerSubscription.trial_start * 1_000)
+          : null,
+        trialEnd: providerSubscription.trial_end
+          ? new Date(providerSubscription.trial_end * 1_000)
+          : null,
+        metadata: withoutPaygActivationAttemptId(current.subscription.metadata),
+      };
+      const bound = await tx
+        .update(subscription)
+        .set(values)
+        .where(
+          and(
+            eq(subscription.id, current.subscription.id),
+            isNull(subscription.stripeSubscriptionId),
+            sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} = ${activationState.attemptId}`,
+          ),
+        )
+        .returning();
+      if (bound.length !== 1) {
+        throw new PaygActivationError("PAYG activation state changed", 409);
+      }
+      return bound[0];
+    });
+
+    if (!persisted) {
       throw new PaygActivationError(
-        "Stripe returned a PAYG activation result that requires recovery",
+        "The canceled PAYG activation was retired. Try activating again.",
         409,
         "PAYG_ACTIVATION_RETRY_REQUIRED",
       );
     }
-    const item = providerSubscription.items.data[0];
-    const values = {
-      stripeCustomerId: customer.id,
-      stripeSubscriptionId: providerSubscription.id,
-      status: providerSubscription.status,
-      periodStart: new Date(item.current_period_start * 1_000),
-      periodEnd: new Date(item.current_period_end * 1_000),
-      cancelAtPeriodEnd: providerSubscription.cancel_at_period_end,
-      seats: 1,
-      trialStart: providerSubscription.trial_start
-        ? new Date(providerSubscription.trial_start * 1_000)
-        : null,
-      trialEnd: providerSubscription.trial_end
-        ? new Date(providerSubscription.trial_end * 1_000)
-        : null,
-      metadata: withoutPaygActivationAttemptId(current.subscription.metadata),
+    return {
+      success: true,
+      status: "activated",
+      stripeSubscriptionId: persisted.stripeSubscriptionId,
     };
-    const bound = await tx
-      .update(subscription)
-      .set(values)
-      .where(
-        and(
-          eq(subscription.id, current.subscription.id),
-          isNull(subscription.stripeSubscriptionId),
-          sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} = ${activationState.attemptId}`,
-        ),
-      )
-      .returning();
-    if (bound.length !== 1) {
-      throw new PaygActivationError("PAYG activation state changed", 409);
-    }
-    return bound[0];
   });
-
-  if (!persisted) {
-    throw new PaygActivationError(
-      "The canceled PAYG activation was retired. Try activating again.",
-      409,
-      "PAYG_ACTIVATION_RETRY_REQUIRED",
-    );
-  }
-  return {
-    success: true,
-    status: "activated",
-    stripeSubscriptionId: persisted.stripeSubscriptionId,
-  };
 }
 
 export function isExactMarketSubscription(
@@ -413,7 +420,10 @@ async function clearLockedActivationAttempt(
 
 function isAuthoritativeActivationRejection(error: unknown) {
   if (!error || typeof error !== "object") return false;
-  const value = error as { type?: unknown; statusCode?: unknown };
+  const value = error as { type?: unknown; statusCode?: unknown; code?: unknown };
+  // A conflicting idempotent create may still be running after its owner lost
+  // the connection. Empty inventory cannot prove that attempt is safe to retire.
+  if (value.statusCode === 409 || value.code === "idempotency_key_in_use") return false;
   return (
     value.type === "StripeCardError" ||
     (value.type === "StripeInvalidRequestError" &&

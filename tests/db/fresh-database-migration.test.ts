@@ -630,6 +630,8 @@ describe.sequential("fresh database migration", () => {
           applicationClient = await assertRealSignupCreatesCanonicalCustomer(targetSql, databaseName);
           const { assertCustomerRowLockOrder } = await import("../helpers/customer-row-locks");
           await assertCustomerRowLockOrder(targetSql, applicationClient);
+          const { assertActivationSerialization } = await import("../helpers/activation-serialization");
+          await assertActivationSerialization(targetSql);
           const { assertAuthChallengeSecurity } = await import("../helpers/auth-challenge-security");
           await assertAuthChallengeSecurity(targetSql);
         } finally {

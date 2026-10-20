@@ -244,6 +244,20 @@ async function withReservedSessionLockOwner<T>(
   return callbackResult as T;
 }
 
+export async function withBillingSubjectHandlerLock<T>(
+  userId: string,
+  callback: MarketSessionLockCallback<T>,
+): Promise<T> {
+  return withReservedSessionLockOwner(
+    [{
+      namespace: BILLING_SUBJECT_LOCK_NAMESPACE,
+      id: requireLockId(userId, "Billing subject"),
+      subject: "Billing subject handler",
+    }],
+    async (database) => callback(database),
+  );
+}
+
 export async function withAdminGrantHandlerLock<T>(
   grantId: string,
   callback: MarketSessionLockCallback<T>
