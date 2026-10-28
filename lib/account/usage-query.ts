@@ -1,4 +1,4 @@
-export type UsageFilterSelection = {
+type UsageFilterSelection = {
   range: string;
   keyId: string;
   appUrl: string;
@@ -7,39 +7,13 @@ export type UsageFilterSelection = {
   completion: string;
 };
 
-export type AdminUsageQuerySelection = UsageFilterSelection & {
-  view: "activity" | "logs";
-  cursor: string | null;
-};
-
-export function buildAdminUsageQuery(selection: AdminUsageQuerySelection) {
-  const params = new URLSearchParams({
-    view: selection.view,
-    range: selection.range,
-  });
-  if (selection.view === "activity") {
-    params.set("granularity", selection.range === "24h" ? "hour" : "day");
-  } else {
-    params.set("limit", "50");
-    if (selection.cursor) params.set("cursor", selection.cursor);
-  }
-  appendSelectedFilters(params, selection);
-  return params.toString();
-}
-
-export function buildCustomerLogsQuery(
+export function buildLogsQuery(
+  scope: "account" | "admin",
   selection: UsageFilterSelection & { cursor: string | null },
 ) {
   const params = new URLSearchParams({ range: selection.range, limit: "50" });
+  if (scope === "admin") params.set("view", "logs");
   if (selection.cursor) params.set("cursor", selection.cursor);
-  appendSelectedFilters(params, selection);
-  return params.toString();
-}
-
-function appendSelectedFilters(
-  params: URLSearchParams,
-  selection: UsageFilterSelection,
-) {
   if (selection.keyId !== "all") params.set("key", selection.keyId);
   if (selection.appUrl !== "all") params.set("app", selection.appUrl);
   if (selection.resourceId !== "all") params.set("resource", selection.resourceId);
@@ -47,4 +21,5 @@ function appendSelectedFilters(
   if (selection.completion !== "all") {
     params.set("completion", selection.completion);
   }
+  return params.toString();
 }

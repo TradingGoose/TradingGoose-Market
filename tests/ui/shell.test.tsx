@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -293,17 +293,24 @@ describe("Studio-shaped Market shell", () => {
   });
 
   it("renders the finite admin navigation without changing customer membership", () => {
-    shell.pathname = "/admin/api-usage";
+    shell.pathname = "/admin/activity";
     const { container } = render(
       <SidebarProvider defaultOpen={false} defaultWidth="20rem">
         <AppSidebar user={user} mode="admin" onOpenSettings={vi.fn()} />
       </SidebarProvider>,
     );
 
-    expect(screen.getByRole("link", { name: "Admin API Keys" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Private API Usage" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Market Hours" })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "API Keys" })).toBeNull();
+    const data = within(screen.getByRole("group", { name: "Data" }));
+    const apiAccess = within(screen.getByRole("group", { name: "API Access" }));
+    expect(data.getAllByRole("link")).toHaveLength(10);
+    expect(data.getByRole("link", { name: "Market Hours" })).toBeTruthy();
+    expect(data.queryByRole("link", { name: "API Keys" })).toBeNull();
+    expect(apiAccess.getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "/admin/api-keys", "/admin/activity", "/admin/logs",
+    ]);
+    expect(apiAccess.getByRole("link", { name: "Activity" }).getAttribute("aria-current")).toBe("page");
+    expect(apiAccess.queryByRole("link", { name: "Market Hours" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Private API Usage" })).toBeNull();
     expect(document.querySelector("[data-state=collapsed]")).toBeTruthy();
     expect((container.firstElementChild as HTMLElement).style.getPropertyValue("--sidebar-width")).toBe("20rem");
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Activity,
@@ -20,7 +20,7 @@ import {
   YAxis
 } from "recharts";
 
-import { AccountPageHeader } from "@/components/account/page-header";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +61,7 @@ import {
 import { useMarketResource } from "@/hooks/use-market-resource";
 import type {
   ActivityResponse,
+  AdminUsageResponse,
   UsageBreakdown,
   UsageSeriesPoint
 } from "@/lib/account/contracts";
@@ -183,7 +184,15 @@ function pivotSeries(series: UsageSeriesPoint[], metric: Metric) {
   return { points, lines: selected, config, breakdown };
 }
 
-export function ActivityPage() {
+export function ActivityPage({ scope }: { scope: "account" | "admin" }) {
+  return (
+    <Suspense fallback={<Skeleton className="min-h-[32rem]" aria-hidden="true" />}>
+      <ActivityContent scope={scope} />
+    </Suspense>
+  );
+}
+
+function ActivityContent({ scope }: { scope: "account" | "admin" }) {
   const searchParams = useSearchParams();
   const [selectedTab, setSelectedTab] = useState("overview");
   const [range, setRange] = useState("7d");
@@ -203,23 +212,22 @@ export function ActivityPage() {
       group,
       metric: seriesMetric
     });
+    if (scope === "admin") params.set("view", "activity");
     if (keyId !== "all") params.set("key", keyId);
     if (completion !== "all") params.set("completion", completion);
     if (resourceId !== "all") params.set("resource", resourceId);
     if (appUrl !== "all") params.set("app", appUrl);
     if (routeId !== "all") params.set("route", routeId);
     return params.toString();
-  }, [appUrl, completion, group, keyId, range, resourceId, routeId, seriesMetric]);
+  }, [appUrl, completion, group, keyId, range, resourceId, routeId, scope, seriesMetric]);
 
-  const resource = useMarketResource<ActivityResponse>(`/api/account/activity?${query}`);
-  const data = resource.data;
-  const trendSeries = useMemo(
-    () => pivotSeries(data?.series ?? [], "requests"),
-    [data?.series]
+  const resource = useMarketResource<ActivityResponse | Extract<AdminUsageResponse, { view: "activity" }>>(
+    `${scope === "admin" ? "/api/admin/api-usage" : "/api/account/activity"}?${query}`
   );
-  const exploreSeries = useMemo(
-    () => pivotSeries(data?.series ?? [], metric),
-    [data?.series, metric]
+  const data = resource.data && "view" in resource.data ? resource.data.data : resource.data;
+  const chartSeries = useMemo(
+    () => pivotSeries(data?.series ?? [], seriesMetric),
+    [data?.series, seriesMetric]
   );
   const statusBuckets = useMemo(
     () => (data?.buckets ?? []).map((bucket) => ({
@@ -243,9 +251,11 @@ export function ActivityPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6">
-      <AccountPageHeader
+      <PageHeader
         title="Activity"
-        description="Aggregate Market request admissions and handler outcomes. All periods and timestamps use UTC."
+        description={scope === "admin"
+          ? "System-wide private admin-key admissions and handler outcomes, including retained history from revoked keys and removed admin grants. All periods and timestamps use UTC."
+          : "Aggregate Market request admissions and handler outcomes. All periods and timestamps use UTC."}
         actions={(
           <>
             <Badge variant="outline" className="h-10 rounded-md px-3 text-sm font-normal text-muted-foreground">
@@ -275,7 +285,7 @@ export function ActivityPage() {
         <Select value={keyId} onValueChange={setKeyId}>
           <SelectTrigger className="w-44"><SelectValue placeholder="API key" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All API keys</SelectItem>
+            <SelectItem value="all">{scope === "admin" ? "All private keys" : "All API keys"}</SelectItem>
             {data?.facets.keys.map((item) => (
               <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>
             ))}
@@ -336,7 +346,9 @@ export function ActivityPage() {
             <EmptyMedia variant="icon"><Activity /></EmptyMedia>
             <EmptyTitle>No activity in this period</EmptyTitle>
             <EmptyDescription>
-              Admitted customer-key requests appear here. Anonymous reads are not keyed usage.
+              {scope === "admin"
+                ? "Admitted private admin-key update requests appear here, including retained history from revoked keys and removed admin grants."
+                : "Admitted customer-key requests appear here. Anonymous reads are not keyed usage."}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -404,7 +416,7 @@ export function ActivityPage() {
               </CardContent>
             </Card>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <Ranking title="Top API Keys" rows={data.topKeys} />
+              <Ranking title={scope === "admin" ? "Top Private Keys" : "Top API Keys"} rows={data.topKeys} />
               <Ranking title="Top Applications" rows={data.topApplications} />
               <Ranking title="Top Requested Resources" rows={data.topResources} />
               <Ranking title="Top Endpoints" rows={data.topEndpoints} />
@@ -420,13 +432,13 @@ export function ActivityPage() {
                   <CardDescription>Top bounded series over the selected UTC period.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ChartContainer config={trendSeries.config} className="h-80 w-full aspect-auto">
-                    <LineChart data={trendSeries.points}>
+                  <ChartContainer config={chartSeries.config} className="h-80 w-full aspect-auto">
+                    <LineChart data={chartSeries.points}>
                       <CartesianGrid vertical={false} />
                       <XAxis dataKey="timestamp" tickLine={false} axisLine={false} minTickGap={32} />
                       <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
                       <ChartTooltip content={<ChartTooltipContent />} />
-                      {trendSeries.lines.map((line) => (
+                      {chartSeries.lines.map((line) => (
                         <Line key={line.id} type="monotone" dataKey={line.dataKey} name={line.label} stroke={line.color} strokeWidth={2} dot={false} />
                       ))}
                     </LineChart>
@@ -477,7 +489,7 @@ export function ActivityPage() {
             <div className="grid gap-4 xl:grid-cols-2">
               <Ranking
                 title={`${metric[0].toUpperCase()}${metric.slice(1)} by ${groupLabel(group)}`}
-                rows={exploreSeries.breakdown}
+                rows={chartSeries.breakdown}
               />
               <Card>
                 <CardHeader>
@@ -487,13 +499,13 @@ export function ActivityPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ChartContainer config={exploreSeries.config} className="h-80 w-full aspect-auto">
-                    <BarChart data={exploreSeries.points}>
+                  <ChartContainer config={chartSeries.config} className="h-80 w-full aspect-auto">
+                    <BarChart data={chartSeries.points}>
                       <CartesianGrid vertical={false} />
                       <XAxis dataKey="timestamp" tickLine={false} axisLine={false} minTickGap={32} />
                       <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
                       <ChartTooltip content={<ChartTooltipContent />} />
-                      {exploreSeries.lines.map((line) => (
+                      {chartSeries.lines.map((line) => (
                         <Bar key={line.id} dataKey={line.dataKey} name={line.label} fill={line.color} stackId="series" />
                       ))}
                     </BarChart>

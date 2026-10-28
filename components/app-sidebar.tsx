@@ -19,9 +19,13 @@ const accountItems: NavItem[] = [
   { title: "Logs", href: "/account/logs" as Route, icon: FileClock }
 ];
 
-const adminItems: NavItem[] = [
-  { title: "Admin API Keys", href: "/admin/api-keys" as Route, icon: KeyRound },
-  { title: "Private API Usage", href: "/admin/api-usage" as Route, icon: Activity },
+const adminApiItems: NavItem[] = [
+  { title: "API Keys", href: "/admin/api-keys" as Route, icon: KeyRound },
+  { title: "Activity", href: "/admin/activity" as Route, icon: Activity },
+  { title: "Logs", href: "/admin/logs" as Route, icon: FileClock }
+];
+
+const adminDataItems: NavItem[] = [
   { title: "Listings", href: "/admin/listings" as Route, icon: Layers },
   { title: "Cryptocurrencies", href: "/admin/cryptos" as Route, icon: Bitcoin },
   { title: "Chains", href: "/admin/chains" as Route, icon: Network },
@@ -36,17 +40,24 @@ const adminItems: NavItem[] = [
 
 export function AppSidebar({ user, mode, onOpenSettings, ...props }: React.ComponentProps<typeof Sidebar> & { user: UserMenuUser; mode: "account" | "admin"; onOpenSettings: (section: SettingsSection) => void }) {
   const pathname = usePathname() ?? "/";
-  const items = mode === "account" ? accountItems : adminItems;
+  const groups = mode === "account"
+    ? [{ title: "Market", items: accountItems }]
+    : [{ title: "Data", items: adminDataItems }, { title: "API Access", items: adminApiItems }];
   return (
     <Sidebar collapsible="icon" variant="sidebar" {...props}>
       <SidebarHeader>
         <SidebarMenu><SidebarMenuItem><SidebarMenuButton asChild size="lg"><Link href={(mode === "account" ? "/account/api-keys" : "/admin") as Route}><Image src="/icon.png" alt="" width={32} height={32} className="size-8 rounded-md" /><div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">TradingGoose</span><span className="truncate text-xs">{mode === "account" ? "Market" : "Market Admin"}</span></div></Link></SidebarMenuButton></SidebarMenuItem></SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>{mode === "account" ? "Market" : "Administration"}</SidebarGroupLabel>
-          <SidebarMenu>{items.map((item) => <SidebarMenuItem key={item.href}><SidebarMenuButton asChild isActive={pathname === item.href || pathname.startsWith(`${item.href}/`)} tooltip={item.title}><Link href={item.href}><item.icon /><span>{item.title}</span></Link></SidebarMenuButton></SidebarMenuItem>)}</SidebarMenu>
-        </SidebarGroup>
+        {groups.map((group) => (
+          <SidebarGroup key={group.title} role="group" aria-label={group.title}>
+            <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
+            <SidebarMenu>{group.items.map((item) => {
+              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              return <SidebarMenuItem key={item.href}><SidebarMenuButton asChild isActive={active} tooltip={item.title}><Link href={item.href} aria-current={active ? "page" : undefined}><item.icon aria-hidden="true" /><span>{item.title}</span></Link></SidebarMenuButton></SidebarMenuItem>;
+            })}</SidebarMenu>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
       <SidebarFooter className="gap-2">
         <SidebarUsageIndicator onOpenSubscription={() => onOpenSettings("subscription")} />
@@ -57,4 +68,4 @@ export function AppSidebar({ user, mode, onOpenSettings, ...props }: React.Compo
   );
 }
 
-export { accountItems, adminItems };
+export { accountItems, adminApiItems, adminDataItems };

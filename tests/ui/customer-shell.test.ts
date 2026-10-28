@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { accountItems, adminItems } from "../../components/app-sidebar";
+import { accountItems, adminApiItems, adminDataItems } from "../../components/app-sidebar";
 
 describe("Market shell navigation", () => {
   it("exposes exactly the three ordered customer destinations", () => {
@@ -11,11 +11,14 @@ describe("Market shell navigation", () => {
     ]);
   });
 
-  it("keeps private key and usage tools inside the admin shell", () => {
-    expect(adminItems.slice(0, 2).map(({ title, href }) => ({ title, href }))).toEqual([
-      { title: "Admin API Keys", href: "/admin/api-keys" },
-      { title: "Private API Usage", href: "/admin/api-usage" }
+  it("separates private API access from data management without changing customer navigation", () => {
+    expect(adminApiItems.map(({ title, href }) => ({ title, href }))).toEqual([
+      { title: "API Keys", href: "/admin/api-keys" },
+      { title: "Activity", href: "/admin/activity" },
+      { title: "Logs", href: "/admin/logs" }
     ]);
+    expect(adminDataItems).toHaveLength(10);
+    expect(adminDataItems.every((item) => !adminApiItems.some((apiItem) => apiItem.href === item.href))).toBe(true);
     expect(accountItems.some((item) => item.href.startsWith("/admin"))).toBe(false);
   });
 });

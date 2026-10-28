@@ -10,15 +10,23 @@ const market = vi.hoisted(() => ({
   refresh: vi.fn(),
   charts: [] as Array<Array<Record<string, string | number>>>,
   resolve: null as ((url: string) => Record<string, unknown>) | null,
+  search: "",
 }));
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(market.search),
 }));
 vi.mock("@/hooks/use-market-resource", () => ({
   useMarketResource: (url: string) => {
     market.urls.push(url);
-    return { ...(market.resolve?.(url) ?? market.state), refresh: market.refresh };
+    const state = market.resolve?.(url) ?? market.state;
+    return {
+      ...state,
+      data: url.startsWith("/api/admin/") && state.data
+        ? { view: new URL(url, "https://market.example").searchParams.get("view"), data: state.data }
+        : state.data,
+      refresh: market.refresh,
+    };
   },
 }));
 vi.mock("recharts", () => {
@@ -44,8 +52,12 @@ vi.mock("recharts", () => {
   };
 });
 
-import { ActivityPage } from "../../components/account/activity/activity-page";
-import { LogsPage } from "../../components/account/logs/logs-page";
+import { ActivityPage } from "../../components/api-access/activity-page";
+import { LogsPage } from "../../components/api-access/logs-page";
+import AccountActivityPage from "../../app/account/activity/page";
+import AccountLogsPage from "../../app/account/logs/page";
+import AdminActivityPage from "../../app/admin/activity/page";
+import AdminLogsPage from "../../app/admin/logs/page";
 import type { ActivityResponse, LogsResponse } from "../../lib/account/contracts";
 
 beforeEach(() => {
@@ -57,6 +69,7 @@ afterEach(() => {
   market.urls.length = 0;
   market.charts.length = 0;
   market.resolve = null;
+  market.search = "";
   vi.clearAllMocks();
 });
 
@@ -110,10 +123,12 @@ const logs: LogsResponse = {
   facets,
 };
 
-describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
+describe.each(["account", "admin"] as const)("Shared Market %s Activity and Logs canvases", (scope) => {
+  const ActivityRoute = scope === "admin" ? AdminActivityPage : AccountActivityPage;
+  const LogsRoute = scope === "admin" ? AdminLogsPage : AccountLogsPage;
   it("renders operational request analytics with Market rankings and no spend semantics", () => {
     market.state = { data: activity, error: null, isLoading: false };
-    render(<ActivityPage />);
+    render(<ActivityRoute />);
 
     expect(screen.getByRole("heading", { name: "Activity" })).toBeTruthy();
     expect(
@@ -125,13 +140,21 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
     expect(screen.getByText("Top Requested Resources")).toBeTruthy();
     expect(screen.getByText("Market Hours")).toBeTruthy();
     expect(screen.getByText("TradingGoose Studio")).toBeTruthy();
+    const url = new URL(market.urls.at(-1)!, "https://market.example");
+    expect(url.pathname).toBe(scope === "admin" ? "/api/admin/api-usage" : "/api/account/activity");
+    expect(url.searchParams.get("view")).toBe(scope === "admin" ? "activity" : null);
+    expect(url.searchParams.get("granularity")).toBe("day");
+    expect(url.searchParams.get("metric")).toBe("requests");
+    expect(url.searchParams.has("limit")).toBe(false);
+    expect(url.searchParams.has("cursor")).toBe(false);
+    if (scope === "admin") expect(screen.getByText(/System-wide private admin-key admissions/)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/spent|invoice history|tokens|model provider/iu);
   });
 
   it("renders Market request occurrences, retained-key metadata, and cursor paging", async () => {
     const interaction = userEvent.setup();
     market.state = { data: logs, error: null, isLoading: false };
-    render(<LogsPage />);
+    render(<LogsRoute />);
 
     expect(screen.getByRole("heading", { name: "Logs" })).toBeTruthy();
     for (const column of [
@@ -153,18 +176,26 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
     expect(screen.getAllByText("public.get.market-hours")).toHaveLength(2);
     expect(screen.getByText("Success 200")).toBeTruthy();
     expect(screen.getByText("1 request occurrences")).toBeTruthy();
+    const url = new URL(market.urls.at(-1)!, "https://market.example");
+    expect(url.pathname).toBe(scope === "admin" ? "/api/admin/api-usage" : "/api/account/logs");
+    expect(url.searchParams.get("view")).toBe(scope === "admin" ? "logs" : null);
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(url.searchParams.has("granularity")).toBe(false);
+    if (scope === "admin") expect(screen.getByText(/System-wide private admin-key request history/)).toBeTruthy();
 
     await interaction.click(screen.getByRole("button", { name: /Next/i }));
     await waitFor(() => {
       expect(market.urls.at(-1)).toContain("cursor=cursor_2");
     });
+    await interaction.click(screen.getByRole("button", { name: /Previous/i }));
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.has("cursor")).toBe(false);
     expect(document.body.textContent).not.toMatch(/input tokens|output tokens|cost|AI model/iu);
   });
 
   it.each(["Trends", "Explore"])("preserves %s selection across data reloads", async (tab) => {
     const interaction = userEvent.setup();
     market.state = { data: activity, error: null, isLoading: false };
-    const { rerender } = render(<ActivityPage />);
+    const { rerender } = render(<ActivityPage scope={scope} />);
     await interaction.click(screen.getByRole("tab", { name: tab }));
     expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
     await interaction.click(screen.getByRole("button", { name: "Refresh" }));
@@ -178,10 +209,10 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
       { data: { ...activity, totalRequests: 0 }, error: null, isLoading: false },
     ]) {
       market.state = state;
-      rerender(<ActivityPage />);
+      rerender(<ActivityPage scope={scope} />);
       expect(screen.queryByRole("tab", { name: tab })).toBeNull();
       market.state = { data: activity, error: null, isLoading: false };
-      rerender(<ActivityPage />);
+      rerender(<ActivityPage scope={scope} />);
       expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
       expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("false");
     }
@@ -198,7 +229,7 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
       { timestamp, seriesId: "exchange", seriesLabel: "Exchange", requests: index === 2 ? 10 : 0, successes: 0, errors: 0 },
     ]);
     market.state = { data: { ...activity, totalRequests: 20, buckets, series }, error: null, isLoading: false };
-    render(<ActivityPage />);
+    render(<ActivityPage scope={scope} />);
     market.charts.length = 0;
     await interaction.click(screen.getByRole("tab", { name: tab }));
     const seriesChart = market.charts.find((points) => points.some((point) => Object.hasOwn(point, "series0")));
@@ -222,7 +253,7 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
         : [{ timestamp, seriesId: "busy-app", seriesLabel: "Busy app", requests: 1000, successes: 1000, errors: 0 }];
       return { data: { ...activity, series }, error: null, isLoading: false };
     };
-    render(<ActivityPage />);
+    render(<ActivityPage scope={scope} />);
     await interaction.click(screen.getByRole("tab", { name: "Explore" }));
     const metricSelect = screen.getAllByRole("combobox").find((control) => control.textContent === "Requests");
     expect(metricSelect).toBeTruthy();
@@ -249,11 +280,25 @@ describe("OpenRouter-shaped Market Activity and Logs canvases", () => {
       error: null,
       isLoading: false,
     };
-    const { rerender } = render(<ActivityPage />);
+    const { rerender } = render(<ActivityPage scope={scope} />);
     expect(screen.getByText("No activity in this period")).toBeTruthy();
+    expect(screen.getByText(scope === "admin"
+      ? /Admitted private admin-key update requests/
+      : /Admitted customer-key requests/)).toBeTruthy();
 
     market.state = { data: null, error: new Error("failed"), isLoading: false };
-    rerender(<ActivityPage />);
+    rerender(<ActivityPage scope={scope} />);
     expect(screen.getByText("Activity could not be loaded.")).toBeTruthy();
+  });
+
+  it("starts from a key-filtered link and retains that filter in both usage views", () => {
+    market.search = "key=key-retained";
+    market.state = { data: activity, error: null, isLoading: false };
+    const view = render(<ActivityPage scope={scope} />);
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("key")).toBe("key-retained");
+    view.unmount();
+    market.state = { data: logs, error: null, isLoading: false };
+    render(<LogsPage scope={scope} />);
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("key")).toBe("key-retained");
   });
 });

@@ -1,5 +1,5 @@
-import { ApiKeysPage } from "@/components/account/api-keys/api-keys-page";
+import { ApiKeysPage } from "@/components/api-access/api-keys-page";
 
 export default function ApiKeysRoutePage() {
-  return <ApiKeysPage />;
+  return <ApiKeysPage scope="account" />;
 }

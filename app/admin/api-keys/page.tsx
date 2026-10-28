@@ -1,3 +1,3 @@
-import { AdminApiKeysPage } from "@/components/admin/admin-api-keys-page";
+import { ApiKeysPage } from "@/components/api-access/api-keys-page";
 
-export default function AdminApiKeysRoutePage() { return <AdminApiKeysPage />; }
+export default function AdminApiKeysRoutePage() { return <ApiKeysPage scope="admin" />; }

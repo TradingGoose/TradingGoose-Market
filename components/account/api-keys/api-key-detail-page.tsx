@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Activity, ArrowLeft, FileClock, Info, Loader2, ShieldAlert, Trash2 } from "lucide-react";
 
-import { AccountPageHeader } from "@/components/account/page-header";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -120,7 +120,7 @@ export function ApiKeyDetailPage({ id }: { id: string }) {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       <Breadcrumb><BreadcrumbList><BreadcrumbItem><BreadcrumbLink asChild><Link href="/account/api-keys">API Keys</Link></BreadcrumbLink></BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbPage>{key.name}</BreadcrumbPage></BreadcrumbItem></BreadcrumbList></Breadcrumb>
-      <AccountPageHeader title={key.name} description={`${key.displayValue} · Created ${formatUtc(key.createdAt)}`} actions={<><Button variant="outline" asChild><Link href={`/account/activity?key=${encodeURIComponent(key.id)}`}><Activity />Activity</Link></Button><Button variant="outline" asChild><Link href={`/account/logs?key=${encodeURIComponent(key.id)}`}><FileClock />Logs</Link></Button></>} />
+      <PageHeader title={key.name} description={`${key.displayValue} · Created ${formatUtc(key.createdAt)}`} actions={<><Button variant="outline" asChild><Link href={`/account/activity?key=${encodeURIComponent(key.id)}`}><Activity />Activity</Link></Button><Button variant="outline" asChild><Link href={`/account/logs?key=${encodeURIComponent(key.id)}`}><FileClock />Logs</Link></Button></>} />
       <div className="flex items-center gap-2"><Badge variant={key.status === "available" ? "default" : "secondary"}>{key.status.replace("_", " ")}</Badge><span className="text-xs text-muted-foreground">Last used {formatUtc(key.lastUsedAt)}</span></div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
