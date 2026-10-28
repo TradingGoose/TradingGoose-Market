@@ -43,15 +43,17 @@ export default function ForgotPasswordForm() {
   }
 
   return (
-    <div className="space-y-8">
+    <>
       <AuthPageHeader eyebrow="Account recovery" title="Reset your password" description="Enter the email attached to your Market account." />
-      <form className="space-y-6" onSubmit={handleSubmit}>
-        <div className="space-y-2"><Label htmlFor="reset-email">Email</Label><Input id="reset-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={isSubmitting || submitted} required autoFocus /><p className="text-xs text-muted-foreground">For privacy, the response is the same for every address.</p></div>
-        {submitted ? <Alert><AlertDescription>{GENERIC_SUCCESS}</AlertDescription></Alert> : null}
-        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-        <Button type="submit" className="w-full" disabled={isSubmitting || submitted}>{isSubmitting ? "Sending…" : submitted ? "Email requested" : "Send reset link"}</Button>
+      <form className="mt-8 space-y-8 font-sans" onSubmit={handleSubmit}>
+        <div className="space-y-6">
+          <div className="space-y-2"><Label htmlFor="reset-email">Email</Label><Input id="reset-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="rounded-md shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100" disabled={isSubmitting || submitted} required autoFocus /><p className="text-xs text-muted-foreground">For privacy, the response is the same for every address.</p></div>
+          {submitted ? <Alert appearance="stroke" className="rounded-none border-0 p-0"><AlertDescription className="text-xs">{GENERIC_SUCCESS}</AlertDescription></Alert> : null}
+          {error ? <Alert variant="destructive" appearance="stroke" className="rounded-none border-0 p-0 text-red-400"><AlertDescription className="text-xs">{error}</AlertDescription></Alert> : null}
+        </div>
+        <Button type="submit" className="w-full rounded-md border border-transparent bg-primary text-[15px] font-medium text-primary-foreground transition-all duration-200" disabled={isSubmitting || submitted} aria-busy={isSubmitting}>{isSubmitting ? "Sending…" : submitted ? "Email requested" : "Send reset link"}</Button>
       </form>
-      <p className="text-center text-sm text-muted-foreground"><Link className="font-medium text-foreground hover:underline" href="/login">Back to sign in</Link></p>
-    </div>
+      <p className="pt-6 text-center font-sans text-[14px] font-light"><Link className="font-medium text-primary underline-offset-4 transition hover:text-primary-hover hover:underline" href="/login">Back to sign in</Link></p>
+    </>
   );
 }

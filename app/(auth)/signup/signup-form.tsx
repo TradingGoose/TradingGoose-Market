@@ -64,16 +64,18 @@ export default function SignupForm({ emailVerificationEnabled }: { emailVerifica
   }
 
   return (
-    <div className="space-y-8">
+    <>
       <AuthPageHeader eyebrow="TradingGoose Market" title="Create your account" description="Start with PAYG and mint Market API keys when you are ready." />
-      <form className="space-y-5" onSubmit={handleSubmit}>
-        <div className="space-y-2"><Label htmlFor="name">Name</Label><Input id="name" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" disabled={isSubmitting} required autoFocus /></div>
-        <div className="space-y-2"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" disabled={isSubmitting} required /></div>
-        <div className="space-y-2"><Label htmlFor="password">Password</Label><PasswordField id="password" value={password} onChange={setPassword} autoComplete="new-password" disabled={isSubmitting} /><p className="text-xs text-muted-foreground">Use at least 8 characters.</p></div>
-        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-        <Button type="submit" className="w-full" disabled={isSubmitting}>{isSubmitting ? "Creating account…" : "Create account"}</Button>
+      <form className="mt-8 space-y-8 font-sans" onSubmit={handleSubmit} aria-busy={isSubmitting}>
+        <div className="space-y-6">
+          <div className="space-y-2"><Label htmlFor="name">Name</Label><Input id="name" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" className="rounded-md shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100" disabled={isSubmitting} required autoFocus /></div>
+          <div className="space-y-2"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="rounded-md shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100" disabled={isSubmitting} required /></div>
+          <div className="space-y-2"><Label htmlFor="password">Password</Label><PasswordField id="password" value={password} onChange={setPassword} autoComplete="new-password" disabled={isSubmitting} /><p className="text-xs text-muted-foreground">Use at least 8 characters.</p></div>
+          {error ? <Alert variant="destructive" appearance="stroke" className="rounded-none border-0 p-0 text-red-400"><AlertDescription className="text-xs">{error}</AlertDescription></Alert> : null}
+        </div>
+        <Button type="submit" className="w-full rounded-md border border-transparent bg-primary text-[15px] font-medium text-primary-foreground transition-all duration-200" disabled={isSubmitting}>{isSubmitting ? "Creating account…" : "Create account"}</Button>
       </form>
-      <p className="text-center text-sm text-muted-foreground">Already have an account? <Link className="font-medium text-foreground hover:underline" href="/login">Sign in</Link></p>
-    </div>
+      <p className="pt-6 text-center font-sans text-[14px] font-light"><span className="font-normal">Already have an account? </span><Link className="font-medium text-primary underline-offset-4 transition hover:text-primary-hover hover:underline" href="/login">Sign in</Link></p>
+    </>
   );
 }

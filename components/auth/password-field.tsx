@@ -18,14 +18,14 @@ export function PasswordField({ id, value, onChange, autoComplete, disabled, pla
         autoComplete={autoComplete}
         disabled={disabled}
         placeholder={placeholder}
-        className="pr-11"
+        className="rounded-md pr-10 shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100"
         required
       />
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        className="absolute right-1 top-1/2 size-8 -translate-y-1/2 text-muted-foreground"
+        className="absolute right-1 top-1/2 size-8 -translate-y-1/2 bg-transparent p-0 text-gray-500 transition hover:bg-transparent hover:text-gray-700 [&_svg]:size-[18px]"
         onClick={() => setVisible((current) => !current)}
         aria-label={visible ? "Hide password" : "Show password"}
         disabled={disabled}

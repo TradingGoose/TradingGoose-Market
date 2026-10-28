@@ -37,12 +37,7 @@ vi.mock("@/app/fonts/soehne/soehne", () => ({
   soehne: { className: "soehne" },
 }));
 vi.mock("@/app/(landing)/components/nav/landing-nav", () => ({
-  LandingNav: () => <nav aria-label="Primary navigation">Market nav</nav>,
-}));
-vi.mock("@/components/auth/auth-background", () => ({
-  AuthBackground: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="auth-background">{children}</div>
-  ),
+  LandingNav: ({ variant }: { variant: string }) => <nav aria-label="Primary navigation" data-variant={variant}>Market nav</nav>,
 }));
 
 import AuthLayout from "../../app/(auth)/layout";
@@ -86,9 +81,12 @@ describe("Studio-shaped Market auth surface", () => {
     );
 
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeTruthy();
-    expect(screen.getByTestId("auth-background")).toBeTruthy();
+    expect(container.firstElementChild?.className).toBe("relative min-h-screen w-full overflow-hidden");
+    expect(container.querySelector(".cell")).toBeNull();
+    expect(screen.getByRole("navigation").getAttribute("data-variant")).toBe("auth");
     expect(container.querySelector("main")?.className).toContain("min-h-screen");
     expect(screen.getByText("Auth form").parentElement?.className).toContain("max-w-lg");
+    expect(screen.getByText("Auth form").parentElement?.parentElement?.className).not.toContain("pt-12");
     expect(container.querySelector(".rounded-lg.border.shadow-lg")).toBeNull();
   });
 
@@ -111,6 +109,7 @@ describe("Studio-shaped Market auth surface", () => {
     await interaction.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText("The email or password is incorrect.")).toBeTruthy();
+    expect(screen.getByRole("alert").className).not.toContain("bg-destructive");
     expect(auth.signIn).toHaveBeenCalledWith({
       email: "ada@example.com",
       password: "not-the-password",
@@ -135,6 +134,7 @@ describe("Studio-shaped Market auth surface", () => {
     await interaction.type(screen.getByLabelText("Password"), "-enough");
     await interaction.click(screen.getByRole("button", { name: "Create account" }));
     expect(await screen.findByText("That account cannot be created.")).toBeTruthy();
+    expect(screen.getByRole("alert").className).not.toContain("bg-destructive");
   });
 
   it.each([true, false])("completes signup with email verification enabled=%s", async (enabled) => {

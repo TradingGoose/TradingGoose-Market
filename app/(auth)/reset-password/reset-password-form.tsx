@@ -51,18 +51,20 @@ export default function ResetPasswordForm() {
   }
 
   return (
-    <div className="space-y-8">
+    <>
       <AuthPageHeader eyebrow="Account recovery" title="Choose a new password" description="A reset link can be used only once." />
       {invalidToken ? (
-        <div className="space-y-6"><Alert variant="destructive"><AlertDescription>{tokenMessage}</AlertDescription></Alert><Button asChild className="w-full"><Link href="/forgot-password">Request another link</Link></Button></div>
+        <div className="mt-8 space-y-8 font-sans"><Alert variant="destructive" appearance="stroke" className="rounded-none border-0 p-0 text-red-400"><AlertDescription className="text-xs">{tokenMessage}</AlertDescription></Alert><Button asChild className="w-full rounded-md border border-transparent text-[15px] font-medium transition-all duration-200"><Link href="/forgot-password">Request another link</Link></Button></div>
       ) : (
-        <form className="space-y-5" onSubmit={handleSubmit}>
-          <div className="space-y-2"><Label htmlFor="new-password">New password</Label><PasswordField id="new-password" value={password} onChange={setPassword} autoComplete="new-password" disabled={isSubmitting || complete} /></div>
-          <div className="space-y-2"><Label htmlFor="confirm-password">Confirm password</Label><PasswordField id="confirm-password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" disabled={isSubmitting || complete} /></div>
-          {status ? <Alert variant={status.kind === "error" ? "destructive" : "success"}><AlertDescription>{status.message}</AlertDescription></Alert> : null}
-          {complete ? <Button asChild className="w-full"><Link href="/login">Continue to sign in</Link></Button> : <Button type="submit" className="w-full" disabled={isSubmitting}>{isSubmitting ? "Resetting…" : "Reset password"}</Button>}
+        <form className="mt-8 space-y-8 font-sans" onSubmit={handleSubmit}>
+          <div className="space-y-6">
+            <div className="space-y-2"><Label htmlFor="new-password">New password</Label><PasswordField id="new-password" value={password} onChange={setPassword} autoComplete="new-password" disabled={isSubmitting || complete} /></div>
+            <div className="space-y-2"><Label htmlFor="confirm-password">Confirm password</Label><PasswordField id="confirm-password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" disabled={isSubmitting || complete} /></div>
+            {status ? <Alert variant={status.kind === "error" ? "destructive" : "success"} appearance="stroke" className="rounded-none border-0 p-0"><AlertDescription className="text-xs">{status.message}</AlertDescription></Alert> : null}
+          </div>
+          {complete ? <Button asChild className="w-full rounded-md border border-transparent text-[15px] font-medium transition-all duration-200"><Link href="/login">Continue to sign in</Link></Button> : <Button type="submit" className="w-full rounded-md border border-transparent bg-primary text-[15px] font-medium text-primary-foreground transition-all duration-200" disabled={isSubmitting} aria-busy={isSubmitting}>{isSubmitting ? "Resetting…" : "Reset password"}</Button>}
         </form>
       )}
-    </div>
+    </>
   );
 }

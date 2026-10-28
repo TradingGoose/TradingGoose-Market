@@ -78,26 +78,28 @@ export default function LoginForm({ registrationOpen }: { registrationOpen: bool
   }
 
   return (
-    <div className="space-y-8">
+    <>
       <AuthPageHeader eyebrow="TradingGoose Market" title="Welcome back" description="Sign in to manage API keys and inspect Market usage." />
-      <form className="space-y-6" onSubmit={handleSubmit}>
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" disabled={isSubmitting} required autoFocus />
-        </div>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor="password">Password</Label>
-            <Link href="/forgot-password" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Forgot password?</Link>
+      <form className="mt-8 space-y-8 font-sans" onSubmit={handleSubmit}>
+        <div className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="rounded-md shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100" disabled={isSubmitting} required autoFocus />
           </div>
-          <PasswordField id="password" value={password} onChange={setPassword} autoComplete="current-password" disabled={isSubmitting} />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="password">Password</Label>
+              <Link href="/forgot-password" className="text-xs font-medium text-muted-foreground transition hover:text-foreground">Forgot password?</Link>
+            </div>
+            <PasswordField id="password" value={password} onChange={setPassword} autoComplete="current-password" disabled={isSubmitting} />
+          </div>
+          {error ? <Alert variant="destructive" appearance="stroke" className="rounded-none border-0 p-0 text-red-400"><AlertDescription className="text-xs">{error}</AlertDescription></Alert> : null}
         </div>
-        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-        <Button type="submit" className="w-full" disabled={isSubmitting}>{isSubmitting ? "Signing in…" : "Sign in"}</Button>
+        <Button type="submit" className="w-full rounded-md border border-transparent bg-primary text-[15px] font-medium text-primary-foreground transition-all duration-200" disabled={isSubmitting} aria-busy={isSubmitting}>{isSubmitting ? "Signing in…" : "Sign in"}</Button>
       </form>
-      <p className="text-center text-sm text-muted-foreground">
-        {registrationOpen ? <>New to Market? <Link className="font-medium text-foreground hover:underline" href="/signup">Create an account</Link></> : "Public registration is currently closed."}
+      <p className="pt-6 text-center font-sans text-[14px] font-light">
+        {registrationOpen ? <><span className="font-normal">New to Market? </span><Link className="font-medium text-primary underline-offset-4 transition hover:text-primary-hover hover:underline" href="/signup">Create an account</Link></> : "Public registration is currently closed."}
       </p>
-    </div>
+    </>
   );
 }

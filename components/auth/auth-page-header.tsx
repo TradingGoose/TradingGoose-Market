@@ -7,7 +7,7 @@ export function AuthPageHeader({ eyebrow, title, description }: { eyebrow: strin
     <div className="space-y-2 text-center">
       <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted-foreground">{eyebrow}</p>
       <h1 className={`${soehne.className} text-[32px] font-medium tracking-tight`}>{title}</h1>
-      <p className="text-base font-normal text-muted-foreground">{description}</p>
+      <p className="font-sans text-[16px] font-[380] text-muted-foreground">{description}</p>
     </div>
   );
 }

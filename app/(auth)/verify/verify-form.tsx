@@ -98,17 +98,17 @@ export default function VerifyForm() {
 
   if (!email) {
     return (
-      <div className="space-y-8">
+      <>
         <AuthPageHeader eyebrow="Email verification" title="Start from sign in" description="Your verification address is no longer available in this browser session." />
-        <Button asChild className="w-full"><Link href="/login">Return to sign in</Link></Button>
-      </div>
+        <Button asChild className="mt-8 w-full rounded-md border border-transparent text-[15px] font-medium transition-all duration-200"><Link href="/login">Return to sign in</Link></Button>
+      </>
     );
   }
 
   return (
-    <div className="space-y-8">
+    <>
       <AuthPageHeader eyebrow="Email verification" title="Enter your code" description={<>We sent a six-digit code to <span className="font-medium text-foreground">{email}</span>.</>} />
-      <div className="space-y-6">
+      <div className="mt-8 space-y-8 font-sans">
         <div className="flex justify-center">
           <InputOTP
             maxLength={6}
@@ -118,26 +118,28 @@ export default function VerifyForm() {
             onComplete={(value) => void verify(value)}
             disabled={busy}
             aria-label="Six-digit verification code"
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? "verification-code-error" : undefined}
           >
-            <InputOTPGroup className="gap-2">
+            <InputOTPGroup className="gap-2 [&>div]:!rounded-md">
               {[0, 1, 2, 3, 4, 5].map((index) => (
-                <InputOTPSlot key={index} index={index} className="size-12 rounded-md border text-lg first:rounded-md first:border last:rounded-md" />
+                <InputOTPSlot key={index} index={index} className="!rounded-md size-12 border border-gray-300 text-center text-lg font-medium shadow-sm transition-all duration-200 hover:border-gray-400 focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100 first:border" />
               ))}
             </InputOTPGroup>
           </InputOTP>
         </div>
-        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-        <Button className="w-full" disabled={busy || otp.length !== 6} onClick={() => void verify()}>
+        {error ? <Alert id="verification-code-error" variant="destructive" appearance="stroke" className="rounded-none border-0 p-0 text-center text-red-400"><AlertDescription className="text-xs">{error}</AlertDescription></Alert> : null}
+        <Button className="w-full rounded-md border border-transparent bg-primary text-[15px] font-medium text-primary-foreground transition-all duration-200" disabled={busy || otp.length !== 6} onClick={() => void verify()} aria-busy={busy}>
           {busy ? "Verifying…" : "Verify and sign in"}
         </Button>
         <p className="text-center text-sm text-muted-foreground">
           Didn&apos;t receive it?{" "}
-          <button type="button" className="font-medium text-foreground hover:underline disabled:cursor-not-allowed disabled:opacity-60" disabled={busy || seconds > 0} onClick={() => void resend()}>
+          <button type="button" className="font-medium text-primary underline-offset-4 transition hover:text-primary-hover hover:underline disabled:cursor-not-allowed disabled:opacity-60" disabled={busy || seconds > 0} onClick={() => void resend()}>
             {seconds > 0 ? `Resend in ${seconds}s` : "Resend code"}
           </button>
         </p>
-        <p className="text-center text-sm"><Link className="font-medium hover:underline" href="/login" onClick={clearEmailVerification}>Back to sign in</Link></p>
+        <p className="text-center text-[14px] font-light"><Link className="font-medium text-primary underline-offset-4 transition hover:text-primary-hover hover:underline" href="/login" onClick={clearEmailVerification}>Back to sign in</Link></p>
       </div>
-    </div>
+    </>
   );
 }
