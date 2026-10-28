@@ -11,3 +11,4 @@ uploads/.turbo
 tsconfig.tsbuildinfo
 *.tsbuildinfo
 .env.local.vercel
+next-env.d.ts
