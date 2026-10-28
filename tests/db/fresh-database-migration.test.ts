@@ -27,8 +27,7 @@ const APPLICATION_ENVIRONMENT = {
   RESEND_API_KEY: "re_fresh_database_test",
   RESEND_FROM_EMAIL: "TradingGoose Market <market@example.com>",
   UNKEY_API_ID: "api_fresh_database_test",
-  UNKEY_KEY_MANAGEMENT_ROOT_KEY: "unkey_fresh_database_management",
-  UNKEY_KEY_VERIFY_ROOT_KEY: "unkey_fresh_database_verify",
+  UNKEY_ROOT_KEY: "unkey_fresh_database_root",
 } as const;
 
 const CLEARED_APPLICATION_ENVIRONMENT = [
@@ -40,7 +39,6 @@ const CLEARED_APPLICATION_ENVIRONMENT = [
   "ANONYMOUS_RATE_LIMIT",
   "ANONYMOUS_RATE_LIMIT_DURATION_SECONDS",
   "UNKEY_ANONYMOUS_NAMESPACE_ID",
-  "UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY",
   "DATABASE_POOL_URL",
 ] as const;
 

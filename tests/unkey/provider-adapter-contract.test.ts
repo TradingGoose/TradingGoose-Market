@@ -6,7 +6,6 @@ type RecordedSdk = {
   getKeyInputs: unknown[];
   deleteKeyInputs: unknown[];
   verifyKeyInputs: unknown[];
-  getApiInputs: unknown[];
   listKeysInputs: unknown[];
   listPages: Array<Array<Record<string, unknown>>>;
 };
@@ -32,7 +31,6 @@ vi.mock("@unkey/api", () => ({
       }>;
     };
     readonly apis: {
-      getApi: (input: unknown) => Promise<{ data: { id: string; name: string } }>;
       listKeys: (input: unknown) => Promise<AsyncIterable<{
         result: { data: Array<Record<string, unknown>> };
       }>>;
@@ -45,7 +43,6 @@ vi.mock("@unkey/api", () => ({
         getKeyInputs: [],
         deleteKeyInputs: [],
         verifyKeyInputs: [],
-        getApiInputs: [],
         listKeysInputs: [],
         listPages: [[]],
       };
@@ -78,10 +75,6 @@ vi.mock("@unkey/api", () => ({
         },
       };
       this.apis = {
-        getApi: async (input) => {
-          recorded.getApiInputs.push(input);
-          return { data: { id: "api_market", name: "Market" } };
-        },
         listKeys: async (input) => {
           recorded.listKeysInputs.push(input);
           const pages = recorded.listPages;
@@ -103,18 +96,12 @@ beforeEach(() => {
 });
 
 describe("Market Unkey adapter contract", () => {
-  it("constructs distinct no-retry management and verification clients", () => {
+  it("constructs one no-retry client for management and verification", () => {
     createAdapter();
 
-    expect(sdkState.instances).toHaveLength(2);
+    expect(sdkState.instances).toHaveLength(1);
     expect(sdkState.instances[0].options).toEqual({
-      rootKey: "management-root",
-      retryConfig: { strategy: "none" },
-      timeoutMs: 10_000,
-      serverURL: "https://unkey.test",
-    });
-    expect(sdkState.instances[1].options).toEqual({
-      rootKey: "verification-root",
+      rootKey: "unkey-root",
       retryConfig: { strategy: "none" },
       timeoutMs: 10_000,
       serverURL: "https://unkey.test",
@@ -158,10 +145,9 @@ describe("Market Unkey adapter contract", () => {
     ]);
   });
 
-  it("sends manual spend input only through the verification client", async () => {
+  it("sends manual spend input through the same root client", async () => {
     const adapter = createAdapter();
-    const management = sdkState.instances[0];
-    const verification = sdkState.instances[1];
+    const client = sdkState.instances[0];
 
     await adapter.verifyKey({
       key: "tg_secret",
@@ -174,8 +160,8 @@ describe("Market Unkey adapter contract", () => {
       },
     });
 
-    expect(management.verifyKeyInputs).toEqual([]);
-    expect(verification.verifyKeyInputs).toEqual([
+    expect(sdkState.instances).toHaveLength(1);
+    expect(client.verifyKeyInputs).toEqual([
       {
         key: "tg_secret",
         permissions: "market.public",
@@ -205,7 +191,6 @@ describe("Market Unkey adapter contract", () => {
     ]);
     await adapter.getKey("key_1");
     await adapter.deleteKey("key_1");
-    await adapter.validateApi();
 
     expect(management.listKeysInputs).toEqual([
       {
@@ -219,15 +204,13 @@ describe("Market Unkey adapter contract", () => {
     expect(management.deleteKeyInputs).toEqual([
       { keyId: "key_1", permanent: false },
     ]);
-    expect(management.getApiInputs).toEqual([{ apiId: "api_market" }]);
   });
 });
 
 function createAdapter() {
   return createUnkeyAdapter({
     apiId: "api_market",
-    managementRootKey: "management-root",
-    verifyRootKey: "verification-root",
+    rootKey: "unkey-root",
     serverUrl: "https://unkey.test",
   });
 }

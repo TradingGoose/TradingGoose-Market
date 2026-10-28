@@ -78,11 +78,11 @@ describe("exclusive Market API actors", () => {
     accessState.config = {
       billing: { enabled: false, usdPer1000Reads: "1", requestNanoUsd: 1_000_000n },
       unkey: {
+        rootKey: "unkey-root",
         anonymous: {
           limit: 100,
           durationSeconds: 60,
           namespaceId: "anonymous_allowed",
-          rootKey: "anonymous_allowed_root",
         },
       },
     };
@@ -105,6 +105,12 @@ describe("exclusive Market API actors", () => {
     expect(response.status).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
     expect(limiter).toHaveBeenCalledOnce();
+    expect(accessState.anonymousFactory).toHaveBeenCalledWith({
+      limit: 100,
+      durationSeconds: 60,
+      namespaceId: "anonymous_allowed",
+      rootKey: "unkey-root",
+    });
     expect(response.headers.get("X-Market-RateLimit-Limit")).toBe("100");
     expect(response.headers.get("X-Market-RateLimit-Remaining")).toBe("99");
     expect(response.headers.get("X-Market-RateLimit-Reset")).toBe("1900000000");
@@ -115,11 +121,11 @@ describe("exclusive Market API actors", () => {
     accessState.config = {
       billing: { enabled: false, usdPer1000Reads: "1", requestNanoUsd: 1_000_000n },
       unkey: {
+        rootKey: "unkey-root",
         anonymous: {
           limit: 50,
           durationSeconds: 61,
           namespaceId: "anonymous_denied",
-          rootKey: "anonymous_denied_root",
         },
       },
     };
@@ -190,11 +196,11 @@ describe("exclusive Market API actors", () => {
       accessState.config = {
         billing: { enabled: false, usdPer1000Reads: "1", requestNanoUsd: 1_000_000n },
         unkey: {
+          rootKey: "unkey-root",
           anonymous: {
             limit: 10,
             durationSeconds: 60,
             namespaceId: "anonymous_throw",
-            rootKey: "anonymous_throw_root",
           },
         },
       };

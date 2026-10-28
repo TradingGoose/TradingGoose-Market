@@ -553,16 +553,16 @@ async function enforceAnonymousPolicy(): Promise<{
   response: Response | null;
   headers: Headers;
 }> {
-  const policy = getMarketRuntimeConfig().unkey.anonymous;
+  const { anonymous: policy, rootKey } = getMarketRuntimeConfig().unkey;
   if (!policy) return { response: null, headers: new Headers() };
   const signature = [
     policy.limit,
     policy.durationSeconds,
     policy.namespaceId,
-    policy.rootKey,
+    rootKey,
   ].join("\u0000");
   if (!anonymousLimiter || anonymousLimiterSignature !== signature) {
-    const nextLimiter = createAnonymousLimiter(policy);
+    const nextLimiter = createAnonymousLimiter({ ...policy, rootKey });
     anonymousLimiter = nextLimiter;
     anonymousLimiterSignature = signature;
   }

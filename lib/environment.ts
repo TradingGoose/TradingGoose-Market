@@ -24,13 +24,11 @@ export type MarketRuntimeConfig = {
   };
   unkey: {
     apiId: string;
-    managementRootKey: string;
-    verifyRootKey: string;
+    rootKey: string;
     anonymous: null | {
       limit: number;
       durationSeconds: number;
       namespaceId: string;
-      rootKey: string;
     };
   };
 };
@@ -138,9 +136,7 @@ function rejectPublicCredentialAliases(environment: NodeJS.ProcessEnv): void {
     "NEXT_PUBLIC_RESEND_AUDIENCE_ID",
     "NEXT_PUBLIC_STRIPE_SECRET_KEY",
     "NEXT_PUBLIC_STRIPE_WEBHOOK_SECRET",
-    "NEXT_PUBLIC_UNKEY_KEY_MANAGEMENT_ROOT_KEY",
-    "NEXT_PUBLIC_UNKEY_KEY_VERIFY_ROOT_KEY",
-    "NEXT_PUBLIC_UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY",
+    "NEXT_PUBLIC_UNKEY_ROOT_KEY",
   ] as const;
   const alias = forbidden.find((name) => environment[name] !== undefined);
   if (alias) {
@@ -232,8 +228,7 @@ function parseAnonymousPolicy(environment: NodeJS.ProcessEnv) {
   return {
     limit,
     durationSeconds,
-    namespaceId: requiredNonEmpty(environment, 'UNKEY_ANONYMOUS_NAMESPACE_ID'),
-    rootKey: requiredNonEmpty(environment, 'UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY')
+    namespaceId: requiredNonEmpty(environment, 'UNKEY_ANONYMOUS_NAMESPACE_ID')
   };
 }
 
@@ -356,11 +351,7 @@ function parseRuntimeConfig(environment: NodeJS.ProcessEnv): MarketRuntimeConfig
     },
     unkey: {
       apiId: requiredNonEmpty(environment, 'UNKEY_API_ID'),
-      managementRootKey: requiredNonEmpty(
-        environment,
-        'UNKEY_KEY_MANAGEMENT_ROOT_KEY'
-      ),
-      verifyRootKey: requiredNonEmpty(environment, 'UNKEY_KEY_VERIFY_ROOT_KEY'),
+      rootKey: requiredNonEmpty(environment, 'UNKEY_ROOT_KEY'),
       anonymous: parseAnonymousPolicy(environment)
     }
   };

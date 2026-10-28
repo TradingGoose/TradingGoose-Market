@@ -19,8 +19,7 @@ const environment = {
   BILLING_ENABLED: "false",
   PAYG_USD_PER_1000_READS: "1",
   UNKEY_API_ID: "api_1",
-  UNKEY_KEY_MANAGEMENT_ROOT_KEY: "manage_1",
-  UNKEY_KEY_VERIFY_ROOT_KEY: "verify_1",
+  UNKEY_ROOT_KEY: "unkey_1",
 } as const;
 
 beforeEach(() => {

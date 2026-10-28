@@ -10,8 +10,7 @@ export type MarketKeyPermission =
 
 export type UnkeyClientConfig = {
   apiId: string;
-  managementRootKey: string;
-  verifyRootKey: string;
+  rootKey: string;
   serverUrl?: string;
 };
 
@@ -36,22 +35,17 @@ export class MarketKeyProviderError extends Error {
   }
 }
 
-function createSdk(rootKey: string, serverUrl?: string) {
-  return new Unkey({
-    rootKey,
-    retryConfig: { strategy: "none" },
-    timeoutMs: 10_000,
-    ...(serverUrl ? { serverURL: serverUrl } : {}),
-  });
-}
-
 function providerFailure(operation: string, cause: unknown): never {
   throw new MarketKeyProviderError(`Key provider ${operation} failed`, { cause });
 }
 
 export function createUnkeyAdapter(config: UnkeyClientConfig) {
-  const management = createSdk(config.managementRootKey, config.serverUrl);
-  const verification = createSdk(config.verifyRootKey, config.serverUrl);
+  const client = new Unkey({
+    rootKey: config.rootKey,
+    retryConfig: { strategy: "none" },
+    timeoutMs: 10_000,
+    ...(config.serverUrl ? { serverURL: config.serverUrl } : {}),
+  });
 
   return {
     async createKey(input: {
@@ -60,7 +54,7 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
       correlationId: string;
     }): Promise<CreatedProviderKey> {
       try {
-        const response = await management.keys.createKey({
+        const response = await client.keys.createKey({
           apiId: config.apiId,
           name: input.name,
           prefix: input.permission === MARKET_PUBLIC_PERMISSION ? "tg_pub" : "tg_priv",
@@ -77,7 +71,7 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
 
     async getKey(keyId: string): Promise<KeyResponseData | null> {
       try {
-        const response = await management.keys.getKey({ keyId, decrypt: false });
+        const response = await client.keys.getKey({ keyId, decrypt: false });
         return response.data;
       } catch (error) {
         if (isProviderNotFound(error)) return null;
@@ -85,14 +79,13 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
       }
     },
 
-    async listKeys(input?: { externalId?: string }): Promise<KeyResponseData[]> {
+    async listKeys(): Promise<KeyResponseData[]> {
       try {
-        const first = await management.apis.listKeys({
+        const first = await client.apis.listKeys({
           apiId: config.apiId,
           limit: 100,
           decrypt: false,
           revalidateKeysCache: true,
-          ...(input?.externalId ? { externalId: input.externalId } : {}),
         });
         const keys: KeyResponseData[] = [];
         for await (const page of first) {
@@ -106,7 +99,7 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
 
     async deleteKey(keyId: string): Promise<void> {
       try {
-        await management.keys.deleteKey({ keyId, permanent: false });
+        await client.keys.deleteKey({ keyId, permanent: false });
       } catch (error) {
         if (isProviderNotFound(error)) return;
         providerFailure("revocation", error);
@@ -119,7 +112,7 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
       ratelimit?: { name: string; cost: number; limit: number; duration: number };
     }): Promise<ProviderVerification> {
       try {
-        const response = await verification.keys.verifyKey({
+        const response = await client.keys.verifyKey({
           key: input.key,
           permissions: input.permission,
           ...(input.ratelimit ? { ratelimits: [input.ratelimit] } : {}),
@@ -134,15 +127,6 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
         };
       } catch (error) {
         providerFailure("verification", error);
-      }
-    },
-
-    async validateApi(): Promise<{ id: string; name: string }> {
-      try {
-        const response = await management.apis.getApi({ apiId: config.apiId });
-        return response.data;
-      } catch (error) {
-        providerFailure("API validation", error);
       }
     },
   };

@@ -6,18 +6,10 @@ let cachedAdapter: ReturnType<typeof createUnkeyAdapter> | null = null;
 
 export function getMarketKeyProvider() {
   const config = getMarketRuntimeConfig().unkey;
-  const signature = [
-    config.apiId,
-    config.managementRootKey,
-    config.verifyRootKey,
-  ].join("\u0000");
+  const signature = [config.apiId, config.rootKey].join("\u0000");
   if (!cachedAdapter || cachedSignature !== signature) {
     cachedSignature = signature;
-    cachedAdapter = createUnkeyAdapter({
-      apiId: config.apiId,
-      managementRootKey: config.managementRootKey,
-      verifyRootKey: config.verifyRootKey,
-    });
+    cachedAdapter = createUnkeyAdapter(config);
   }
   return cachedAdapter;
 }

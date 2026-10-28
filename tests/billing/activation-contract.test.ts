@@ -32,8 +32,7 @@ const managedEnvironmentNames = [
   "PAYG_STRIPE_PRICE_ID",
   "PAYG_INVOICE_THRESHOLD_USD",
   "UNKEY_API_ID",
-  "UNKEY_KEY_MANAGEMENT_ROOT_KEY",
-  "UNKEY_KEY_VERIFY_ROOT_KEY",
+  "UNKEY_ROOT_KEY",
 ] as const;
 
 const originalEnvironment = new Map(
@@ -53,8 +52,7 @@ beforeEach(() => {
     BILLING_ENABLED: "false",
     PAYG_USD_PER_1000_READS: "1",
     UNKEY_API_ID: "api_market",
-    UNKEY_KEY_MANAGEMENT_ROOT_KEY: "management-key",
-    UNKEY_KEY_VERIFY_ROOT_KEY: "verify-key",
+    UNKEY_ROOT_KEY: "unkey-root",
   });
   delete process.env.STRIPE_SECRET_KEY;
   delete process.env.STRIPE_WEBHOOK_SECRET;

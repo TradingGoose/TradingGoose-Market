@@ -39,7 +39,7 @@ Required for a normal local setup:
 - optional `RESEND_AUDIENCE_ID` for best-effort verified-user contact projection
 - `REGISTRATION_MODE` and `BILLING_ENABLED`
 - `PAYG_USD_PER_1000_READS`
-- `UNKEY_API_ID`, `UNKEY_KEY_MANAGEMENT_ROOT_KEY`, and `UNKEY_KEY_VERIFY_ROOT_KEY`
+- `UNKEY_API_ID` and one server-only `UNKEY_ROOT_KEY`
 
 Stripe variables are required only by the enabled or explicitly synchronized billing branches. The anonymous limiter variables are required only when both anonymous-policy values are configured. See `.env.example` for the exact closed configuration matrix.
 

@@ -89,8 +89,7 @@ describe("release workflow contract", () => {
       "BETTER_AUTH_SECRET",
       "PAYG_USD_PER_1000_READS",
       "UNKEY_API_ID",
-      "UNKEY_KEY_MANAGEMENT_ROOT_KEY",
-      "UNKEY_KEY_VERIFY_ROOT_KEY",
+      "UNKEY_ROOT_KEY",
       "RESEND_API_KEY",
       "RESEND_FROM_EMAIL",
     ]) {
@@ -126,7 +125,6 @@ describe("release workflow contract", () => {
       "ANONYMOUS_RATE_LIMIT",
       "ANONYMOUS_RATE_LIMIT_DURATION_SECONDS",
       "UNKEY_ANONYMOUS_NAMESPACE_ID",
-      "UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY",
     ]) {
       expect(validation).not.toContain(forbidden);
     }
@@ -185,7 +183,6 @@ describe("release workflow contract", () => {
       "ANONYMOUS_RATE_LIMIT",
       "ANONYMOUS_RATE_LIMIT_DURATION_SECONDS",
       "UNKEY_ANONYMOUS_NAMESPACE_ID",
-      "UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY",
     ]) {
       expect(harness).toMatch(new RegExp(`delete environment\\[key\\]|"${key}"`, "u"));
     }

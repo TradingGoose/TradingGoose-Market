@@ -75,8 +75,17 @@ Core runtime:
 - optional `RESEND_AUDIENCE_ID` for best-effort verified-user contact projection
 - `BILLING_ENABLED=true|false`
 - positive `PAYG_USD_PER_1000_READS`
-- `UNKEY_API_ID`
-- separate `UNKEY_KEY_MANAGEMENT_ROOT_KEY` and `UNKEY_KEY_VERIFY_ROOT_KEY`
+- `UNKEY_API_ID`: the target keyspace's API ID, not a credential
+- server-only `UNKEY_ROOT_KEY`: one root key for key management and verification
+
+Copy the **API ID** (`api_...`) from the Market [Keyspace Settings](https://www.unkey.com/docs/api-management/keyspaces/settings),
+not its separate **Keyspace ID** (`ks_...`). The installed v2 SDK requires
+`apiId` for key creation and listing. Create one root key scoped to that
+keyspace with keyspace read and key read/write/delete/verify
+permissions. Unkey permission paths use the Keyspace ID (`ks_...`), not the API
+ID. Market does not need key decryption or workspace-wide permissions.
+See [Unkey's root-key setup](https://www.unkey.com/docs/platform/root-keys/configure)
+and [permission reference](https://www.unkey.com/docs/platform/root-keys/permission-reference).
 
 Enabled billing also requires:
 
@@ -94,7 +103,7 @@ Anonymous request limiting is optional. Leave both variables absent for unlimite
 - `ANONYMOUS_RATE_LIMIT`
 - `ANONYMOUS_RATE_LIMIT_DURATION_SECONDS`
 
-A configured pair also requires `UNKEY_ANONYMOUS_NAMESPACE_ID` and `UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY`. The bucket is service-wide; it is not partitioned by client IP. Redis, when configured, belongs only to the retained response cache.
+A configured pair also requires `UNKEY_ANONYMOUS_NAMESPACE_ID` and limit permission on that namespace for the same `UNKEY_ROOT_KEY`. The bucket is service-wide; it is not partitioned by client IP. Redis, when configured, belongs only to the retained response cache.
 
 `STORAGE_SERVICE` is an optional `LOCAL|VERCEL|AZURE` override. When it is
 unset, Market preserves its original auto-detection contract:

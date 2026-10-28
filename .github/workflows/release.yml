@@ -75,8 +75,7 @@ jobs:
           BETTER_AUTH_SECRET: 51d365045e0022c3c710f22e1d4133321ae9eb5e081d6eee119c09cacf145dfb
           PAYG_USD_PER_1000_READS: "1.00"
           UNKEY_API_ID: api_release_validation
-          UNKEY_KEY_MANAGEMENT_ROOT_KEY: unkey_release_management
-          UNKEY_KEY_VERIFY_ROOT_KEY: unkey_release_verify
+          UNKEY_ROOT_KEY: unkey_release_root
           RESEND_API_KEY: re_release_validation
           RESEND_FROM_EMAIL: "TradingGoose Market <market@example.com>"
 

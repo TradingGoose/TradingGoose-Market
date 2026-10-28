@@ -194,8 +194,7 @@ describe("Market keyed protocol guards", () => {
     BILLING_ENABLED: "false",
     PAYG_USD_PER_1000_READS: "1",
     UNKEY_API_ID: "test-api-id",
-    UNKEY_KEY_MANAGEMENT_ROOT_KEY: "test-management-key",
-    UNKEY_KEY_VERIFY_ROOT_KEY: "test-verify-key",
+    UNKEY_ROOT_KEY: "test-unkey-root",
   } as const;
   const originalValues = new Map<string, string | undefined>();
 

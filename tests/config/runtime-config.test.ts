@@ -16,8 +16,7 @@ function validEnvironment(
     BILLING_ENABLED: "false",
     PAYG_USD_PER_1000_READS: "1.25",
     UNKEY_API_ID: "api_market",
-    UNKEY_KEY_MANAGEMENT_ROOT_KEY: "management-key",
-    UNKEY_KEY_VERIFY_ROOT_KEY: "verify-key"
+    UNKEY_ROOT_KEY: "unkey-root"
   };
 
   for (const [name, value] of Object.entries(overrides)) {
@@ -50,7 +49,19 @@ describe("getMarketRuntimeConfig", () => {
       stripePriceId: null,
       invoiceThresholdUsd: null
     });
-    expect(config.unkey.anonymous).toBeNull();
+    expect(config.unkey).toEqual({
+      apiId: "api_market",
+      rootKey: "unkey-root",
+      anonymous: null,
+    });
+  });
+
+  it.each(["UNKEY_API_ID", "UNKEY_ROOT_KEY"])("requires %s", (name) => {
+    for (const value of [undefined, " "]) {
+      expect(() =>
+        getMarketRuntimeConfig(validEnvironment({ [name]: value }))
+      ).toThrow(new RegExp(`${name}.*required`));
+    }
   });
 
   it("requires one trimmed syntactically valid PostgreSQL database URL", () => {
@@ -197,13 +208,15 @@ describe("getMarketRuntimeConfig", () => {
     ).toThrow(/RESEND_AUDIENCE_ID/);
   });
 
-  it("rejects public aliases for server credentials", () => {
-    expect(() =>
-      getMarketRuntimeConfig(
-        validEnvironment({ NEXT_PUBLIC_RESEND_API_KEY: "re_public" })
-      )
-    ).toThrow(/server-only/);
-  });
+  it.each(["NEXT_PUBLIC_RESEND_API_KEY", "NEXT_PUBLIC_UNKEY_ROOT_KEY"])(
+    "rejects public credential %s", (name) => {
+      expect(() =>
+        getMarketRuntimeConfig(
+          validEnvironment({ [name]: "public-secret" })
+        )
+      ).toThrow(/server-only/);
+    }
+  );
 
   it("requires an exactly representable positive safe request nano-USD rate", () => {
     expect(
@@ -270,15 +283,12 @@ describe("getMarketRuntimeConfig", () => {
     ).toThrow(/lone Stripe value/);
   });
 
-  it("does not read anonymous credentials when the policy is null", () => {
+  it("does not read the anonymous namespace when the policy is null", () => {
     const target = validEnvironment();
     const environment = new Proxy(target, {
       get(object, property, receiver) {
-        if (
-          property === "UNKEY_ANONYMOUS_NAMESPACE_ID" ||
-          property === "UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY"
-        ) {
-          throw new Error("anonymous credential was read");
+        if (property === "UNKEY_ANONYMOUS_NAMESPACE_ID") {
+          throw new Error("anonymous namespace was read");
         }
         return Reflect.get(object, property, receiver);
       }
@@ -287,21 +297,27 @@ describe("getMarketRuntimeConfig", () => {
     expect(getMarketRuntimeConfig(environment).unkey.anonymous).toBeNull();
   });
 
-  it("requires one complete positive safe anonymous policy and credential pair", () => {
+  it("requires one complete positive safe anonymous policy and namespace, sharing the root", () => {
     const config = getMarketRuntimeConfig(
       validEnvironment({
         ANONYMOUS_RATE_LIMIT: "100",
         ANONYMOUS_RATE_LIMIT_DURATION_SECONDS: "60",
-        UNKEY_ANONYMOUS_NAMESPACE_ID: "namespace_market",
-        UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY: "ratelimit-key"
+        UNKEY_ANONYMOUS_NAMESPACE_ID: "namespace_market"
       })
     );
     expect(config.unkey.anonymous).toEqual({
       limit: 100,
       durationSeconds: 60,
-      namespaceId: "namespace_market",
-      rootKey: "ratelimit-key"
+      namespaceId: "namespace_market"
     });
+    expect(config.unkey.rootKey).toBe("unkey-root");
+
+    expect(() =>
+      getMarketRuntimeConfig(validEnvironment({
+        ANONYMOUS_RATE_LIMIT: "100",
+        ANONYMOUS_RATE_LIMIT_DURATION_SECONDS: "60",
+      }))
+    ).toThrow(/UNKEY_ANONYMOUS_NAMESPACE_ID.*required/);
 
     expect(() =>
       getMarketRuntimeConfig(
@@ -324,7 +340,6 @@ describe("getMarketRuntimeConfig", () => {
             Number.MAX_SAFE_INTEGER,
           ),
           UNKEY_ANONYMOUS_NAMESPACE_ID: "namespace_market",
-          UNKEY_ANONYMOUS_RATELIMIT_ROOT_KEY: "ratelimit-key",
         }),
       ),
     ).toThrow(/safe millisecond duration/);
