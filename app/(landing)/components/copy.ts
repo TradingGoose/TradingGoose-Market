@@ -51,7 +51,6 @@ export const landingHero = {
     "Market hours",
     "Currencies"
   ],
-  primaryAction: { label: "Comming soon" },
   secondaryAction: {
     label: "Studio",
     href: landingExternalLinks.studioSite

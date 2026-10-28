@@ -6,6 +6,8 @@ import { isLandingSiteUrlConfigured } from "./site-url";
 
 const landingTitle = "TradingGoose Market | Canonical Market Reference Data";
 
+export const dynamic = "force-dynamic";
+
 export function generateMetadata(): Metadata {
   const configured = isLandingSiteUrlConfigured();
 

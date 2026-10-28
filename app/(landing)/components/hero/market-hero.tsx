@@ -4,6 +4,7 @@ import {
   LandmarkIcon,
   ListIcon
 } from "lucide-react";
+import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,9 +15,9 @@ import { MarketGlobe } from "./market-globe";
 
 const featureBadgeIcons = [ListIcon, LandmarkIcon, ClockIcon, GitBranchIcon];
 
-export default function Hero() {
+export default function Hero({ registrationOpen }: { registrationOpen: boolean }) {
   return (
-    <section className="relative h-full overflow-hidden">
+    <section className="relative overflow-hidden">
       <div className="flex-1 pt-8 sm:pt-16 lg:pt-24">
         <div className="relative z-10 mx-auto flex max-w-7xl flex-col items-center gap-8 px-4 sm:gap-16 sm:px-6 lg:gap-24 lg:px-8">
           <div className="flex shrink-0 flex-col items-center gap-4 text-center">
@@ -60,6 +61,11 @@ export default function Hero() {
 
             <div className="relative z-10 mt-4 flex flex-wrap items-center justify-center gap-3">
               <Button size="lg" className="font-semibold text-lg" asChild>
+                <Link href={registrationOpen ? "/signup" : "/login"}>
+                  {registrationOpen ? "Get started" : "Log in"}
+                </Link>
+              </Button>
+              <Button variant="outline" size="lg" className="bg-background font-semibold text-lg" asChild>
                 <a
                   href={landingGitHubLink.href}
                   target="_blank"
@@ -76,7 +82,7 @@ export default function Hero() {
 
       <div
         aria-hidden="true"
-        className="absolute inset-x-0 top-[20rem] z-0 h-[42rem] overflow-visible sm:top-[24rem] sm:h-[56rem] lg:top-[30rem] lg:h-[64rem]"
+        className="relative z-0 h-[42rem] sm:h-[56rem] lg:h-[64rem]"
       >
         <div className="relative h-full w-full">
           <MarketGlobe />
