@@ -1,5 +1,4 @@
 import {
-  MARKET_API_ROUTE_MANIFEST,
   isMarketApiMethod,
   resolveMarketRouteDescriptor,
 } from "@/lib/market-api/core/manifest";
@@ -8,12 +7,6 @@ import {
   marketRouteNotFound,
 } from "@/lib/market-api/core/method-guards";
 import { requireSameOriginBrowserMutation } from "@/lib/market-api/core/browser-route";
-
-export const AUTH_PROTOCOL_ROUTES = Object.freeze(
-  MARKET_API_ROUTE_MANIFEST.filter((descriptor) => descriptor.surface === "auth").map(
-    (descriptor) => ({ method: descriptor.methods[0], path: descriptor.path }),
-  ),
-);
 
 function isResetCallbackPath(pathname: string): boolean {
   const prefix = "/api/auth/reset-password/";

@@ -8,13 +8,7 @@ import { ensureMarketCustomerState } from "@/lib/billing/customer-state";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import { requireSameOriginBrowserMutation } from "@/lib/market-api/core/browser-route";
 
-export type MarketSessionUser = {
-  id: string;
-  name: string;
-  email: string;
-  emailVerified: boolean;
-  image?: string | null;
-};
+type MarketSessionUser = NonNullable<Awaited<ReturnType<typeof getSession>>>["user"];
 
 export async function getSession(headers?: Headers) {
   const requestHeaders = headers ?? new Headers({
@@ -60,7 +54,7 @@ type CustomerGuardFailure = {
   error: Response;
 };
 
-export type CustomerGuardResult = CustomerGuardSuccess | CustomerGuardFailure;
+type CustomerGuardResult = CustomerGuardSuccess | CustomerGuardFailure;
 
 export async function apiRequireCustomerSession(request: Request): Promise<CustomerGuardResult> {
   const originError = requireSameOriginBrowserMutation(request);
@@ -84,10 +78,10 @@ export async function apiRequireCustomerSession(request: Request): Promise<Custo
     };
   }
 
-  return { user: session.user as MarketSessionUser };
+  return { user: session.user };
 }
 
-export type SystemAdminGuardResult =
+type SystemAdminGuardResult =
   | {
       user: MarketSessionUser;
       systemAdmin: NonNullable<Awaited<ReturnType<typeof getCurrentSystemAdmin>>>;

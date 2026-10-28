@@ -4,7 +4,11 @@ vi.mock("@/lib/environment", () => ({
   getMarketRuntimeConfig: () => ({ appUrl: "https://market.example.com" }),
 }));
 
-import { AUTH_PROTOCOL_ROUTES, dispatchAuthProtocolRequest } from "../../lib/auth/protocol";
+import { dispatchAuthProtocolRequest } from "../../lib/auth/protocol";
+import { MARKET_API_ROUTE_MANIFEST } from "../../lib/market-api/core/manifest";
+
+const AUTH_PROTOCOL_ROUTES = MARKET_API_ROUTE_MANIFEST.filter((route) => route.surface === "auth")
+  .map((route) => ({ method: route.methods[0], path: route.path }));
 
 const origin = "https://market.example.com";
 type RequestSecurity = {
