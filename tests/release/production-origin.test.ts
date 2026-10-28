@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
+import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { proxy } from "../../proxy";
+import { config, proxy } from "../../proxy";
 import {
   RELEASE_REQUIRED_BASE_ENV_KEYS,
   requireBaseEnvironment,
@@ -21,6 +22,17 @@ function releaseEnvironment(origin: string): NodeJS.ProcessEnv {
 
 describe("production smoke origin", () => {
   beforeEach(() => { runtime.appUrl = "https://market.example.test:3000"; });
+
+  it.each([
+    ["/icon.png", false], ["/icon.svg", false], ["/favicon.ico", false],
+    ["/fonts/soehne.woff2", false], ["/_next/static/chunk.js", false],
+    ["/_next/image?url=%2Ficon.png&w=64&q=75", false],
+    ["/api/health", false], ["/health", false], ["/files/serve/image", false],
+    ["/", true], ["/login", true], ["/signup", true],
+    ["/account/api-keys", true], ["/admin", true],
+  ] as const)("matches %s only when UI proxy work is needed: %s", (path, matches) => {
+    expect(unstable_doesMiddlewareMatch({ config, url: `http://localhost:3000${path}` })).toBe(matches);
+  });
 
   it("uses a production-shaped public host different from Next's internal listening host", () => {
     const environment = releaseEnvironment(runtime.appUrl);
