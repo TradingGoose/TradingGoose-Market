@@ -4,7 +4,12 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const navigation = vi.hoisted(() => ({ params: new URLSearchParams() }));
+const navigation = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  assign: vi.fn(),
+  redirect: vi.fn(),
+  config: { registrationMode: "open", betterAuth: { emailVerificationEnabled: true } },
+}));
 const auth = vi.hoisted(() => ({
   signIn: vi.fn(),
   signUp: vi.fn(),
@@ -16,7 +21,9 @@ const auth = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => navigation.params,
+  redirect: navigation.redirect,
 }));
+vi.mock("@/lib/environment", () => ({ getMarketRuntimeConfig: () => navigation.config }));
 vi.mock("@/lib/auth/client", () => ({
   authClient: {
     signIn: { email: auth.signIn, emailOtp: auth.signInEmailOtp },
@@ -43,17 +50,34 @@ import ForgotPasswordForm from "../../app/(auth)/forgot-password/forgot-password
 import LoginForm from "../../app/(auth)/login/login-form";
 import ResetPasswordForm from "../../app/(auth)/reset-password/reset-password-form";
 import SignupForm from "../../app/(auth)/signup/signup-form";
+import SignupPage from "../../app/(auth)/signup/page";
+import VerifyPage from "../../app/(auth)/verify/page";
+import VerifyForm from "../../app/(auth)/verify/verify-form";
 
 beforeEach(() => {
   navigation.params = new URLSearchParams();
+  navigation.config.betterAuth.emailVerificationEnabled = true;
+  navigation.redirect.mockImplementation(() => { throw new Error("NEXT_REDIRECT"); });
 });
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("Studio-shaped Market auth surface", () => {
+  it.each([true, false])("applies the server verification policy to signup and verification enabled=%s", (enabled) => {
+    navigation.config.betterAuth.emailVerificationEnabled = enabled;
+    expect(SignupPage().props.emailVerificationEnabled).toBe(enabled);
+    if (enabled) expect(VerifyPage().type).toBe(VerifyForm);
+    else {
+      expect(() => VerifyPage()).toThrow("NEXT_REDIRECT");
+      expect(navigation.redirect).toHaveBeenCalledWith("/account/api-keys");
+    }
+  });
+
   it("uses the full-page nav/background/canvas hierarchy without a divergent card", () => {
     const { container } = render(
       <AuthLayout>
@@ -99,7 +123,7 @@ describe("Studio-shaped Market auth surface", () => {
       data: null,
       error: { message: "That account cannot be created." },
     });
-    render(<SignupForm />);
+    render(<SignupForm emailVerificationEnabled />);
 
     await interaction.type(screen.getByLabelText("Name"), "Ada");
     await interaction.type(screen.getByLabelText("Email"), "ada@example.com");
@@ -111,6 +135,30 @@ describe("Studio-shaped Market auth surface", () => {
     await interaction.type(screen.getByLabelText("Password"), "-enough");
     await interaction.click(screen.getByRole("button", { name: "Create account" }));
     expect(await screen.findByText("That account cannot be created.")).toBeTruthy();
+  });
+
+  it.each([true, false])("completes signup with email verification enabled=%s", async (enabled) => {
+    vi.stubGlobal("window", Object.create(window, { location: { value: { assign: navigation.assign } } }));
+    const interaction = userEvent.setup();
+    auth.signUp.mockResolvedValue({ data: { user: { emailVerified: false } }, error: null });
+    auth.sendVerificationOtp.mockResolvedValue({ data: { success: true }, error: null });
+    sessionStorage.setItem("market.verification.email", "stale@example.com");
+    render(<SignupForm emailVerificationEnabled={enabled} />);
+
+    await interaction.type(screen.getByLabelText("Name"), "Ada");
+    await interaction.type(screen.getByLabelText("Email"), "ada@example.com");
+    await interaction.type(screen.getByLabelText("Password"), "long-password");
+    await interaction.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => expect(navigation.assign).toHaveBeenCalledWith(
+      enabled ? "/verify" : "/account/api-keys"
+    ));
+    if (enabled) {
+      expect(auth.sendVerificationOtp).toHaveBeenCalledWith({ email: "ada@example.com", type: "sign-in" });
+    } else {
+      expect(auth.sendVerificationOtp).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("market.verification.email")).toBeNull();
+    }
   });
 
   it("keeps provider failure retryable while preserving missing-account privacy", async () => {

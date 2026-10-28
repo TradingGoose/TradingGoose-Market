@@ -77,7 +77,6 @@ jobs:
           UNKEY_API_ID: api_release_validation
           UNKEY_ROOT_KEY: unkey_release_root
           RESEND_API_KEY: re_release_validation
-          RESEND_FROM_EMAIL: "TradingGoose Market <market@example.com>"
 
   release:
     needs: [quality, release-validation]

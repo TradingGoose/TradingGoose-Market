@@ -11,6 +11,11 @@ const state = vi.hoisted(() => ({
   confirm: vi.fn(),
   deleteCandidates: vi.fn(),
   events: [] as string[],
+  emailVerificationEnabled: true,
+}));
+
+vi.mock("@/lib/environment", () => ({
+  getMarketRuntimeConfig: () => ({ betterAuth: { emailVerificationEnabled: state.emailVerificationEnabled } }),
 }));
 
 vi.mock("@/lib/db/runtime", () => ({
@@ -62,6 +67,7 @@ import { addAdmin, removeAdmin } from "../../scripts/manage-market-admin";
 beforeEach(() => {
   vi.clearAllMocks();
   state.events.length = 0;
+  state.emailVerificationEnabled = true;
   state.database = new FakeAdminDatabase();
   state.confirm.mockImplementation(async (providerKeyId: string) => {
     state.events.push(`provider-confirmed:${providerKeyId}`);
@@ -76,10 +82,17 @@ describe("admin membership lifecycle", () => {
   it("rejects an unverified user without provisioning customer or admin state", async () => {
     state.database.emailVerified = false;
 
-    await expect(addAdmin("user_1")).rejects.toThrow("A verified user is required");
+    await expect(addAdmin("user_1")).rejects.toThrow("An eligible user is required");
 
     expect(state.database.grant).toBeNull();
     expect(state.events).toEqual(["grant-transaction:user_1"]);
+  });
+
+  it("can provision an unverified existing user when verification is disabled", async () => {
+    state.emailVerificationEnabled = false;
+    state.database.emailVerified = false;
+    await expect(addAdmin("user_1")).resolves.toMatchObject({ userId: "user_1", status: "active" });
+    expect(state.database.emailVerified).toBe(false);
   });
 
   it("reconciles mapped keys and every reserved/dispatched/cleanup attempt before deletion", async () => {

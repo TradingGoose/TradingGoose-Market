@@ -197,7 +197,7 @@ export async function handleKeyedMarketRoute(
           row.key.adminGrantId !== row.grant.id ||
           row.key.userId !== row.activeUserId ||
           row.owner.userId !== row.activeUserId ||
-          row.emailVerified !== true
+          (row.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
         ) {
           throw new AccessResponseError(
             jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN"),
@@ -357,7 +357,7 @@ async function reloadAuthorizedPublicKey(
     row.activeUserId !== expectedUserId ||
     row.key.userId !== row.activeUserId ||
     row.owner.userId !== row.activeUserId ||
-    row.emailVerified !== true
+    (row.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
   ) {
     throw new AccessResponseError(
       jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN"),

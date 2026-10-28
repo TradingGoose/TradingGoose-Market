@@ -9,10 +9,19 @@ const state = vi.hoisted(() => ({
   deleteMarketHour: vi.fn(),
   createCustomerKey: vi.fn(),
   createAdminKey: vi.fn(),
+  authHandler: vi.fn(),
+  emailVerificationEnabled: true,
 }));
 
 vi.mock("@/lib/environment", () => ({
-  getMarketRuntimeConfig: () => ({ appUrl: "https://market.example.com" }),
+  getMarketRuntimeConfig: () => ({
+    appUrl: "https://market.example.com",
+    betterAuth: { emailVerificationEnabled: state.emailVerificationEnabled },
+  }),
+}));
+
+vi.mock("@/lib/auth/protocol", () => ({
+  dispatchAuthProtocolRequest: (request: Request, handler: (request: Request) => Promise<Response>) => handler(request),
 }));
 
 vi.mock("@/lib/market-api/core/manifest", () => ({
@@ -30,7 +39,7 @@ vi.mock("@tradinggoose/db", () => ({
 vi.mock("drizzle-orm", () => ({ eq: vi.fn(() => true) }));
 
 vi.mock("@/lib/auth/server", () => ({
-  auth: { api: { getSession: state.getSession } },
+  auth: { api: { getSession: state.getSession }, handler: state.authHandler },
 }));
 
 vi.mock("@/lib/billing/customer-state", () => ({
@@ -63,6 +72,7 @@ import {
 import { POST as createCustomerKey } from "../../app/api/account/api-keys/route";
 import { POST as createAdminKey } from "../../app/api/admin/api-keys/route";
 import { DELETE as deleteMarketHour } from "../../app/api/market-hours/[id]/route";
+import { GET as authGetSession } from "../../app/api/auth/[...all]/route";
 
 const user = {
   id: "user_1",
@@ -80,6 +90,7 @@ function mutationRequest(headers: HeadersInit = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.emailVerificationEnabled = true;
   state.getSession.mockResolvedValue({ user });
   state.ensureCustomer.mockResolvedValue(undefined);
   state.getAdmin.mockResolvedValue({ id: "grant_1", userId: user.id });
@@ -98,6 +109,28 @@ beforeEach(() => {
 });
 
 describe("same-origin browser mutation guard", () => {
+  it.each([true, false])("applies verification policy %s to browser and protocol sessions", async (enabled) => {
+    state.emailVerificationEnabled = enabled;
+    const session = { user: { ...user, emailVerified: false } };
+    state.getSession.mockResolvedValue(session);
+    const providerResponse = Response.json(session, { headers: { "set-cookie": "session=refreshed" } });
+    state.authHandler.mockResolvedValue(providerResponse);
+    const result = await apiRequireCustomerSession(mutationRequest({ origin: "https://market.example.com" }));
+    expect(result.error?.status).toBe(enabled ? 401 : undefined);
+    expect(result.user).toEqual(enabled ? undefined : session.user);
+
+    state.getSession.mockClear();
+    const request = new Request("https://market.example.com/api/auth/get-session?disableCookieCache=true");
+    const response = await authGetSession(request);
+    expect(await response.json()).toEqual(enabled ? null : session);
+    expect(state.authHandler).toHaveBeenCalledExactlyOnceWith(request);
+    expect(state.getSession).not.toHaveBeenCalled();
+    expect(response === providerResponse).toBe(!enabled);
+    expect(response.headers.get("set-cookie")).toBe(enabled ? null : "session=refreshed");
+    expect(state.ensureCustomer).toHaveBeenCalledTimes(enabled ? 0 : 2);
+    expect(session.user.emailVerified).toBe(false);
+  });
+
   it.each([
     ["missing Origin", {}],
     ["opaque Origin", { origin: "null" }],

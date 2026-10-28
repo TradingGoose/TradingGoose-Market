@@ -11,7 +11,6 @@ import {
   ensureStripeUserCustomer
 } from "@/lib/billing/customer-state";
 import {
-  logAuthEmailDeliveryFailure,
   projectVerifiedEmailToAudience,
   sendMarketAuthEmail,
 } from "@/lib/auth/mailer";
@@ -124,34 +123,16 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: true,
+    requireEmailVerification: runtime.betterAuth.emailVerificationEnabled,
     async sendResetPassword({ user, url }) {
-      try {
-        await sendMarketAuthEmail({
-          kind: "password-reset",
-          to: user.email,
-          url,
-        });
-      } catch (error) {
-        logAuthEmailDeliveryFailure("password-reset", error);
-        throw error;
-      }
+      await sendMarketAuthEmail({ kind: "password-reset", to: user.email, url });
     },
   },
   emailVerification: {
     sendOnSignUp: false,
     sendOnSignIn: false,
     async sendVerificationEmail({ user, url }) {
-      try {
-        await sendMarketAuthEmail({
-          kind: "email-change-verification",
-          to: user.email,
-          url,
-        });
-      } catch (error) {
-        logAuthEmailDeliveryFailure("email-change-verification", error);
-        throw error;
-      }
+      await sendMarketAuthEmail({ kind: "email-change-verification", to: user.email, url });
     },
     async afterEmailVerification(user) {
       await projectVerifiedEmailToAudience(user.email);
@@ -197,12 +178,8 @@ export const auth = betterAuth({
         if (type !== "sign-in") {
           throw new APIError("BAD_REQUEST", { message: "UNSUPPORTED_OTP_TYPE" });
         }
-        try {
-          await sendMarketAuthEmail({ kind: "sign-in-otp", to: email, otp });
-        } catch (error) {
-          logAuthEmailDeliveryFailure("sign-in-otp", error);
-          throw error;
-        }
+        if (!runtime.betterAuth.emailVerificationEnabled) return;
+        await sendMarketAuthEmail({ kind: "sign-in-otp", to: email, otp });
       },
       sendVerificationOnSignUp: false,
       otpLength: 6,

@@ -51,7 +51,7 @@ chain to the configured empty database before the application starts. Drizzle
 migrations are generated from `packages/db/schema.ts`; migration SQL is never
 hand-edited and there is no legacy cutover or compatibility path.
 
-Create an ordinary account through `/signup`, complete email verification, and
+Create an ordinary account through `/signup`, complete email verification when enabled, and
 then provision system-admin membership through the database/operator-owned CLI:
 
 ```bash
@@ -70,13 +70,20 @@ Core runtime:
 - `BETTER_AUTH_SECRET`; production requires exactly 64 lowercase hexadecimal
   characters generated with `openssl rand -hex 32`
 - `REGISTRATION_MODE=open|close`
+- optional `EMAIL_VERIFICATION_ENABLED=true|false`, defaulting to `false` like Studio
 - server-only `RESEND_API_KEY`
-- complete `RESEND_FROM_EMAIL` sender on an operator-verified Resend domain
+- optional `EMAIL_DOMAIN`, defaulting to `tradinggoose.ai`; sender is `noreply@<domain>`
+- optional complete `RESEND_FROM_EMAIL` override on an operator-verified Resend domain
 - optional `RESEND_AUDIENCE_ID` for best-effort verified-user contact projection
 - `BILLING_ENABLED=true|false`
 - positive `PAYG_USD_PER_1000_READS`
 - `UNKEY_API_ID`: the target keyspace's API ID, not a credential
 - server-only `UNKEY_ROOT_KEY`: one root key for key management and verification
+
+When email verification is enabled, signup requires the six-digit OTP before
+session or API-key access. When disabled, password signup/login works without
+OTP and does not falsely mark the email verified. Password reset and profile
+email changes still use Resend; changing an email still requires verification.
 
 Copy the **API ID** (`api_...`) from the Market [Keyspace Settings](https://www.unkey.com/docs/api-management/keyspaces/settings),
 not its separate **Keyspace ID** (`ks_...`). The installed v2 SDK requires

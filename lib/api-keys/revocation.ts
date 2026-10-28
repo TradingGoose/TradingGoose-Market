@@ -13,6 +13,7 @@ import {
 import type { ApiKeyRevocationOutcome } from "@/lib/account/contracts";
 import { requireDatabase } from "@/lib/db/runtime";
 import { getMarketKeyProvider } from "@/lib/unkey/runtime";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 import { ApiKeyNotFoundError } from "./service";
 
 const REVOKED_OUTCOME = {
@@ -63,7 +64,7 @@ export async function revokeAdminApiKey(keyId: string, callerGrantId: string) {
           .limit(2);
         if (
           callerRows.length !== 1 ||
-          callerRows[0]?.emailVerified !== true
+          (callerRows[0]?.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
         ) {
           throw new ApiKeyNotFoundError("API key was not found");
         }
@@ -172,7 +173,7 @@ async function revokeApiKey(input: {
     const row = rows[0];
     if (
       !row ||
-      row.emailVerified !== true ||
+      (row.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled) ||
       !row.key.userId ||
       row.key.userId !== row.ownerUserId ||
       row.activeUserId !== row.ownerUserId ||

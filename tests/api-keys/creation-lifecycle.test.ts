@@ -12,6 +12,11 @@ const mocks = vi.hoisted(() => ({
   withPrivateCreationLocks: vi.fn(),
   getProvider: vi.fn(),
   deleteCandidates: vi.fn(),
+  emailVerificationEnabled: true,
+}));
+
+vi.mock("@/lib/environment", () => ({
+  getMarketRuntimeConfig: () => ({ betterAuth: { emailVerificationEnabled: mocks.emailVerificationEnabled } }),
 }));
 
 vi.mock("@/lib/db/locks", () => ({
@@ -320,6 +325,7 @@ async function runCreationLocks(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.emailVerificationEnabled = true;
   fixture = createFixture();
   mocks.getProvider.mockImplementation(() => fixture.provider);
   mocks.withPublicCreationLocks.mockImplementation(
@@ -569,13 +575,24 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
         name: "Unverified customer",
         allowance: { limitUsd: null, windowDays: null },
       }),
-    ).rejects.toThrow("Verified Market customer state is missing");
+    ).rejects.toThrow("Market customer state is missing or not authorized");
 
     expect(fixture.events[0]).toBe("outer:acquired:user_1");
     expect(fixture.events).toContain("owner:rechecked");
     expect(fixture.lockedKeyId).toBeNull();
     expect(fixture.provider.createKey).not.toHaveBeenCalled();
     expect(fixture.database.attempts).toEqual([]);
+  });
+
+  it.each(["public", "private"] as const)("allows an unverified %s key owner when verification is disabled", async (keyClass) => {
+    mocks.emailVerificationEnabled = false;
+    fixture.database.userVerified = false;
+    const result = keyClass === "public"
+      ? await createCustomerApiKey({ userId: "user_1", name: "Customer", allowance: { limitUsd: null, windowDays: null } })
+      : await createAdminApiKey({ userId: "user_1", adminGrantId: "grant_1", name: "Admin" });
+    expect(result).toHaveProperty("key");
+    expect(fixture.provider.createKey).toHaveBeenCalledOnce();
+    expect(fixture.database.userVerified).toBe(false);
   });
 
   it("successfully creates one private key under grant then key with the safe one-time shape", async () => {

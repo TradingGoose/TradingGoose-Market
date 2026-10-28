@@ -1,19 +1,22 @@
 import { auth } from "@/lib/auth/server";
 import { dispatchAuthProtocolRequest } from "@/lib/auth/protocol";
 import { ensureMarketCustomerState } from "@/lib/billing/customer-state";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 async function handle(request: Request): Promise<Response> {
   return dispatchAuthProtocolRequest(request, async (accepted) => {
+    const response = await auth.handler(accepted);
     if (
+      response.ok &&
       accepted.method === "GET" &&
       new URL(accepted.url).pathname === "/api/auth/get-session"
     ) {
       try {
-        const session = await auth.api.getSession({ headers: accepted.headers });
-        if (session?.user && !session.user.emailVerified) {
+        const session = await response.clone().json();
+        if (session?.user && !session.user.emailVerified && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled) {
           return Response.json(null);
         }
         if (session?.user) await ensureMarketCustomerState(session.user.id);
@@ -24,7 +27,7 @@ async function handle(request: Request): Promise<Response> {
         );
       }
     }
-    return auth.handler(accepted);
+    return response;
   });
 }
 

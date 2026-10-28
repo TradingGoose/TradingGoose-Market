@@ -4,6 +4,7 @@ import { Resend } from "resend";
 
 import {
   MarketAuthEmail,
+  marketAuthEmailCopy,
   type MarketAuthEmailKind,
 } from "@/components/emails/auth-email";
 import { getMarketRuntimeConfig } from "@/lib/environment";
@@ -24,32 +25,9 @@ export class AuthEmailDeliveryError extends Error {
 
 function statusFrom(error: unknown): number | null {
   if (!error || typeof error !== "object") return null;
-  const value = "statusCode" in error ? error.statusCode : "status" in error ? error.status : null;
+  const value = "statusCode" in error ? error.statusCode : null;
   return typeof value === "number" ? value : null;
 }
-
-export function logAuthEmailDeliveryFailure(kind: MarketAuthEmailKind, error: unknown): void {
-  console.error("Authentication email delivery failed.", {
-    kind,
-    errorClass: error instanceof AuthEmailDeliveryError ? error.kind : "unknown",
-    status: error instanceof AuthEmailDeliveryError ? error.status : statusFrom(error),
-  });
-}
-
-const emailCopy = {
-  "sign-in-otp": {
-    subject: "Your TradingGoose Market verification code",
-    text: (otp?: string) => `Your TradingGoose Market verification code is ${otp}. It expires in 15 minutes.`,
-  },
-  "password-reset": {
-    subject: "Reset your TradingGoose Market password",
-    text: (_otp?: string, url?: string) => `Reset your TradingGoose Market password: ${url}`,
-  },
-  "email-change-verification": {
-    subject: "Verify your new TradingGoose Market email",
-    text: (_otp?: string, url?: string) => `Verify your new TradingGoose Market email: ${url}`,
-  },
-} as const;
 
 export async function sendMarketAuthEmail(message: {
   kind: MarketAuthEmailKind;
@@ -57,34 +35,41 @@ export async function sendMarketAuthEmail(message: {
   otp?: string;
   url?: string;
 }, client?: ResendClient): Promise<void> {
-  const runtime = getMarketRuntimeConfig();
-  const resend = client ?? new Resend(runtime.resend.apiKey);
-  const content = emailCopy[message.kind];
-  const element = createElement(MarketAuthEmail, {
-    kind: message.kind,
-    otp: message.otp,
-    url: message.url,
-  });
-  const [html, text] = await Promise.all([
-    render(element),
-    render(element, { plainText: true }),
-  ]);
-
-  let result: Awaited<ReturnType<typeof resend.emails.send>>;
   try {
-    result = await resend.emails.send({
-      from: runtime.resend.fromEmail,
-      to: message.to,
-      subject: content.subject,
-      html,
-      text: text || content.text(message.otp, message.url),
+    const runtime = getMarketRuntimeConfig();
+    const resend = client ?? new Resend(runtime.resend.apiKey);
+    const element = createElement(MarketAuthEmail, {
+      kind: message.kind,
+      otp: message.otp,
+      url: message.url,
     });
-  } catch {
-    throw new AuthEmailDeliveryError("transport");
-  }
+    const [html, text] = await Promise.all([
+      render(element),
+      render(element, { plainText: true }),
+    ]);
 
-  if (result.error || !result.data?.id) {
-    throw new AuthEmailDeliveryError("response", statusFrom(result.error));
+    let result: Awaited<ReturnType<typeof resend.emails.send>>;
+    try {
+      result = await resend.emails.send({
+        from: runtime.resend.fromEmail,
+        to: message.to,
+        subject: marketAuthEmailCopy[message.kind].preview,
+        html,
+        text,
+      });
+    } catch {
+      throw new AuthEmailDeliveryError("transport");
+    }
+    if (result.error || !result.data?.id) {
+      throw new AuthEmailDeliveryError("response", statusFrom(result.error));
+    }
+  } catch (error) {
+    console.error("Authentication email delivery failed.", {
+      kind: message.kind,
+      errorClass: error instanceof AuthEmailDeliveryError ? error.kind : "unknown",
+      status: error instanceof AuthEmailDeliveryError ? error.status : statusFrom(error),
+    });
+    throw error;
   }
 }
 

@@ -23,7 +23,7 @@ bun run dev
 ```
 
 Use a newly initialized empty PostgreSQL database. Create an ordinary account at
-`http://localhost:3000/signup`, complete email verification, then run
+`http://localhost:3000/signup`, complete email verification when enabled, then run
 `bun run admin:manage add --user-id <user-id>` as a database operator before
 opening `/admin`.
 
@@ -35,9 +35,11 @@ Required for a normal local setup:
 - `BETTER_AUTH_URL`
 - `NEXT_PUBLIC_APP_URL`
 - server-only `RESEND_API_KEY`
-- complete `RESEND_FROM_EMAIL` sender on an operator-verified Resend domain
+- optional `EMAIL_DOMAIN`, defaulting to `tradinggoose.ai`, for `noreply@<domain>`
+- optional complete `RESEND_FROM_EMAIL` override on an operator-verified Resend domain
 - optional `RESEND_AUDIENCE_ID` for best-effort verified-user contact projection
 - `REGISTRATION_MODE` and `BILLING_ENABLED`
+- optional `EMAIL_VERIFICATION_ENABLED`, defaulting to `false` like Studio
 - `PAYG_USD_PER_1000_READS`
 - `UNKEY_API_ID` and one server-only `UNKEY_ROOT_KEY`
 

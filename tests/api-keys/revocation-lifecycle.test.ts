@@ -10,10 +10,15 @@ const state = vi.hoisted(() => ({
   database: null as unknown as FakeRevocationDatabase,
   sessionHeld: false,
   events: [] as string[],
+  emailVerificationEnabled: true,
   provider: {
     deleteKey: vi.fn(),
     getKey: vi.fn(),
   },
+}));
+
+vi.mock("@/lib/environment", () => ({
+  getMarketRuntimeConfig: () => ({ betterAuth: { emailVerificationEnabled: state.emailVerificationEnabled } }),
 }));
 
 vi.mock("@/lib/db/runtime", () => ({
@@ -53,6 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.events.length = 0;
   state.sessionHeld = false;
+  state.emailVerificationEnabled = true;
   state.database = new FakeRevocationDatabase();
   state.provider.deleteKey.mockImplementation(async () => {
     expect(state.sessionHeld).toBe(true);
@@ -155,6 +161,15 @@ describe("system-wide private-key revocation", () => {
     expect(state.database.transactionCount).toBe(1);
     expect(state.events).not.toContain("mapping:revocation-requested");
     expect(state.events.at(-1)).toBe("session:released");
+  });
+
+  it("allows an unverified admin caller to revoke when verification is disabled", async () => {
+    state.emailVerificationEnabled = false;
+    state.database.callerEmailVerified = false;
+    await expect(revokeAdminApiKey("key_target", "grant_caller"))
+      .resolves.toEqual({ status: "revoked", retryable: false });
+    expect(state.provider.deleteKey).toHaveBeenCalledOnce();
+    expect(state.database.callerEmailVerified).toBe(false);
   });
 
   it("preserves a pending tombstone when provider non-usability is not confirmed", async () => {

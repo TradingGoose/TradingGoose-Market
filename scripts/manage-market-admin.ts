@@ -18,6 +18,7 @@ import {
 import { requireDatabase } from "@/lib/db/runtime";
 import { deleteAndConfirmProvisioningCandidates } from "@/lib/unkey/provisioning";
 import { getMarketKeyProvider } from "@/lib/unkey/runtime";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 
 export async function addAdmin(userId: string) {
   const result = await withAdminGrantLock(userId, async (tx) => {
@@ -27,8 +28,11 @@ export async function addAdmin(userId: string) {
       .where(eq(user.id, userId))
       .for("update")
       .limit(2);
-    if (users.length !== 1 || users[0]?.emailVerified !== true) {
-      throw new Error("A verified user is required");
+    if (
+      users.length !== 1 ||
+      (users[0]?.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
+    ) {
+      throw new Error("An eligible user is required");
     }
     const existing = await tx
       .select({ id: systemAdmin.id })

@@ -26,7 +26,6 @@ export const RELEASE_REQUIRED_BASE_ENV_KEYS = [
   "UNKEY_API_ID",
   "UNKEY_ROOT_KEY",
   "RESEND_API_KEY",
-  "RESEND_FROM_EMAIL",
 ] as const;
 
 export const RELEASE_CLEARED_ENV_KEYS = [
@@ -35,6 +34,7 @@ export const RELEASE_CLEARED_ENV_KEYS = [
   "PAYG_STRIPE_PRICE_ID",
   "PAYG_INVOICE_THRESHOLD_USD",
   "RESEND_AUDIENCE_ID",
+  "RESEND_FROM_EMAIL",
   "ANONYMOUS_RATE_LIMIT",
   "ANONYMOUS_RATE_LIMIT_DURATION_SECONDS",
   "UNKEY_ANONYMOUS_NAMESPACE_ID",
@@ -112,6 +112,8 @@ function createModeEnvironment(
     ...process.env,
     ...base,
     NODE_ENV: "production",
+    EMAIL_VERIFICATION_ENABLED: "true",
+    EMAIL_DOMAIN: "example.com",
   };
   for (const key of RELEASE_CLEARED_ENV_KEYS) delete environment[key];
 

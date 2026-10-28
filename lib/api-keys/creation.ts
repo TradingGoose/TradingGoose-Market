@@ -15,6 +15,7 @@ import {
   deleteAndConfirmProvisioningCandidates,
 } from "@/lib/unkey/provisioning";
 import { getMarketKeyProvider } from "@/lib/unkey/runtime";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 import type { CustomerKeyAllowance } from "./validation";
 
 export type ApiKeyClass = "public" | "private";
@@ -116,9 +117,9 @@ async function loadCanonicalCreationState(
     !owner ||
     owner.ownerUserId !== input.userId ||
     owner.activeUserId !== input.userId ||
-    owner.emailVerified !== true
+    (owner.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
   ) {
-    throw new Error("Verified Market customer state is missing");
+    throw new Error("Market customer state is missing or not authorized");
   }
 
   if (input.keyClass === "private") {
@@ -529,9 +530,9 @@ async function assertCreationAdmission(
     !owner ||
     owner.ownerUserId !== input.userId ||
     owner.activeUserId !== input.userId ||
-    owner.emailVerified !== true
+    (owner.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
   ) {
-    throw new Error("Verified Market customer state is missing");
+    throw new Error("Market customer state is missing or not authorized");
   }
 
   if (input.keyClass !== "private") return;

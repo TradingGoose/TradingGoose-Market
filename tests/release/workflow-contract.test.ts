@@ -91,12 +91,13 @@ describe("release workflow contract", () => {
       "UNKEY_API_ID",
       "UNKEY_ROOT_KEY",
       "RESEND_API_KEY",
-      "RESEND_FROM_EMAIL",
     ]) {
       expect(validation).toContain(`${key}:`);
     }
     expect(validation).toContain("NEXT_PUBLIC_APP_URL: https://market.example.test:3000");
     expect(validation).toContain("BETTER_AUTH_URL: https://market.example.test:3000");
+    expect(harness).toContain('EMAIL_VERIFICATION_ENABLED: "true"');
+    expect(harness).toContain('EMAIL_DOMAIN: "example.com"');
     const authSecretLine = validation
       .split("\n")
       .find((line) => line.trimStart().startsWith("BETTER_AUTH_SECRET:"));
@@ -122,6 +123,7 @@ describe("release workflow contract", () => {
       "PAYG_STRIPE_PRICE_ID",
       "PAYG_INVOICE_THRESHOLD_USD",
       "RESEND_AUDIENCE_ID",
+      "RESEND_FROM_EMAIL",
       "ANONYMOUS_RATE_LIMIT",
       "ANONYMOUS_RATE_LIMIT_DURATION_SECONDS",
       "UNKEY_ANONYMOUS_NAMESPACE_ID",
@@ -180,6 +182,7 @@ describe("release workflow contract", () => {
       "PAYG_STRIPE_PRICE_ID",
       "PAYG_INVOICE_THRESHOLD_USD",
       "RESEND_AUDIENCE_ID",
+      "RESEND_FROM_EMAIL",
       "ANONYMOUS_RATE_LIMIT",
       "ANONYMOUS_RATE_LIMIT_DURATION_SECONDS",
       "UNKEY_ANONYMOUS_NAMESPACE_ID",
@@ -264,6 +267,8 @@ describe("release workflow contract", () => {
       "bun run test:release",
       "RESEND_API_KEY",
       "RESEND_FROM_EMAIL",
+      "EMAIL_DOMAIN",
+      "EMAIL_VERIFICATION_ENABLED",
       "RESEND_AUDIENCE_ID",
       "newly initialized empty",
       "bun run admin:manage add",

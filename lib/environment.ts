@@ -6,6 +6,7 @@ export type MarketRuntimeConfig = {
   betterAuth: {
     url: string;
     secret: string;
+    emailVerificationEnabled: boolean;
   };
   resend: {
     apiKey: string;
@@ -194,10 +195,10 @@ function parseRegistrationMode(raw: string): MarketRegistrationMode {
   return raw;
 }
 
-function parseBillingEnabled(raw: string): boolean {
+function parseBoolean(raw: string, name: string): boolean {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
-  throw new Error('BILLING_ENABLED must be exactly "true" or "false".');
+  throw new Error(`${name} must be exactly "true" or "false".`);
 }
 
 function parseAnonymousPolicy(environment: NodeJS.ProcessEnv) {
@@ -255,9 +256,18 @@ function parseRuntimeConfig(environment: NodeJS.ProcessEnv): MarketRuntimeConfig
   const registrationMode = parseRegistrationMode(
     requiredNonEmpty(environment, 'REGISTRATION_MODE')
   );
-  const billingEnabled = parseBillingEnabled(
-    requiredNonEmpty(environment, 'BILLING_ENABLED')
+  const billingEnabled = parseBoolean(
+    requiredNonEmpty(environment, 'BILLING_ENABLED'),
+    'BILLING_ENABLED'
   );
+
+  const emailDomain = environment.EMAIL_DOMAIN?.trim().toLowerCase() || 'tradinggoose.ai';
+  if (
+    emailDomain.length > 253 ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(emailDomain)
+  ) {
+    throw new Error('EMAIL_DOMAIN must be a valid email domain without a scheme, address, port, or path.');
+  }
 
   const rate = parsePositiveDecimal(
     requiredNonEmpty(environment, 'PAYG_USD_PER_1000_READS'),
@@ -330,12 +340,16 @@ function parseRuntimeConfig(environment: NodeJS.ProcessEnv): MarketRuntimeConfig
       secret: parseBetterAuthSecret(
         requiredNonEmpty(environment, 'BETTER_AUTH_SECRET'),
         production,
+      ),
+      emailVerificationEnabled: parseBoolean(
+        environment.EMAIL_VERIFICATION_ENABLED?.trim() || 'false',
+        'EMAIL_VERIFICATION_ENABLED'
       )
     },
     resend: {
       apiKey: requiredNonEmpty(environment, 'RESEND_API_KEY'),
       fromEmail: parseResendFromEmail(
-        requiredNonEmpty(environment, 'RESEND_FROM_EMAIL')
+        environment.RESEND_FROM_EMAIL?.trim() || `noreply@${emailDomain}`
       ),
       audienceId: optionalNonEmpty(environment, 'RESEND_AUDIENCE_ID')
     },

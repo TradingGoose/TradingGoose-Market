@@ -25,6 +25,7 @@ const APPLICATION_ENVIRONMENT = {
   BILLING_ENABLED: "false",
   PAYG_USD_PER_1000_READS: "1.00",
   RESEND_API_KEY: "re_fresh_database_test",
+  EMAIL_VERIFICATION_ENABLED: "true",
   RESEND_FROM_EMAIL: "TradingGoose Market <market@example.com>",
   UNKEY_API_ID: "api_fresh_database_test",
   UNKEY_ROOT_KEY: "unkey_fresh_database_root",

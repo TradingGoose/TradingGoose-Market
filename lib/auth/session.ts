@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getCurrentSystemAdmin } from "@/lib/admin/access";
 import { auth } from "@/lib/auth/server";
 import { ensureMarketCustomerState } from "@/lib/billing/customer-state";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 import { requireSameOriginBrowserMutation } from "@/lib/market-api/core/browser-route";
 
 export type MarketSessionUser = {
@@ -21,7 +22,7 @@ export async function getSession(headers?: Headers) {
   });
   const session = await auth.api.getSession({ headers: requestHeaders });
 
-  if (session?.user && !session.user.emailVerified) {
+  if (session?.user && !session.user.emailVerified && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled) {
     return null;
   }
 

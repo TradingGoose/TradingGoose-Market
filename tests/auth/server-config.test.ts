@@ -30,13 +30,11 @@ const capture = vi.hoisted(() => ({
   adapterConfig: null as Record<string, unknown> | null,
   send: vi.fn(),
   project: vi.fn(),
-  log: vi.fn(),
   ensureMarket: vi.fn(),
   ensureStripe: vi.fn(),
   runtime: {
     appUrl: "https://market.example.com",
-    betterAuth: { url: "https://market.example.com", secret: "secret" },
-    resend: { apiKey: "re_test", fromEmail: "market@example.com", audienceId: null },
+    betterAuth: { url: "https://market.example.com", secret: "secret", emailVerificationEnabled: true },
     registrationMode: "close",
     billing: { stripeSecretKey: null as string | null },
   },
@@ -96,24 +94,23 @@ vi.mock("@/lib/billing/customer-state", () => ({
 vi.mock("@/lib/auth/mailer", () => ({
   sendMarketAuthEmail: capture.send,
   projectVerifiedEmailToAudience: capture.project,
-  logAuthEmailDeliveryFailure: capture.log,
 }));
-
-await import("../../lib/auth/server");
 
 function options() {
   if (!capture.options) throw new Error("Better Auth options were not captured.");
   return capture.options;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   capture.send.mockReset().mockResolvedValue(undefined);
   capture.project.mockReset().mockResolvedValue(undefined);
-  capture.log.mockReset();
   capture.ensureMarket.mockReset().mockResolvedValue(undefined);
   capture.ensureStripe.mockReset().mockResolvedValue(undefined);
   capture.runtime.billing.stripeSecretKey = null;
+  capture.runtime.betterAuth.emailVerificationEnabled = true;
   capture.database.select.mockClear();
+  await import("../../lib/auth/server");
 });
 
 afterEach(() => {
@@ -135,13 +132,32 @@ describe("Market Better Auth configuration", () => {
     expect(disabledPaths?.includes(path)).toBe(disabled);
   });
 
-  it("requires verified password identities without reset-time session revocation", () => {
+  it.each([true, false])("applies verification policy to password sessions and OTP delivery: %s", async (enabled) => {
+    capture.runtime.betterAuth.emailVerificationEnabled = enabled;
+    vi.resetModules();
+    await import("../../lib/auth/server");
     const password = options().emailAndPassword as Record<string, unknown>;
     const verification = options().emailVerification as Record<string, unknown>;
-    expect(password.requireEmailVerification).toBe(true);
+    expect(password.requireEmailVerification).toBe(enabled);
     expect(password).not.toHaveProperty("revokeSessionsOnPasswordReset");
     expect(verification.sendOnSignUp).toBe(false);
     expect(verification.sendOnSignIn).toBe(false);
+    expect(options().databaseHooks?.user?.create).not.toHaveProperty("after");
+    const otp = options().plugins?.find((plugin) => plugin.id === "email-otp");
+    const send = otp?.options?.sendVerificationOTP as (data: unknown) => Promise<void>;
+    await send({ email: "customer@example.com", otp: "123456", type: "sign-in" });
+    expect(capture.send).toHaveBeenCalledTimes(enabled ? 1 : 0);
+  });
+
+  it("still sends password reset and verified email-change links when signup verification is disabled", async () => {
+    capture.runtime.betterAuth.emailVerificationEnabled = false;
+    const sendReset = options().emailAndPassword?.sendResetPassword as (data: unknown) => Promise<void>;
+    const sendChange = options().emailVerification?.sendVerificationEmail as (data: unknown) => Promise<void>;
+    await sendReset({ user: { email: "customer@example.com" }, url: "https://market.example.com/reset" });
+    await sendChange({ user: { email: "new@example.com" }, url: "https://market.example.com/verify-email" });
+    expect(capture.send.mock.calls.map(([message]) => message.kind)).toEqual([
+      "password-reset", "email-change-verification",
+    ]);
   });
 
   it("pins Studio sign-in OTP to six digits, fifteen minutes, and three attempts", () => {
@@ -253,7 +269,6 @@ describe("Market Better Auth configuration", () => {
     const sendReset = options().emailAndPassword?.sendResetPassword as ((data: unknown) => Promise<void>) | undefined;
     if (!sendReset) throw new Error("Password reset sender is missing.");
     await expect(sendReset({ user: { email: "customer@example.com" }, url: "https://market.example.com/reset" })).rejects.toBe(failure);
-    expect(capture.log).toHaveBeenCalledWith("password-reset", failure);
 
     const afterVerification = options().emailVerification?.afterEmailVerification as ((user: { email: string }) => Promise<void>) | undefined;
     if (!afterVerification) throw new Error("Verified-email projection hook is missing.");

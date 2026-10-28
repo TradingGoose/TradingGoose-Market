@@ -13,6 +13,8 @@ const environment = {
   BETTER_AUTH_URL: "https://market.example.com",
   BETTER_AUTH_SECRET: "test-secret",
   RESEND_API_KEY: "re_test",
+  EMAIL_DOMAIN: "mail.example.com",
+  EMAIL_VERIFICATION_ENABLED: "false",
   RESEND_FROM_EMAIL: "TradingGoose Market <market@example.com>",
   RESEND_AUDIENCE_ID: "audience_1",
   REGISTRATION_MODE: "open",
@@ -45,6 +47,20 @@ function client(send: ReturnType<typeof vi.fn>, create = vi.fn()) {
 }
 
 describe("direct Resend authentication email", () => {
+  it.each([
+    ["password-reset", undefined, "noreply@tradinggoose.ai"],
+    ["password-reset", "mail.example.com", "noreply@mail.example.com"],
+    ["email-change-verification", "mail.example.com", "noreply@mail.example.com"],
+  ] as const)("sends %s from %s without a sender override or signup verification", async (kind, domain, from) => {
+    if (domain) process.env.EMAIL_DOMAIN = domain;
+    else delete process.env.EMAIL_DOMAIN;
+    delete process.env.RESEND_FROM_EMAIL;
+    clearMarketRuntimeConfigCacheForTests();
+    const send = vi.fn(async () => ({ data: { id: "email_1" }, error: null }));
+    await sendMarketAuthEmail({ kind, to: "customer@example.com", url: "https://market.example.com/reset" }, client(send));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ from, to: "customer@example.com" }));
+  });
+
   it("renders and sends the branded OTP through Resend", async () => {
     const send = vi.fn(async () => ({ data: { id: "email_1" }, error: null }));
     await sendMarketAuthEmail(
@@ -66,14 +82,19 @@ describe("direct Resend authentication email", () => {
     [{ data: null, error: { statusCode: 503, message: "provider detail" } }],
     [{ data: null, error: null }],
   ])("treats returned provider failure as delivery failure %#", async (result) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const send = vi.fn(async () => result);
     await expect(sendMarketAuthEmail(
       { kind: "password-reset", to: "customer@example.com", url: "https://market.example.com/reset?token=opaque" },
       client(send),
     )).rejects.toMatchObject({ name: "AuthEmailDeliveryError", kind: "response" });
+    expect(log).toHaveBeenCalledWith("Authentication email delivery failed.", {
+      kind: "password-reset", errorClass: "response", status: result.error?.statusCode ?? null,
+    });
   });
 
   it("redacts thrown provider details", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const send = vi.fn(async () => { throw new Error("recipient and secret upstream"); });
     await expect(sendMarketAuthEmail(
       { kind: "email-change-verification", to: "new@example.com", url: "https://market.example.com/verify?token=opaque" },
@@ -83,6 +104,9 @@ describe("direct Resend authentication email", () => {
       kind: "transport",
       status: null,
     }));
+    expect(log).toHaveBeenCalledWith("Authentication email delivery failed.", {
+      kind: "email-change-verification", errorClass: "transport", status: null,
+    });
   });
 
   it("projects a normalized verified address and tolerates an existing contact", async () => {

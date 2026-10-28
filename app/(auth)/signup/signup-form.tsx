@@ -10,9 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth/client";
-import { beginEmailVerification, markVerificationCodeSent } from "@/lib/auth/verification";
+import { beginEmailVerification, clearEmailVerification, markVerificationCodeSent } from "@/lib/auth/verification";
 
-export default function SignupForm() {
+export default function SignupForm({ emailVerificationEnabled }: { emailVerificationEnabled: boolean }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -38,6 +38,11 @@ export default function SignupForm() {
       const result = await authClient.signUp.email({ name: trimmedName, email: normalizedEmail, password });
       if (result.error) {
         setError(result.error.message ?? "Unable to create your account.");
+        return;
+      }
+      if (!emailVerificationEnabled) {
+        clearEmailVerification();
+        window.location.assign("/account/api-keys");
         return;
       }
       beginEmailVerification(normalizedEmail);

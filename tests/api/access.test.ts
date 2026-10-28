@@ -325,7 +325,8 @@ describe("exclusive Market API actors", () => {
     });
   });
 
-  it("denies a provider-valid private key when its owning user is unverified", async () => {
+  it.each([true, false])("applies verification policy %s to an unverified private-key owner", async (enabled) => {
+    accessState.config.betterAuth = { emailVerificationEnabled: enabled };
     accessState.provider.verifyKey = vi.fn(async () => ({
       valid: true,
       code: "VALID",
@@ -334,7 +335,7 @@ describe("exclusive Market API actors", () => {
       ratelimits: [],
     }));
     accessState.database = privateAdmissionDatabase({ emailVerified: false });
-    const handler = vi.fn();
+    const handler = vi.fn(async () => Response.json({ ok: true }));
 
     const response = await handleKeyedMarketRoute(
       new Request("https://market.example.com/api/update/listing-rank?version=v1", {
@@ -345,15 +346,17 @@ describe("exclusive Market API actors", () => {
       handler,
     );
 
-    expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ code: "API_KEY_FORBIDDEN" });
-    expect(handler).not.toHaveBeenCalled();
+    expect(response.status).toBe(enabled ? 403 : 200);
+    expect(await response.json()).toMatchObject(enabled ? { code: "API_KEY_FORBIDDEN" } : { ok: true });
+    expect(handler).toHaveBeenCalledTimes(enabled ? 0 : 1);
   });
 
   it.each([
-    { emailVerified: false, ownerUserId: "user_1", label: "unverified owner" },
-    { emailVerified: true, ownerUserId: "user_other", label: "owner drift" },
-  ])("denies a provider-valid public key with $label", async (invalid) => {
+    { emailVerified: false, ownerUserId: "user_1", enabled: true, status: 403, label: "unverified owner with verification enabled" },
+    { emailVerified: false, ownerUserId: "user_1", enabled: false, status: 200, label: "unverified owner with verification disabled" },
+    { emailVerified: true, ownerUserId: "user_other", enabled: false, status: 403, label: "owner drift" },
+  ])("applies public-key policy for $label", async (invalid) => {
+    accessState.config.betterAuth = { emailVerificationEnabled: invalid.enabled };
     accessState.provider.verifyKey = vi.fn(async () => ({
       valid: true,
       code: "VALID",
@@ -362,7 +365,7 @@ describe("exclusive Market API actors", () => {
       ratelimits: [],
     }));
     accessState.database = publicAdmissionDatabase(invalid);
-    const handler = vi.fn();
+    const handler = vi.fn(async () => Response.json({ ok: true }));
 
     const response = await handleKeyedMarketRoute(
       new Request("https://market.example.com/api/search/cities?version=v1", {
@@ -372,9 +375,9 @@ describe("exclusive Market API actors", () => {
       handler,
     );
 
-    expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ code: "API_KEY_FORBIDDEN" });
-    expect(handler).not.toHaveBeenCalled();
+    expect(response.status).toBe(invalid.status);
+    expect(await response.json()).toMatchObject(invalid.status === 403 ? { code: "API_KEY_FORBIDDEN" } : { ok: true });
+    expect(handler).toHaveBeenCalledTimes(invalid.status === 403 ? 0 : 1);
   });
 
   it("preserves the committed handler response when threshold billing fails and retries later", async () => {

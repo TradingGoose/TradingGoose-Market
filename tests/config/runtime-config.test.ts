@@ -35,6 +35,7 @@ describe("getMarketRuntimeConfig", () => {
     );
     expect(config.appUrl).toBe("http://localhost:3000");
     expect(config.registrationMode).toBe("open");
+    expect(config.betterAuth.emailVerificationEnabled).toBe(false);
     expect(config.resend).toEqual({
       apiKey: "re_test",
       fromEmail: "TradingGoose Market <market@example.com>",
@@ -183,7 +184,40 @@ describe("getMarketRuntimeConfig", () => {
     ).toBe(secret);
   });
 
-  it("requires one direct Resend credential and complete sender", () => {
+  it.each([true, false])("supports email verification set to %s", (enabled) => {
+    expect(getMarketRuntimeConfig(validEnvironment({
+      EMAIL_VERIFICATION_ENABLED: String(enabled),
+    })).betterAuth.emailVerificationEnabled).toBe(enabled);
+  });
+
+  it("rejects a malformed email verification flag", () => {
+    expect(() => getMarketRuntimeConfig(validEnvironment({
+      EMAIL_VERIFICATION_ENABLED: "sometimes",
+    }))).toThrow(/EMAIL_VERIFICATION_ENABLED.*true.*false/);
+  });
+
+  it("resolves Studio's domain-based sender and explicit sender override", () => {
+    expect(getMarketRuntimeConfig(validEnvironment({
+      RESEND_FROM_EMAIL: undefined,
+    })).resend.fromEmail).toBe("noreply@tradinggoose.ai");
+    expect(getMarketRuntimeConfig(validEnvironment({
+      EMAIL_DOMAIN: " MAIL.EXAMPLE.COM ", RESEND_FROM_EMAIL: " ",
+    })).resend.fromEmail).toBe("noreply@mail.example.com");
+    expect(getMarketRuntimeConfig(validEnvironment({
+      EMAIL_DOMAIN: "mail.example.com",
+      RESEND_FROM_EMAIL: "TradingGoose Market <support@example.com>",
+    })).resend.fromEmail).toBe("TradingGoose Market <support@example.com>");
+  });
+
+  it.each(["https://example.com", "a@example.com", "example.com/path", "example.com:80", "-bad.example", "a..com", "example.com\r\nBcc: victim@example.com"])(
+    "rejects invalid sender domain %s", (domain) => {
+      expect(() => getMarketRuntimeConfig(validEnvironment({
+        EMAIL_DOMAIN: domain,
+      }))).toThrow(/EMAIL_DOMAIN/);
+    }
+  );
+
+  it("requires one direct Resend credential and validates supplied sender/contact settings", () => {
     expect(() =>
       getMarketRuntimeConfig(
         validEnvironment({

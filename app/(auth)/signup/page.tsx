@@ -6,6 +6,7 @@ import SignupForm from "./signup-form";
 export const dynamic = "force-dynamic";
 
 export default function SignupPage() {
-  if (getMarketRuntimeConfig().registrationMode !== "open") notFound();
-  return <SignupForm />;
+  const config = getMarketRuntimeConfig();
+  if (config.registrationMode !== "open") notFound();
+  return <SignupForm emailVerificationEnabled={config.betterAuth.emailVerificationEnabled} />;
 }

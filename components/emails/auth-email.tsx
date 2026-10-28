@@ -10,12 +10,7 @@ import {
   Text,
 } from "@react-email/components";
 
-export type MarketAuthEmailKind =
-  | "sign-in-otp"
-  | "password-reset"
-  | "email-change-verification";
-
-const copy = {
+export const marketAuthEmailCopy = {
   "sign-in-otp": {
     preview: "Your TradingGoose Market verification code",
     title: "Verify your email",
@@ -33,12 +28,14 @@ const copy = {
   },
 } as const;
 
+export type MarketAuthEmailKind = keyof typeof marketAuthEmailCopy;
+
 export function MarketAuthEmail({ kind, otp, url }: {
   kind: MarketAuthEmailKind;
   otp?: string;
   url?: string;
 }) {
-  const message = copy[kind];
+  const message = marketAuthEmailCopy[kind];
   return (
     <Html lang="en">
       <Head />
