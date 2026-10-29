@@ -38,7 +38,7 @@ vi.mock("recharts", () => {
   };
   return {
     Area: Empty,
-    AreaChart: Primitive,
+    AreaChart: ({ children }: { children?: React.ReactNode }) => <svg>{children}</svg>,
     Bar: Empty,
     BarChart: Chart,
     CartesianGrid: Empty,
@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 const facets = {
-  keys: [{ id: "key_1", label: "Studio client" }],
+  keys: [{ id: "key_1", label: "Studio client" }, { id: "key_2", label: "Updater client" }],
   applications: [{ id: "https://studio.example/", label: "TradingGoose Studio" }],
   resources: [{ id: "market_hour", label: "Market Hours" }],
   endpoints: [{ id: "public.get.market-hours", label: "GET /api/get/market-hours" }],
@@ -291,14 +291,52 @@ describe.each(["account", "admin"] as const)("Shared Market %s Activity and Logs
     expect(screen.getByText("Activity could not be loaded.")).toBeTruthy();
   });
 
-  it("starts from a key-filtered link and retains that filter in both usage views", () => {
-    market.search = "key=key-retained";
-    market.state = { data: activity, error: null, isLoading: false };
-    const view = render(<ActivityPage scope={scope} />);
-    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("key")).toBe("key-retained");
-    view.unmount();
-    market.state = { data: logs, error: null, isLoading: false };
-    render(<LogsPage scope={scope} />);
-    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("key")).toBe("key-retained");
+  it.each(["activity", "logs"] as const)("updates %s key filters on URL navigation without resetting unrelated state", async (page) => {
+    const interaction = userEvent.setup();
+    const Page = page === "activity" ? ActivityPage : LogsPage;
+    market.search = "key=key_1";
+    market.state = { data: page === "activity" ? activity : logs, error: null, isLoading: false };
+    const { rerender } = render(<Page scope={scope} />);
+    expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("key")).toBe("key_1");
+    screen.getAllByRole("combobox")[0].focus();
+    await interaction.keyboard("{ArrowDown}{End}{Enter}");
+    if (page === "activity") await interaction.click(screen.getByRole("tab", { name: "Trends" }));
+
+    for (const key of ["key_2", null, "key_1"]) {
+      if (page === "logs") {
+        await interaction.click(screen.getByRole("button", { name: /Next/i }));
+        expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("cursor")).toBe("cursor_2");
+      }
+      const beforeNavigation = market.urls.length;
+      market.search = key ? `key=${key}` : "";
+      rerender(<Page scope={scope} />);
+      const params = new URL(market.urls.at(-1)!, "https://market.example").searchParams;
+      expect(params.get("key")).toBe(key);
+      expect(params.get("range")).toBe("90d");
+      expect(screen.getAllByRole("combobox")[1].textContent).toContain(key === "key_1" ? "Studio client" : key === "key_2" ? "Updater client" : "All");
+      if (page === "activity") {
+        expect(screen.getByRole("tab", { name: "Trends" }).getAttribute("aria-selected")).toBe("true");
+      } else {
+        expect(params.has("cursor")).toBe(false);
+        expect((screen.getByRole("button", { name: /Previous/i }) as HTMLButtonElement).disabled).toBe(true);
+        const newKeyRequests = market.urls.slice(beforeNavigation).map((url) => new URL(url, "https://market.example").searchParams).filter((query) => query.get("key") === key);
+        expect(newKeyRequests.every((query) => !query.has("cursor"))).toBe(true);
+      }
+    }
+  });
+
+  it.each(["activity", "logs"] as const)("preserves local %s key selection when the incoming URL key is unchanged", async (page) => {
+    const interaction = userEvent.setup();
+    const Page = page === "activity" ? ActivityPage : LogsPage;
+    market.state = { data: page === "activity" ? activity : logs, error: null, isLoading: false };
+    const { rerender } = render(<Page scope={scope} />);
+    screen.getAllByRole("combobox")[1].focus();
+    await interaction.keyboard("{ArrowDown}{End}{Enter}");
+    for (const search of ["", "unrelated=value"]) {
+      market.search = search;
+      rerender(<Page scope={scope} />);
+      expect(new URL(market.urls.at(-1)!, "https://market.example").searchParams.get("key")).toBe("key_2");
+      expect(screen.getAllByRole("combobox")[1].textContent).toContain("Updater client");
+    }
   });
 });

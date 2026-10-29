@@ -47,8 +47,10 @@ export function LogsPage({ scope }: { scope: "account" | "admin" }) {
 
 function LogsContent({ scope }: { scope: "account" | "admin" }) {
   const searchParams = useSearchParams();
+  const urlKeyId = searchParams.get("key") ?? "all";
   const [range, setRange] = useState("7d");
-  const [keyId, setKeyId] = useState(searchParams.get("key") ?? "all");
+  const [keyId, setKeyId] = useState(urlKeyId);
+  const [previousUrlKeyId, setPreviousUrlKeyId] = useState(urlKeyId);
   const [resourceId, setResourceId] = useState("all");
   const [status, setStatus] = useState("all");
   const [application, setApplication] = useState("all");
@@ -57,6 +59,13 @@ function LogsContent({ scope }: { scope: "account" | "admin" }) {
   const [histogramOpen, setHistogramOpen] = useState(true);
   const [density, setDensity] = useState<"comfortable" | "compact">("compact");
   const [columns, setColumns] = useState<Record<OptionalColumn, boolean>>({ application: true, method: true, key: true, version: true, completed: true });
+
+  if (urlKeyId !== previousUrlKeyId) {
+    setPreviousUrlKeyId(urlKeyId);
+    setKeyId(urlKeyId);
+    setPagination(initialUsageCursorPagination());
+  }
+
   const query = useMemo(
     () => buildLogsQuery(scope, {
       range,

@@ -194,9 +194,11 @@ export function ActivityPage({ scope }: { scope: "account" | "admin" }) {
 
 function ActivityContent({ scope }: { scope: "account" | "admin" }) {
   const searchParams = useSearchParams();
+  const urlKeyId = searchParams.get("key") ?? "all";
   const [selectedTab, setSelectedTab] = useState("overview");
   const [range, setRange] = useState("7d");
-  const [keyId, setKeyId] = useState(searchParams.get("key") ?? "all");
+  const [keyId, setKeyId] = useState(urlKeyId);
+  const [previousUrlKeyId, setPreviousUrlKeyId] = useState(urlKeyId);
   const [completion, setCompletion] = useState("all");
   const [resourceId, setResourceId] = useState("all");
   const [appUrl, setAppUrl] = useState("all");
@@ -204,6 +206,11 @@ function ActivityContent({ scope }: { scope: "account" | "admin" }) {
   const [group, setGroup] = useState<Group>("app");
   const [metric, setMetric] = useState<Metric>("requests");
   const seriesMetric = selectedTab === "explore" ? metric : "requests";
+
+  if (urlKeyId !== previousUrlKeyId) {
+    setPreviousUrlKeyId(urlKeyId);
+    setKeyId(urlKeyId);
+  }
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
