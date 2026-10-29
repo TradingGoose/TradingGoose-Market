@@ -19,6 +19,7 @@ import {
 import { CityEditDialog } from './cities-edit-dialog'
 import { CityRow, CountryOption, TimeZoneOption } from './types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -27,7 +28,6 @@ import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildCityColumns } from './cities-columns'
 import { usePagination } from '@/hooks/use-pagination'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -47,7 +47,6 @@ type CitiesApiResponse = {
 }
 
 export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
-  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<CityRow[]>(data ?? [])
@@ -358,7 +357,7 @@ export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
   return (
     <>
       <div className='flex min-h-0 w-full flex-1 flex-col gap-4 overflow-hidden min-w-0'>
-        <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card'>
+        <Card className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden shadow-none'>
           <div className='flex flex-col gap-4 border-b p-6 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between'>
             <TableFilter column={table.getColumn('id')!} placeholder='Search city (ID or name)' hideLabel />
             <div className='grid flex-1 grid-cols-3 gap-4 min-w-0 xs:grid-cols-3 xl:grid-cols-4 sm:items-end'>
@@ -434,12 +433,10 @@ export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              {canEdit && (
-                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                  <PlusIcon className='h-4 w-4' />
-                  Add City
-                </Button>
-              )}
+              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                <PlusIcon className='h-4 w-4' />
+                Add City
+              </Button>
             </div>
           </div>
           <DataTable
@@ -448,7 +445,7 @@ export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
             loadError={loadError}
             loadingMessage='Loading cities...'
           />
-        </div>
+        </Card>
 
         <div className='flex items-center justify-between gap-3 p-0 max-sm:flex-col'>
           <p className='text-muted-foreground text-sm whitespace-nowrap' aria-live='polite'>
@@ -478,23 +475,19 @@ export function CitiesTable({ data, totalCount }: CitiesTableProps = {}) {
           />
         </div>
       </div>
-      {canEdit && (
-        <CityEditDialog
-          city={editingCity}
-          open={isEditorOpen}
-          onOpenChange={handleEditorOpenChange}
-          onSave={handleCityUpdated}
-        />
-      )}
-      {canEdit && (
-        <CityEditDialog
-          city={null}
-          open={isCreateOpen}
-          onOpenChange={setIsCreateOpen}
-          onSave={handleCityCreated}
-          mode='create'
-        />
-      )}
+      <CityEditDialog
+        city={editingCity}
+        open={isEditorOpen}
+        onOpenChange={handleEditorOpenChange}
+        onSave={handleCityUpdated}
+      />
+      <CityEditDialog
+        city={null}
+        open={isCreateOpen}
+        onOpenChange={setIsCreateOpen}
+        onSave={handleCityCreated}
+        mode='create'
+      />
     </>
   )
 }

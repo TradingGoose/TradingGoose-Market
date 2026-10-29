@@ -1,0 +1,200 @@
+// @vitest-environment jsdom
+
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const navigation = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  assign: vi.fn(),
+  redirect: vi.fn(),
+  config: { registrationMode: "open", betterAuth: { emailVerificationEnabled: true } },
+}));
+const auth = vi.hoisted(() => ({
+  signIn: vi.fn(),
+  signUp: vi.fn(),
+  sendVerificationOtp: vi.fn(),
+  signInEmailOtp: vi.fn(),
+  requestPasswordReset: vi.fn(),
+  resetPassword: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => navigation.params,
+  redirect: navigation.redirect,
+}));
+vi.mock("@/lib/environment", () => ({ getMarketRuntimeConfig: () => navigation.config }));
+vi.mock("@/lib/auth/client", () => ({
+  authClient: {
+    signIn: { email: auth.signIn, emailOtp: auth.signInEmailOtp },
+    signUp: { email: auth.signUp },
+    emailOtp: { sendVerificationOtp: auth.sendVerificationOtp },
+    requestPasswordReset: auth.requestPasswordReset,
+    resetPassword: auth.resetPassword,
+  },
+}));
+vi.mock("@/app/fonts/soehne/soehne", () => ({
+  soehne: { className: "soehne" },
+}));
+vi.mock("@/app/(landing)/components/nav/landing-nav", () => ({
+  LandingNav: ({ variant }: { variant: string }) => <nav aria-label="Primary navigation" data-variant={variant}>Market nav</nav>,
+}));
+
+import AuthLayout from "../../app/(auth)/layout";
+import ForgotPasswordForm from "../../app/(auth)/forgot-password/forgot-password-form";
+import LoginForm from "../../app/(auth)/login/login-form";
+import ResetPasswordForm from "../../app/(auth)/reset-password/reset-password-form";
+import SignupForm from "../../app/(auth)/signup/signup-form";
+import SignupPage from "../../app/(auth)/signup/page";
+import VerifyPage from "../../app/(auth)/verify/page";
+import VerifyForm from "../../app/(auth)/verify/verify-form";
+
+beforeEach(() => {
+  navigation.params = new URLSearchParams();
+  navigation.config.betterAuth.emailVerificationEnabled = true;
+  navigation.redirect.mockImplementation(() => { throw new Error("NEXT_REDIRECT"); });
+});
+
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("Studio-shaped Market auth surface", () => {
+  it.each([true, false])("applies the server verification policy to signup and verification enabled=%s", (enabled) => {
+    navigation.config.betterAuth.emailVerificationEnabled = enabled;
+    expect(SignupPage().props.emailVerificationEnabled).toBe(enabled);
+    if (enabled) expect(VerifyPage().type).toBe(VerifyForm);
+    else {
+      expect(() => VerifyPage()).toThrow("NEXT_REDIRECT");
+      expect(navigation.redirect).toHaveBeenCalledWith("/account/api-keys");
+    }
+  });
+
+  it("uses the full-page nav/background/canvas hierarchy without a divergent card", () => {
+    const { container } = render(
+      <AuthLayout>
+        <p>Auth form</p>
+      </AuthLayout>,
+    );
+
+    expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeTruthy();
+    expect(container.firstElementChild?.className).toBe("relative min-h-screen w-full overflow-hidden");
+    expect(container.querySelector(".cell")).toBeNull();
+    expect(screen.getByRole("navigation").getAttribute("data-variant")).toBe("auth");
+    expect(container.querySelector("main")?.className).toContain("min-h-screen");
+    expect(screen.getByText("Auth form").parentElement?.className).toContain("max-w-lg");
+    expect(screen.getByText("Auth form").parentElement?.parentElement?.className).not.toContain("pt-12");
+    expect(container.querySelector(".rounded-lg.border.shadow-lg")).toBeNull();
+  });
+
+  it("renders registration-open and registration-closed login states", () => {
+    const { rerender } = render(<LoginForm registrationOpen />);
+    expect(screen.getByRole("link", { name: "Create an account" })).toBeTruthy();
+
+    rerender(<LoginForm registrationOpen={false} />);
+    expect(screen.queryByRole("link", { name: "Create an account" })).toBeNull();
+    expect(screen.getByText("Public registration is currently closed.")).toBeTruthy();
+  });
+
+  it("normalizes login identity and keeps provider failure finite", async () => {
+    const interaction = userEvent.setup();
+    auth.signIn.mockResolvedValue({ data: null, error: { message: "no" } });
+    render(<LoginForm registrationOpen />);
+
+    await interaction.type(screen.getByLabelText("Email"), " ADA@EXAMPLE.COM ");
+    await interaction.type(screen.getByLabelText("Password"), "not-the-password");
+    await interaction.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("The email or password is incorrect.")).toBeTruthy();
+    expect(screen.getByRole("alert").className).not.toContain("bg-destructive");
+    expect(auth.signIn).toHaveBeenCalledWith({
+      email: "ada@example.com",
+      password: "not-the-password",
+    });
+  });
+
+  it("validates signup locally and renders a bounded provider error", async () => {
+    const interaction = userEvent.setup();
+    auth.signUp.mockResolvedValue({
+      data: null,
+      error: { message: "That account cannot be created." },
+    });
+    render(<SignupForm emailVerificationEnabled />);
+
+    await interaction.type(screen.getByLabelText("Name"), "Ada");
+    await interaction.type(screen.getByLabelText("Email"), "ada@example.com");
+    await interaction.type(screen.getByLabelText("Password"), "short");
+    await interaction.click(screen.getByRole("button", { name: "Create account" }));
+    expect(screen.getByText("Use at least 8 characters for your password.")).toBeTruthy();
+    expect(auth.signUp).not.toHaveBeenCalled();
+
+    await interaction.type(screen.getByLabelText("Password"), "-enough");
+    await interaction.click(screen.getByRole("button", { name: "Create account" }));
+    expect(await screen.findByText("That account cannot be created.")).toBeTruthy();
+    expect(screen.getByRole("alert").className).not.toContain("bg-destructive");
+  });
+
+  it.each([true, false])("completes signup with email verification enabled=%s", async (enabled) => {
+    vi.stubGlobal("window", Object.create(window, { location: { value: { assign: navigation.assign } } }));
+    const interaction = userEvent.setup();
+    auth.signUp.mockResolvedValue({ data: { user: { emailVerified: false } }, error: null });
+    auth.sendVerificationOtp.mockResolvedValue({ data: { success: true }, error: null });
+    sessionStorage.setItem("market.verification.email", "stale@example.com");
+    render(<SignupForm emailVerificationEnabled={enabled} />);
+
+    await interaction.type(screen.getByLabelText("Name"), "Ada");
+    await interaction.type(screen.getByLabelText("Email"), "ada@example.com");
+    await interaction.type(screen.getByLabelText("Password"), "long-password");
+    await interaction.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => expect(navigation.assign).toHaveBeenCalledWith(
+      enabled ? "/verify" : "/account/api-keys"
+    ));
+    if (enabled) {
+      expect(auth.sendVerificationOtp).toHaveBeenCalledWith({ email: "ada@example.com", type: "sign-in" });
+    } else {
+      expect(auth.sendVerificationOtp).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("market.verification.email")).toBeNull();
+    }
+  });
+
+  it("keeps provider failure retryable while preserving missing-account privacy", async () => {
+    const interaction = userEvent.setup();
+    navigation.params = new URLSearchParams("email=ada%40example.com");
+    auth.requestPasswordReset.mockRejectedValue(new Error("provider unavailable"));
+    render(<ForgotPasswordForm />);
+
+    await interaction.click(screen.getByRole("button", { name: "Send reset link" }));
+    expect(await screen.findByText("The reset email could not be sent. Please try again.")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Send reset link" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("gives callback errors precedence and completes one valid reset", async () => {
+    navigation.params = new URLSearchParams("token=token_1&error=token_expired");
+    const { rerender } = render(<ResetPasswordForm />);
+    expect(screen.getByText("This reset link is invalid or has expired.")).toBeTruthy();
+    expect(auth.resetPassword).not.toHaveBeenCalled();
+
+    navigation.params = new URLSearchParams("token=token_2");
+    rerender(<ResetPasswordForm />);
+    const interaction = userEvent.setup();
+    await interaction.type(screen.getByLabelText("New password"), "long-password");
+    await interaction.type(screen.getByLabelText("Confirm password"), "long-password");
+    auth.resetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    await interaction.click(screen.getByRole("button", { name: "Reset password" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Your password has been reset. You can now sign in.")).toBeTruthy();
+    });
+    expect(auth.resetPassword).toHaveBeenCalledWith({
+      newPassword: "long-password",
+      token: "token_2",
+    });
+  });
+});

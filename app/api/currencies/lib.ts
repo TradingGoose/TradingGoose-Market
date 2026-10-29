@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 export type CurrencyRow = {
   id: string;
@@ -44,13 +45,13 @@ export async function fetchCurrenciesFromDb(query: CurrenciesQuery) {
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
 
-  const [{ total }] = (await db!.execute(sql`
+  const [{ total }] = (await requireDatabase().execute(sql`
     SELECT COUNT(*)::int AS total
     FROM currencies c
     ${whereClause}
   `)) as { total: number }[];
 
-  const rowsFromDb = (await db!.execute(sql`
+  const rowsFromDb = (await requireDatabase().execute(sql`
     SELECT
       c.id,
       c.code,
@@ -73,7 +74,7 @@ export async function fetchCurrenciesFromDb(query: CurrenciesQuery) {
 }
 
 export async function fetchCurrenciesForExport() {
-  const rows = (await db!.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       c.code,
       c.name

@@ -6,14 +6,24 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { MarketHourRow } from './types'
 import { MarketHourRowActions } from './market-hours-row-actions'
 
-function summarizeSessions(hours: any) {
+function summarizeSessions(hours: unknown) {
   const summary = new Map<string, number>()
-  const sessions = hours?.sessions
-  if (sessions && typeof sessions === 'object') {
-    Object.values(sessions as Record<string, any[]>).forEach(daySessions => {
+  const sessions =
+    hours && typeof hours === 'object' && !Array.isArray(hours)
+      ? (hours as Record<string, unknown>).sessions
+      : null
+  if (sessions && typeof sessions === 'object' && !Array.isArray(sessions)) {
+    Object.values(sessions as Record<string, unknown>).forEach(daySessions => {
       if (Array.isArray(daySessions)) {
         daySessions.forEach(entry => {
-          const state = typeof entry?.state === 'string' && entry.state.trim() ? entry.state.trim().toLowerCase() : 'session'
+          const entryState =
+            entry && typeof entry === 'object' && !Array.isArray(entry)
+              ? (entry as Record<string, unknown>).state
+              : null
+          const state =
+            typeof entryState === 'string' && entryState.trim()
+              ? entryState.trim().toLowerCase()
+              : 'session'
           summary.set(state, (summary.get(state) ?? 0) + 1)
         })
       }
@@ -23,7 +33,6 @@ function summarizeSessions(hours: any) {
 }
 
 export function buildMarketHoursColumns(
-  onEdit: (row: MarketHourRow) => void,
   onDelete: (row: MarketHourRow) => void
 ): ColumnDef<MarketHourRow>[] {
   return [
@@ -203,7 +212,7 @@ export function buildMarketHoursColumns(
     {
       id: 'actions',
       header: () => 'Actions',
-      cell: ({ row }) => <MarketHourRowActions row={row.original} onEdit={onEdit} onDelete={onDelete} />,
+      cell: ({ row }) => <MarketHourRowActions row={row.original} onDelete={onDelete} />,
       size: 48,
       enableHiding: false
     }

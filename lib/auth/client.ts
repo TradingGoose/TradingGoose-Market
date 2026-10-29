@@ -1,10 +1,8 @@
-import { createAuthClient } from "better-auth/react";
-import { adminClient } from "better-auth/client/plugins";
+"use client";
 
-const baseURL =
-  typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_APP_URL;
+import { createAuthClient } from "better-auth/react";
+import { emailOTPClient } from "better-auth/client/plugins";
 
 export const authClient = createAuthClient({
-  baseURL: baseURL || undefined,
-  plugins: [adminClient()]
+  plugins: [emailOTPClient()],
 });

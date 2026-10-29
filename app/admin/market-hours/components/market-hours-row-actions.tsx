@@ -2,20 +2,15 @@
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { EllipsisVerticalIcon } from 'lucide-react'
+import { EllipsisVerticalIcon, Trash2 } from 'lucide-react'
 import { MarketHourRow } from './types'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 type MarketHourRowActionsProps = {
   row: MarketHourRow
-  onEdit?: (row: MarketHourRow) => void
   onDelete?: (row: MarketHourRow) => void
 }
 
-export function MarketHourRowActions({ row, onEdit, onDelete }: MarketHourRowActionsProps) {
-  const canEdit = useCanEdit()
-  if (!canEdit) return null
-
+export function MarketHourRowActions({ row, onDelete }: MarketHourRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -23,23 +18,15 @@ export function MarketHourRowActions({ row, onEdit, onDelete }: MarketHourRowAct
           <EllipsisVerticalIcon className='h-4 w-4' aria-hidden='true' />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='start'>
+      <DropdownMenuContent align='end'>
         <DropdownMenuGroup>
           <DropdownMenuItem
-            onSelect={event => {
-              event.preventDefault()
-              onEdit?.(row)
-            }}
-          >
-            <span>Edit</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem
             className='text-destructive focus:text-destructive'
-            onSelect={event => {
-              event.preventDefault()
+            onSelect={() => {
               onDelete?.(row)
             }}
           >
+            <Trash2 className='size-4' aria-hidden='true' />
             <span>Delete</span>
           </DropdownMenuItem>
         </DropdownMenuGroup>

@@ -1,6 +1,8 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 export type CryptoContract = {
   chainId: string;
@@ -137,7 +139,7 @@ async function buildChainMap() {
   if (chainMapCache && Date.now() - chainMapCache.ts < CHAIN_MAP_TTL) {
     return chainMapCache.map;
   }
-  const rows = await db!
+  const rows = await requireDatabase()
     .select({ id: schema.chains.id, code: schema.chains.code, name: schema.chains.name })
     .from(schema.chains);
   const map = new Map<string, { code: string; name: string }>();
@@ -169,7 +171,7 @@ export async function fetchCryptoOptions(query: string | null, limit: number) {
   }
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
 
-  const rows = (await db!.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       cr.id,
       cr.code,
@@ -216,7 +218,7 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
   if (!hasFilters && unfilteredCryptoCount && Date.now() - unfilteredCryptoCount.ts < UNFILTERED_CRYPTO_COUNT_TTL) {
     totalPromise = Promise.resolve(unfilteredCryptoCount.total);
   } else {
-    totalPromise = (db!.execute(
+    totalPromise = (requireDatabase().execute(
       hasFilters
         ? sql`SELECT COUNT(*)::int AS total FROM cryptos cr ${whereClause}`
         : sql`SELECT COUNT(*)::int AS total FROM cryptos`
@@ -230,7 +232,7 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
   const [total, rowsFromDb, chainMap] = await Promise.all([
     totalPromise,
 
-    db!.execute(sql`
+    requireDatabase().execute(sql`
       SELECT
         cr.id,
         cr.code,
@@ -266,7 +268,7 @@ export async function fetchCryptosFromDb(query: CryptosQuery) {
 }
 
 export async function fetchCryptosForExport() {
-  const rows = (await db!.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       cr.code,
       cr.name,

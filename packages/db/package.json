@@ -15,7 +15,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf ./dist && tsc -p tsconfig.build.json",
     "db:generate": "bunx drizzle-kit generate --config=./drizzle.config.ts",
     "db:migrate": "bunx drizzle-kit migrate --config=./drizzle.config.ts",
     "db:studio": "bunx drizzle-kit studio --config=./drizzle.config.ts",

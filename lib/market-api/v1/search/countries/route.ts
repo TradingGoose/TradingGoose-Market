@@ -1,9 +1,12 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "../utils";
 import { resolveSearchParams } from "../params";
+import { parsePositiveInt } from "../parsing";
+
 
 type CountrySearchRow = {
   id: string;
@@ -19,19 +22,7 @@ export type CountrySearchParams = {
   limit?: string | null;
 };
 
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
 export async function searchCountriesRows(request: Request, params: CountrySearchParams) {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const countryId = params.countryId?.trim() ?? "";
   const countryName = params.countryName?.trim() ?? "";
@@ -55,7 +46,7 @@ export async function searchCountriesRows(request: Request, params: CountrySearc
 
   const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id, code, name, icon_url AS "iconUrl"
     FROM countries
     ${whereClause}
@@ -71,9 +62,6 @@ export async function searchCountriesRows(request: Request, params: CountrySearc
 
 export async function getSearchCountries(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ data: [], error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);

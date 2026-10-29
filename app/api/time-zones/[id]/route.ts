@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchTimeZonesFromDb } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/time-zones/[id]");
 
 const updateTimeZoneSchema = z
   .object({
@@ -21,15 +26,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: timeZoneId } = await params;
   if (!timeZoneId) {
@@ -85,7 +84,7 @@ export async function PATCH(
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.timeZones)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.timeZones.id, timeZoneId))
@@ -94,8 +93,13 @@ export async function PATCH(
     if (!result.length) {
       return NextResponse.json({ error: "Time zone not found." }, { status: 404 });
     }
-  } catch (error: any) {
-    if (error?.code === "23505") {
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "23505"
+    ) {
       return NextResponse.json({ error: "Time zone already exists." }, { status: 409 });
     }
     const message = error instanceof Error ? error.message : "Failed to update time zone.";
@@ -118,22 +122,16 @@ export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: timeZoneId } = await params;
   if (!timeZoneId) {
     return NextResponse.json({ error: "Time zone id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.timeZones.id })
     .from(schema.timeZones)
     .where(eq(schema.timeZones.id, timeZoneId))
@@ -144,7 +142,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.timeZones).where(eq(schema.timeZones.id, timeZoneId));
+    await requireDatabase().delete(schema.timeZones).where(eq(schema.timeZones.id, timeZoneId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete time zone.";
     console.error("[time-zones:delete] API error:", message);
@@ -153,3 +151,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: timeZoneId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;

@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchCryptosFromDb } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
-import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/cryptos/[id]");
 
 const contractAddressSchema = z.object({
   chainId: z.string().trim().min(1),
@@ -43,7 +47,7 @@ function normalizeContractAddresses(contracts: { chainId: string; address?: stri
 async function ensureChainsExist(chainIds: string[]) {
   if (!chainIds.length) return true;
   const uniqueIds = Array.from(new Set(chainIds));
-  const rows = await db!
+  const rows = await requireDatabase()
     .select({ id: schema.chains.id })
     .from(schema.chains)
     .where(inArray(schema.chains.id, uniqueIds));
@@ -60,15 +64,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: cryptoId } = await params;
   if (!cryptoId) {
@@ -115,7 +113,7 @@ export async function PATCH(
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.cryptos)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.cryptos.id, cryptoId))
@@ -124,7 +122,7 @@ export async function PATCH(
     if (!result.length) {
       return NextResponse.json({ error: "Crypto not found." }, { status: 404 });
     }
-  } catch (error: any) {
+  } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update crypto.";
     console.error("[cryptos:update] API error:", message);
     return NextResponse.json({ error: "Failed to update crypto." }, { status: 500 });
@@ -137,31 +135,23 @@ export async function PATCH(
   });
 
   const updatedCrypto = refreshed.data.find(row => row.id === cryptoId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "crypto", updatedCrypto, auth.user.id);
-
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: updatedCrypto });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: cryptoId } = await params;
   if (!cryptoId) {
     return NextResponse.json({ error: "Crypto id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.cryptos.id })
     .from(schema.cryptos)
     .where(eq(schema.cryptos.id, cryptoId))
@@ -172,7 +162,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.cryptos).where(eq(schema.cryptos.id, cryptoId));
+    await requireDatabase().delete(schema.cryptos).where(eq(schema.cryptos.id, cryptoId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete crypto.";
     console.error("[cryptos:delete] API error:", message);
@@ -181,3 +171,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: cryptoId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;

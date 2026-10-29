@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchExchangesFromDb } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
-import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/exchanges/[id]");
 
 const updateExchangeSchema = z
   .object({
@@ -47,15 +51,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: exchangeId } = await params;
   if (!exchangeId) {
@@ -95,7 +93,7 @@ export async function PATCH(
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.exchanges)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.exchanges.id, exchangeId))
@@ -117,31 +115,23 @@ export async function PATCH(
   });
 
   const updatedExchange = refreshed.data.find(row => row.id === exchangeId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "exchange", updatedExchange, auth.user.id);
-
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: updatedExchange });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: exchangeId } = await params;
   if (!exchangeId) {
     return NextResponse.json({ error: "Exchange id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.exchanges.id })
     .from(schema.exchanges)
     .where(eq(schema.exchanges.id, exchangeId))
@@ -152,7 +142,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.exchanges).where(eq(schema.exchanges.id, exchangeId));
+    await requireDatabase().delete(schema.exchanges).where(eq(schema.exchanges.id, exchangeId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete exchange.";
     console.error("[exchanges:delete] API error:", message);
@@ -161,3 +151,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: exchangeId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;

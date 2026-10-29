@@ -1,23 +1,22 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { db } from "@tradinggoose/db";
+
 import { fetchMarketHoursFromDb, type MarketHoursQuery } from "./lib";
-import { runAppRouteAdminReadEnrichers } from "@/lib/market-api/plugins/app-routes";
 import { parsePositiveInt } from "@/lib/api-utils";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 export const runtime = "nodejs";
+const routePolicy = createSystemAdminRoutePolicy("/api/market-hours");
 
 const assetClassEnum = z.enum(["stock", "etf", "indice", "mutualfund", "future", "crypto", "currency"]);
 
 export async function GET(request: Request) {
+  const auth = await routePolicy.authorize(request);
+  if (auth.error) return auth.error;
+
   try {
-    if (!db) {
-      return NextResponse.json(
-        { data: [], total: 0, error: "Database connection is not configured." },
-        { status: 503 }
-      );
-    }
 
     const { searchParams } = new URL(request.url);
     const page = parsePositiveInt(searchParams.get("page"), 1);
@@ -41,12 +40,17 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchMarketHoursFromDb(query);
-    const data = await runAppRouteAdminReadEnrichers(request, "market-hours", payload.data);
-
-    return NextResponse.json({ ...payload, data });
+    return NextResponse.json(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[market-hours] API error:", message);
     return NextResponse.json({ data: [], total: 0, error: message }, { status: 500 });
   }
 }
+
+export const HEAD = (request: Request) => routePolicy.head(request, GET);
+export const OPTIONS = routePolicy.options;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

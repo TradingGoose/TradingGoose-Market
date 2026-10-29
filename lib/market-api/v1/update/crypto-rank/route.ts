@@ -1,9 +1,12 @@
 import { sql } from "drizzle-orm";
+import type { MarketApiActor } from "@/lib/market-api/core/access";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
 
-import { db, schema } from "@tradinggoose/db";
-import { requireRankUpdateAccess } from "../rank-access";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
+import { requirePrivateRankActor } from "../rank-access";
+
 
 type CryptoLookup = {
   id?: string | null;
@@ -48,9 +51,9 @@ async function resolveCryptoId(request: Request): Promise<string | null> {
     // ignore invalid JSON
   }
 
-  if (!lookup.code || !lookup.chainCode || !db) return null;
+  if (!lookup.code || !lookup.chainCode) return null;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT cr.id
     FROM cryptos cr
     WHERE cr.code ILIKE ${lookup.code}
@@ -68,13 +71,10 @@ async function resolveCryptoId(request: Request): Promise<string | null> {
   return rows[0]?.id ?? null;
 }
 
-export async function postUpdateCryptoRank(c: ApiContext, plugin?: PluginContext) {
+export async function postUpdateCryptoRank(c: ApiContext, actor: MarketApiActor | null) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
-    const accessError = requireRankUpdateAccess(c, plugin);
+    const accessError = requirePrivateRankActor(c, actor);
     if (accessError) return accessError;
 
     const request = c.req.raw;
@@ -83,7 +83,7 @@ export async function postUpdateCryptoRank(c: ApiContext, plugin?: PluginContext
       return c.json({ error: "crypto_id or code+chainCode is required." }, 400);
     }
 
-    const updated = await db
+    const updated = await requireDatabase()
       .update(schema.cryptos)
       .set({
         rank: sql<number>`${schema.cryptos.rank} + 1`,

@@ -1,22 +1,12 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { HttpStatusCode } from "@/lib/market-api/core/http";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "../utils";
 import type { Listing } from "../types";
 import { resolveSearchParams } from "../params";
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
+import { parseListParam, parsePositiveInt, uniqueNonEmpty } from "../parsing";
 
 type CountrySearchRow = {
   id: string;
@@ -41,74 +31,13 @@ function intersectIds(current: string[] | null, next: string[]) {
   return current.filter((id) => nextSet.has(id));
 }
 
-function uniqueNonEmpty(values: Array<string | null | undefined>) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-function parseListParam(searchParams: URLSearchParams, key: string) {
-  const rawValues = [
-    ...searchParams.getAll(key),
-    ...searchParams.getAll(`${key}[]`)
-  ];
-  if (!rawValues.length) return [];
-
-  const tokens: string[] = [];
-  for (const raw of rawValues) {
-    if (!raw) continue;
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-
-    const pushToken = (value: string) => {
-      const cleaned = value.trim().replace(/^['"]|['"]$/g, "");
-      if (cleaned) tokens.push(cleaned);
-    };
-
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item === null || item === undefined) continue;
-            pushToken(String(item));
-          }
-          continue;
-        }
-      } catch {
-        // Fall through to manual parsing.
-      }
-      const inner = trimmed.slice(1, -1);
-      if (inner) {
-        inner.split(",").forEach((value) => pushToken(value));
-      }
-      continue;
-    }
-
-    if (trimmed.includes(",")) {
-      trimmed.split(",").forEach((value) => pushToken(value));
-      continue;
-    }
-
-    pushToken(trimmed);
-  }
-
-  return uniqueNonEmpty(tokens);
-}
-
 async function fetchCountryIdsByTokens(tokens: string[]) {
-  if (!db) return [];
   if (!tokens.length) return [];
   const filters = tokens.map(
     (token) =>
       sql`(COALESCE(name, '') ILIKE ${`%${token}%`} OR COALESCE(code, '') ILIKE ${`%${token}%`})`
   );
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id
     FROM countries
     WHERE ${sql.join(filters, sql` OR `)}
@@ -173,23 +102,11 @@ function buildPublicListings(
   return rows.map((row) => toPublicListing(withIconUrl(request, row)));
 }
 
-async function buildSearchListings(
-  request: Request,
-  rows: ListingSearchResult[],
-  plugin?: PluginContext
-) {
-  if (plugin) {
-    triggerEntityEnrichersInBackground(plugin, "listing", "search", rows);
-  }
-  return buildPublicListings(request, rows);
-}
-
 async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?: string) {
-  if (!db) return [] as ListingSearchResult[];
   if (!filters.length) return [] as ListingSearchResult[];
   const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
   const orderByClause = buildOrderBy(searchTerm);
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       l.id AS "listingId",
       l.base,
@@ -224,12 +141,8 @@ async function fetchListingsByFilters(filters: SQL[], limit: number, searchTerm?
 
 export async function fetchListingById(
   request: Request,
-  listingId: string,
-  options?: { forceLogoRefresh?: boolean }
+  listingId: string
 ): Promise<Listing | null> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const trimmedId = listingId.trim();
   if (!trimmedId) return null;
@@ -243,12 +156,8 @@ export async function fetchListingById(
 
 export async function fetchListingsByIds(
   request: Request,
-  listingIds: string[],
-  options?: { forceLogoRefresh?: boolean }
+  listingIds: string[]
 ): Promise<Map<string, Listing>> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const ids = uniqueNonEmpty(
     listingIds.map((id) => id.trim()).filter((id) => id.length > 0)
@@ -273,24 +182,20 @@ export async function fetchListingsByIds(
 
 type ListingSearchResponse = {
   data: Listing[] | Listing | null;
-  status: HttpStatusCode;
+  status: number;
   error?: string;
 };
 
 async function runListingSearch(
   request: Request,
-  searchParams: URLSearchParams,
-  plugin?: PluginContext
+  searchParams: URLSearchParams
 ): Promise<ListingSearchResponse> {
-  if (!db) {
-    return { data: [], error: "Database connection is not configured.", status: 503 };
-  }
 
   const listingId = searchParams.get("listing_id")?.trim();
   if (listingId) {
     return {
       data: [],
-      error: "listing_id is not supported on /search/listings. Use /get/listing instead.",
+      error: "listing_id is not supported on /api/search/listings. Use /api/get/listing instead.",
       status: 400
     };
   }
@@ -346,7 +251,7 @@ async function runListingSearch(
       filters.push(sql`(${sql.join(nameFilters, sql` OR `)})`);
     }
     if (filters.length) {
-      const rows = (await db.execute(sql`
+      const rows = (await requireDatabase().execute(sql`
         SELECT id
         FROM currencies
         WHERE ${sql.join(filters, sql` AND `)}
@@ -369,7 +274,7 @@ async function runListingSearch(
   }
   if (marketTokens.length) {
     const normalized = uniqueNonEmpty(marketTokens.map((token) => token.toUpperCase()));
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM markets
       WHERE id IN (${sql.join(normalized.map((token) => sql`${token}`), sql`, `)})
@@ -381,7 +286,7 @@ async function runListingSearch(
     const codeFilters = marketCodesParam.map(
       (code) => sql`COALESCE(code, '') ILIKE ${`%${code}%`}`
     );
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM markets
       WHERE ${sql.join(codeFilters, sql` OR `)}
@@ -389,7 +294,7 @@ async function runListingSearch(
     marketIds = intersectIds(marketIds, uniqueNonEmpty(rows.map((row) => row.id)));
   }
   if (marketNamesParam.length) {
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM markets
       WHERE ${sql.join(
@@ -417,7 +322,7 @@ async function runListingSearch(
 
   let countryExchangeIds: string[] | null = null;
   if (countryIds && countryIds.length) {
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT id
       FROM exchanges
       WHERE country_id IN (${sql.join(countryIds.map((id) => sql`${id}`), sql`, `)})
@@ -473,7 +378,7 @@ async function runListingSearch(
     if (!rows.length) {
       return { data: [], status: 200 };
     }
-    return { data: await buildSearchListings(request, rows, plugin), status: 200 };
+    return { data: buildPublicListings(request, rows), status: 200 };
   }
 
   const orderByTerm = listingName ?? listingBase ?? undefined;
@@ -540,7 +445,7 @@ async function runListingSearch(
   for (const filters of rankedFilters) {
     const rows = await fetchListingsByFilters(filters, limit, orderByTerm);
     if (rows.length) {
-      return { data: await buildSearchListings(request, rows, plugin), status: 200 };
+      return { data: buildPublicListings(request, rows), status: 200 };
     }
   }
 
@@ -603,14 +508,14 @@ async function runListingSearch(
   }
 
   const rows = await fetchListingsByFilters(fallbackFilters, limit, listingName ?? undefined);
-  return { data: await buildSearchListings(request, rows, plugin), status: 200 };
+  return { data: buildPublicListings(request, rows), status: 200 };
 }
 
-export async function getSearchListings(c: ApiContext, plugin?: PluginContext) {
+export async function getSearchListings(c: ApiContext) {
   try {
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
-    const result = await runListingSearch(request, searchParams, plugin);
+    const result = await runListingSearch(request, searchParams);
     if (result.status >= 400) {
       return c.json({ data: result.data ?? [], error: result.error ?? "Unknown error" }, result.status);
     }
@@ -624,10 +529,9 @@ export async function getSearchListings(c: ApiContext, plugin?: PluginContext) {
 
 export async function searchListingRows(
   request: Request,
-  searchParams: URLSearchParams,
-  plugin?: PluginContext
+  searchParams: URLSearchParams
 ): Promise<Listing[]> {
-  const result = await runListingSearch(request, searchParams, plugin);
+  const result = await runListingSearch(request, searchParams);
   if (result.status >= 400) {
     throw new Error(result.error ?? `Listing search failed with status ${result.status}`);
   }

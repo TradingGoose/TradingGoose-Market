@@ -1,6 +1,11 @@
 import { buildServePayload, resolveServeKeyFromPath } from "@uploads/core/serve";
+import {
+  createManifestMethodPolicy,
+  toExplicitHeadResponse,
+} from "@/lib/market-api/core/method-guards";
 
 export const runtime = "nodejs";
+const methods = createManifestMethodPolicy("/api/files/serve/[...key]");
 
 export async function GET(request: Request) {
   const key = resolveServeKeyFromPath(new URL(request.url).pathname);
@@ -30,3 +35,10 @@ export async function GET(request: Request) {
     });
   }
 }
+
+export const HEAD = (request: Request) => toExplicitHeadResponse(GET(request));
+export const POST = methods.POST;
+export const PUT = methods.PUT;
+export const PATCH = methods.PATCH;
+export const DELETE = methods.DELETE;
+export const OPTIONS = methods.OPTIONS;

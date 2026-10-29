@@ -39,8 +39,13 @@ async function listLocalKeysByPrefix(prefix: string): Promise<string[]> {
   try {
     const stats = await fs.stat(baseDir)
     if (!stats.isDirectory()) return []
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') return []
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) return []
     throw error
   }
 
@@ -220,8 +225,13 @@ export async function deleteFile(key: string, provider?: StorageProvider): Promi
 
   try {
     await fs.unlink(filePath)
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') return
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) return
     throw error
   }
 }

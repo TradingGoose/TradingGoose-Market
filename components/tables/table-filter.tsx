@@ -1,12 +1,11 @@
 'use client'
 
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 
 import type { Column } from '@tanstack/react-table'
 import {
   CheckIcon,
   ChevronsUpDownIcon,
-  Loader2,
   SearchIcon
 } from 'lucide-react'
 
@@ -15,12 +14,13 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/ui/utils'
 
 type SelectOption = { label: string; value: string }
 
-export type TableFilterProps = {
-  column: Column<any, unknown>
+export type TableFilterProps<TData, TValue = unknown> = {
+  column: Column<TData, TValue>
   placeholder?: string
   hideLabel?: boolean
   selectOptions?: SelectOption[]
@@ -32,11 +32,66 @@ export type TableFilterProps = {
   searchEmptyMessage?: string
 }
 
+type TextTableFilterProps = {
+  id: string
+  columnHeader: string
+  initialValue: string
+  placeholder?: string
+  hideLabel: boolean
+  onApply: (value: string) => void
+}
+
+function TextTableFilter({
+  id,
+  columnHeader,
+  initialValue,
+  placeholder,
+  hideLabel,
+  onApply
+}: TextTableFilterProps) {
+  const [inputValue, setInputValue] = useState(initialValue)
+  const applyTextFilter = () => onApply(inputValue)
+
+  return (
+    <div className='w-full max-w-xs'>
+      {!hideLabel && (
+        <Label htmlFor={`${id}-input`} className='sr-only'>
+          {columnHeader}
+        </Label>
+      )}
+      <div className='flex gap-2'>
+        <div className='relative flex-1'>
+          <Input
+            id={`${id}-input`}
+            className='peer pl-9'
+            value={inputValue}
+            onChange={event => setInputValue(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                applyTextFilter()
+              }
+            }}
+            placeholder={placeholder ?? `Search ${columnHeader.toLowerCase()}`}
+            type='text'
+          />
+          <div className='text-muted-foreground/80 pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center pl-3 peer-disabled:opacity-50'>
+            <SearchIcon size={16} />
+          </div>
+        </div>
+        <Button type='button' variant='secondary' onClick={applyTextFilter}>
+          Search
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 /**
  * Generic table column filter that supports text, select, and searchable select modes.
  * Separated to keep table components small and reusable.
  */
-export function TableFilter({
+export function TableFilter<TData, TValue = unknown>({
   column,
   placeholder,
   hideLabel = false,
@@ -47,42 +102,25 @@ export function TableFilter({
   onSearchChange,
   searchLoading = false,
   searchEmptyMessage
-}: TableFilterProps) {
+}: TableFilterProps<TData, TValue>) {
   const id = useId()
   const columnFilterValue = column.getFilterValue()
+  const facetedUniqueValues = column.getFacetedUniqueValues()
   const { filterVariant } = column.columnDef.meta ?? {}
   const metaSelectOptions = column.columnDef.meta?.selectOptions ?? []
   const resolvedSelectOptions = selectOptions !== undefined ? selectOptions : metaSelectOptions
   const columnHeader = typeof column.columnDef.header === 'string' ? column.columnDef.header : ''
-  const [inputValue, setInputValue] = useState(columnFilterValue?.toString() ?? '')
   const [internalSearchValue, setInternalSearchValue] = useState('')
   const [comboboxOpen, setComboboxOpen] = useState(false)
 
   const sortedUniqueValues = useMemo(() => {
     if (filterVariant === 'range') return []
 
-    const values = Array.from(column.getFacetedUniqueValues().keys())
+    const values = Array.from(facetedUniqueValues.keys())
+    const flattenedValues = values.flatMap(value => (Array.isArray(value) ? value : [value]))
 
-    const flattenedValues = values.reduce((acc: string[], curr) => {
-      if (Array.isArray(curr)) {
-        return [...acc, ...curr]
-      }
-
-      return [...acc, curr]
-    }, [])
-
-    return Array.from(new Set(flattenedValues)).sort()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [column.getFacetedUniqueValues(), filterVariant])
-
-  useEffect(() => {
-    setInputValue(columnFilterValue?.toString() ?? '')
-  }, [columnFilterValue])
-
-  const applyTextFilter = () => {
-    const trimmed = inputValue.trim()
-    column.setFilterValue(trimmed ? trimmed : undefined)
-  }
+    return Array.from(new Set(flattenedValues.map(value => String(value)))).sort()
+  }, [facetedUniqueValues, filterVariant])
 
   if (filterVariant === 'select') {
     const selectedValue = columnFilterValue?.toString() ?? 'all'
@@ -116,6 +154,7 @@ export function TableFilter({
               variant='outline'
               role='combobox'
               aria-expanded={comboboxOpen}
+              aria-label={selectedLabel}
               className='w-full justify-between'
             >
               <span className={cn('truncate', selectedValue === 'all' && 'text-muted-foreground')}>
@@ -136,9 +175,9 @@ export function TableFilter({
               <CommandList>
                 <CommandEmpty>
                   {searchLoading ? (
-                    <div className='flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground'>
-                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                      Loading...
+                    <div className='flex items-center justify-center py-2' role='status'>
+                      <Skeleton className='h-4 w-24' />
+                      <span className='sr-only'>Loading results...</span>
                     </div>
                   ) : (
                     <span className='text-xs text-muted-foreground'>
@@ -179,37 +218,20 @@ export function TableFilter({
     )
   }
 
+  const textFilterValue = columnFilterValue?.toString() ?? ''
+
   return (
-    <div className='w-full max-w-xs'>
-      {!hideLabel && (
-        <Label htmlFor={`${id}-input`} className='sr-only'>
-          {columnHeader}
-        </Label>
-      )}
-      <div className='flex gap-2'>
-        <div className='relative flex-1'>
-          <Input
-            id={`${id}-input`}
-            className='peer pl-9'
-            value={inputValue}
-            onChange={e => setInputValue(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                applyTextFilter()
-              }
-            }}
-            placeholder={placeholder ?? `Search ${columnHeader.toLowerCase()}`}
-            type='text'
-          />
-          <div className='text-muted-foreground/80 pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center pl-3 peer-disabled:opacity-50'>
-            <SearchIcon size={16} />
-          </div>
-        </div>
-        <Button type='button' variant='secondary' onClick={applyTextFilter}>
-          Search
-        </Button>
-      </div>
-    </div>
+    <TextTableFilter
+      key={`${column.id}:${textFilterValue}`}
+      id={id}
+      columnHeader={columnHeader}
+      initialValue={textFilterValue}
+      placeholder={placeholder}
+      hideLabel={hideLabel}
+      onApply={value => {
+        const trimmed = value.trim()
+        column.setFilterValue(trimmed || undefined)
+      }}
+    />
   )
 }

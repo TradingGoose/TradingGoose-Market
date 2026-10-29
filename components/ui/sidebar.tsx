@@ -79,35 +79,12 @@ const SidebarProvider = React.forwardRef<
   ) => {
     const isMobile = useIsMobile()
     const [openMobile, setOpenMobile] = React.useState(false)
-    // Avoid reading cookies during SSR to keep server and client output consistent.
     const [width, setWidth] = React.useState(() => defaultWidth ?? SIDEBAR_WIDTH)
     const [isDraggingRail, setIsDraggingRail] = React.useState(false)
 
     // This is the internal state of the sidebar.
     // We use openProp and setOpenProp for control from outside the component.
     const [_open, _setOpen] = React.useState(defaultOpen)
-
-    // Hydrate persisted sidebar width after the client is mounted.
-    React.useEffect(() => {
-      const storedWidth = getCookieValue(SIDEBAR_WIDTH_COOKIE_NAME)
-      if (storedWidth) {
-        setWidth(storedWidth)
-        return
-      }
-      if (defaultWidth) {
-        setWidth(defaultWidth)
-      }
-    }, [defaultWidth])
-
-    // Hydrate persisted open/closed state after the client is mounted.
-    React.useEffect(() => {
-      const stored = getBooleanCookie(SIDEBAR_COOKIE_NAME)
-      if (typeof stored === 'boolean') {
-        _setOpen(stored)
-        return
-      }
-      _setOpen(defaultOpen)
-    }, [defaultOpen])
     const open = openProp ?? _open
     const setOpen = React.useCallback(
       (value: boolean | ((value: boolean) => boolean)) => {
@@ -727,10 +704,7 @@ const SidebarMenuSkeleton = React.forwardRef<
     showIcon?: boolean
   }
 >(({ className, showIcon = false, ...props }, ref) => {
-  // Random width between 50 to 90%.
-  const width = React.useMemo(() => {
-    return `${Math.floor(Math.random() * 40) + 50}%`
-  }, [])
+  const width = showIcon ? '70%' : '85%'
 
   return (
     <div
@@ -804,36 +778,6 @@ const SidebarMenuSubButton = React.forwardRef<
   )
 })
 SidebarMenuSubButton.displayName = 'SidebarMenuSubButton'
-
-function getCookieValue(name: string) {
-  if (typeof document === 'undefined') {
-    return undefined
-  }
-
-  const cookies = document.cookie.split('; ')
-  for (const cookie of cookies) {
-    if (!cookie) continue
-    const [cookieName, ...rest] = cookie.split('=')
-    if (cookieName === name) {
-      return decodeURIComponent(rest.join('='))
-    }
-  }
-  return undefined
-}
-
-function getBooleanCookie(name: string) {
-  const value = getCookieValue(name)
-  if (value === undefined) {
-    return undefined
-  }
-  if (value === 'true') {
-    return true
-  }
-  if (value === 'false') {
-    return false
-  }
-  return undefined
-}
 
 export {
   Sidebar,

@@ -34,73 +34,67 @@ type CryptoFormState = {
   iconUrl: string
 }
 
-export function CryptoEditDialog({ crypto, open, onOpenChange, onSave, mode = 'edit' }: CryptoEditDialogProps) {
+const createCryptoFormState = (crypto: CryptoRow | null): CryptoFormState => {
+  const contracts = crypto?.contractAddresses ?? []
+
+  return {
+    code: crypto?.code ?? '',
+    name: crypto?.name ?? '',
+    active: crypto?.active ?? true,
+    contractAddresses:
+      contracts.length > 0
+        ? contracts.map(contract => ({
+            chainId: contract.chainId,
+            address: contract.address ?? '',
+            contractType: contract.contractType ?? ''
+          }))
+        : [{ chainId: '', address: '', contractType: '' }],
+    iconUrl: crypto?.iconUrl ?? ''
+  }
+}
+
+const createChainLabelMap = (crypto: CryptoRow | null) => {
+  const labels: Record<string, string> = {}
+  crypto?.contractAddresses?.forEach(contract => {
+    const code = contract.chainCode?.trim()
+    const name = contract.chainName?.trim()
+    const label = code && name ? `${code} — ${name}` : code || name
+    if (label) labels[contract.chainId] = label
+  })
+  return labels
+}
+
+export function CryptoEditDialog(props: CryptoEditDialogProps) {
+  const { crypto, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${crypto?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-2xl'>
+        <CryptoEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CryptoEditDialogContent({ crypto, open, onOpenChange, onSave, mode = 'edit' }: CryptoEditDialogProps) {
   const cryptoId = crypto?.id?.trim() ?? ''
   const isEdit = mode === 'edit' && cryptoId.length > 0
 
-  const [formState, setFormState] = useState<CryptoFormState>({
-    code: '',
-    name: '',
-    active: true,
-    contractAddresses: [{ chainId: '', address: '', contractType: '' }],
-    iconUrl: ''
-  })
+  const [formState, setFormState] = useState<CryptoFormState>(() => createCryptoFormState(crypto))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [iconUploading, setIconUploading] = useState(false)
   const [iconError, setIconError] = useState<string | null>(null)
   const [chainSearch, setChainSearch] = useState('')
   const [chainOptions, setChainOptions] = useState<{ value: string; label: string }[]>([])
-  const [chainLabelMap, setChainLabelMap] = useState<Record<string, string>>({})
+  const [chainLabelMap, setChainLabelMap] = useState<Record<string, string>>(() => createChainLabelMap(crypto))
   const [chainLoading, setChainLoading] = useState(false)
   const [chainError, setChainError] = useState<string | null>(null)
   const [chainOpenIndex, setChainOpenIndex] = useState<number | null>(null)
 
   useEffect(() => {
     if (!open) return
-    if (crypto) {
-      setFormState({
-        code: crypto.code,
-        name: crypto.name,
-        active: crypto.active ?? true,
-        contractAddresses:
-          crypto.contractAddresses?.length > 0
-            ? crypto.contractAddresses.map(contract => ({
-                chainId: contract.chainId,
-                address: contract.address ?? '',
-                contractType: contract.contractType ?? ''
-              }))
-            : [{ chainId: '', address: '', contractType: '' }],
-        iconUrl: crypto.iconUrl ?? ''
-      })
-      const labels: Record<string, string> = {}
-      crypto.contractAddresses?.forEach(contract => {
-        const code = contract.chainCode?.trim()
-        const name = contract.chainName?.trim()
-        const label = code && name ? `${code} — ${name}` : code || name
-        if (label) {
-          labels[contract.chainId] = label
-        }
-      })
-      setChainLabelMap(labels)
-    } else {
-      setFormState({
-        code: '',
-        name: '',
-        active: true,
-        contractAddresses: [{ chainId: '', address: '', contractType: '' }],
-        iconUrl: ''
-      })
-      setChainLabelMap({})
-    }
-    setError(null)
-    setIconError(null)
-    setChainSearch('')
-  }, [crypto, open])
-
-  useEffect(() => {
-    if (!open) return
-
     const controller = new AbortController()
     const timeout = setTimeout(() => {
       setChainLoading(true)
@@ -296,8 +290,7 @@ export function CryptoEditDialog({ crypto, open, onOpenChange, onSave, mode = 'e
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-2xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Crypto' : 'Add Crypto'}
           description={isEdit ? 'Update crypto details.' : 'Create a new crypto asset.'}
@@ -434,7 +427,6 @@ export function CryptoEditDialog({ crypto, open, onOpenChange, onSave, mode = 'e
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

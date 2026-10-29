@@ -2,22 +2,23 @@ import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import mime from "mime";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { deleteFile, extractStorageKey, uploadFileWithKey } from "@uploads/core/storage-client";
-import { apiRequireEditor } from "@/lib/auth/session";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 const MAX_SIZE_BYTES = 512 * 1024; // 512 KB
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"];
 
 export const runtime = "nodejs";
+const routePolicy = createSystemAdminRoutePolicy("/api/uploads/crypto-icon");
 
 export async function POST(request: Request) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json({ error: "Database not configured." }, { status: 503 });
-  }
 
   const form = await request.formData();
   const file = form.get("file") as File | null;
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unsupported file type." }, { status: 415 });
   }
 
-  const [crypto] = (await db
+  const [crypto] = (await requireDatabase()
     .select({
       id: schema.cryptos.id,
       iconUrl: schema.cryptos.iconUrl
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
     }
   }
 
-  await db
+  await requireDatabase()
     .update(schema.cryptos)
     .set({
       iconUrl: uploaded.path,
@@ -76,3 +77,10 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ data: { url: uploaded.path, key: uploaded.key } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

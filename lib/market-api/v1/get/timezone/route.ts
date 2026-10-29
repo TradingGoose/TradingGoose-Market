@@ -1,7 +1,8 @@
 import { sql } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 type TimeZoneRow = {
   name: string;
@@ -142,9 +143,6 @@ function resolveDstOn(row: TimeZoneRow, now: Date) {
 
 export async function getTimeZones(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const { searchParams } = new URL(request.url);
@@ -153,7 +151,7 @@ export async function getTimeZones(c: ApiContext) {
 
     const filters = timeZoneName ? sql`WHERE name = ${timeZoneName}` : sql``;
 
-    const rows = (await db.execute(sql`
+    const rows = (await requireDatabase().execute(sql`
       SELECT
         name,
         "offset" AS "offset",

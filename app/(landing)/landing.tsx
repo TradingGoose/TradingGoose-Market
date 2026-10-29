@@ -1,16 +1,20 @@
 import Hero from "./components/hero/market-hero";
+import Footer from "./components/footer/landing-footer";
 import { LandingNav } from "./components/nav/landing-nav";
 import { StructuredData } from "./components/structured-data";
 import { isLandingSiteUrlConfigured } from "./site-url";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 
 export default function Landing() {
+  const registrationOpen = getMarketRuntimeConfig().registrationMode === "open";
   return (
-    <div className="flex h-svh flex-col overflow-hidden">
+    <>
       {isLandingSiteUrlConfigured() ? <StructuredData /> : null}
-      <LandingNav />
-      <main className="relative min-h-0 flex-1 overflow-hidden">
-        <Hero />
+      <LandingNav registrationOpen={registrationOpen} />
+      <main className="relative min-h-[calc(100svh-3.5rem)] border-border border-b">
+        <Hero registrationOpen={registrationOpen} />
       </main>
-    </div>
+      <Footer />
+    </>
   );
 }

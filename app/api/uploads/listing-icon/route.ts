@@ -2,23 +2,24 @@ import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import mime from "mime";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { deleteFile, extractStorageKey, uploadFileWithKey } from "@uploads/core/storage-client";
-import { apiRequireEditor } from "@/lib/auth/session";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 const MAX_SIZE_BYTES = 512 * 1024; // 512 KB
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"];
 const CLEANUP_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "svg"];
 
 export const runtime = "nodejs";
+const routePolicy = createSystemAdminRoutePolicy("/api/uploads/listing-icon");
 
 export async function POST(request: Request) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json({ error: "Database not configured." }, { status: 503 });
-  }
 
   const form = await request.formData();
   const file = form.get("file") as File | null;
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unsupported file type." }, { status: 415 });
   }
 
-  const [listing] = (await db
+  const [listing] = (await requireDatabase()
     .select({
       id: schema.listings.id,
       iconUrl: schema.listings.iconUrl
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
   );
 
   // persist iconUrl on listing
-  await db
+  await requireDatabase()
     .update(schema.listings)
     .set({
       iconUrl: uploaded.path,
@@ -91,3 +92,10 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ data: { url: uploaded.path, key: uploaded.key } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

@@ -19,17 +19,20 @@ import { Separator } from "@/components/ui/separator";
 
 import {
   landingGitHubLink,
-  landingHero,
   landingNavLinks,
   landingProduct
 } from "../copy";
 import { getFormattedGitHubStars } from "../../actions/github";
 import { GitHubMark } from "../social-icons";
 
-export function LandingNav() {
+export function LandingNav({ registrationOpen, variant = "landing" }: {
+  registrationOpen?: boolean;
+  variant?: "landing" | "auth";
+}) {
   const [githubStars, setGithubStars] = useState("0");
 
   useEffect(() => {
+    if (variant !== "landing") return;
     const timeoutId = window.setTimeout(() => {
       const fetchStars = async () => {
         setGithubStars(await getFormattedGitHubStars());
@@ -39,7 +42,7 @@ export function LandingNav() {
     }, 2000);
 
     return () => window.clearTimeout(timeoutId);
-  }, []);
+  }, [variant]);
 
   return (
     <nav
@@ -66,7 +69,7 @@ export function LandingNav() {
             className="flex items-center gap-2 font-semibold text-[18px] text-foreground tracking-tight"
           >
             <Image
-              src="/icon.png"
+              src="/icon.svg"
               alt=""
               width={28}
               height={28}
@@ -77,7 +80,7 @@ export function LandingNav() {
           </span>
         </Link>
 
-        <div className="flex items-center gap-3 sm:gap-4">
+        {variant === "landing" && <div className="flex items-center gap-3 sm:gap-4">
           <div className="hidden items-center gap-6 font-medium text-muted-foreground text-sm md:flex">
             {landingNavLinks.map((link) => (
               <a
@@ -106,9 +109,12 @@ export function LandingNav() {
           </div>
           <Separator orientation="vertical" className="hidden h-6 md:block" />
           <div className="hidden items-center gap-2 md:flex">
-            <Button size="sm" className="rounded-md text-base" disabled>
-              {landingHero.primaryAction.label}
+            <Button variant="ghost" size="sm" className="rounded-md text-base" asChild>
+              <Link href="/login">Log in</Link>
             </Button>
+            {registrationOpen && <Button size="sm" className="rounded-md text-base" asChild>
+              <Link href="/signup">Get started</Link>
+            </Button>}
           </div>
 
           <DropdownMenu>
@@ -148,15 +154,16 @@ export function LandingNav() {
                   </a>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="!bg-transparent">
-                  <Button size="sm" className="w-full rounded-md text-base" disabled>
-                    {landingHero.primaryAction.label}
-                  </Button>
+                <DropdownMenuItem asChild>
+                  <Link href="/login">Log in</Link>
                 </DropdownMenuItem>
+                {registrationOpen && <DropdownMenuItem asChild>
+                  <Link href="/signup">Get started</Link>
+                </DropdownMenuItem>}
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </div>}
       </div>
     </nav>
   );

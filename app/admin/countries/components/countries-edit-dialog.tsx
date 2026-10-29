@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 
 import { EditDialogFooter, EditDialogHeader, FormError, IconUploadField } from '@/components/edit-dialog'
 import {
@@ -26,33 +26,61 @@ type CountryFormState = {
   iconUrl: string | null
 }
 
-export function CountryEditDialog({ country, open, onOpenChange, onSave, mode = 'edit' }: CountryEditDialogProps) {
+type CountryEditDialogContentProps = CountryEditDialogProps & {
+  saving: boolean
+  setSaving: Dispatch<SetStateAction<boolean>>
+  iconUploading: boolean
+  setIconUploading: Dispatch<SetStateAction<boolean>>
+}
+
+const createCountryFormState = (country: CountryRow | null): CountryFormState => ({
+  code: country?.code ?? '',
+  name: country?.name ?? '',
+  iconUrl: country?.iconUrl ?? null
+})
+
+export function CountryEditDialog(props: CountryEditDialogProps) {
+  const { country, open, onOpenChange, mode = 'edit' } = props
+  const [saving, setSaving] = useState(false)
+  const [iconUploading, setIconUploading] = useState(false)
+  const sessionKey = `${mode}:${country?.id ?? 'new'}`
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!saving && !iconUploading) onOpenChange(nextOpen)
+      }}
+    >
+      <DialogContent className='max-w-xl'>
+        <CountryEditDialogContent
+          key={`${sessionKey}:${open ? 'open' : 'closed'}`}
+          {...props}
+          saving={saving}
+          setSaving={setSaving}
+          iconUploading={iconUploading}
+          setIconUploading={setIconUploading}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CountryEditDialogContent({
+  country,
+  onOpenChange,
+  onSave,
+  mode = 'edit',
+  saving,
+  setSaving,
+  iconUploading,
+  setIconUploading
+}: CountryEditDialogContentProps) {
   const isEdit = mode === 'edit' && !!country
 
-  const [formState, setFormState] = useState<CountryFormState>({
-    code: '',
-    name: '',
-    iconUrl: null
-  })
-  const [saving, setSaving] = useState(false)
+  const [formState, setFormState] = useState<CountryFormState>(() => createCountryFormState(country))
   const [error, setError] = useState<string | null>(null)
-  const [iconUploading, setIconUploading] = useState(false)
   const [iconError, setIconError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    if (country) {
-      setFormState({
-        code: country.code,
-        name: country.name,
-        iconUrl: country.iconUrl ?? null
-      })
-    } else {
-      setFormState({ code: '', name: '', iconUrl: null })
-    }
-    setError(null)
-    setIconError(null)
-  }, [country, open])
 
   const isFormValid = formState.code.trim().length >= 2 && formState.name.trim().length > 0 && !saving
 
@@ -152,13 +180,12 @@ export function CountryEditDialog({ country, open, onOpenChange, onSave, mode = 
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Country' : 'Add Country'}
           description={isEdit ? 'Update country details.' : 'Create a new country entry.'}
         />
-        <form className='space-y-6' onSubmit={handleSubmit}>
+        <form className='space-y-6' onSubmit={handleSubmit} aria-busy={saving || iconUploading}>
           <div className='grid gap-4 md:grid-cols-2'>
             <div className='space-y-2'>
               <Label htmlFor='country-code'>Code <span className='text-destructive'>*</span></Label>
@@ -168,6 +195,8 @@ export function CountryEditDialog({ country, open, onOpenChange, onSave, mode = 
                 onChange={event => setFormState(prev => ({ ...prev, code: event.target.value.toUpperCase() }))}
                 placeholder='e.g., US'
                 required
+                autoComplete='off'
+                disabled={saving}
               />
             </div>
             <IconUploadField
@@ -177,7 +206,7 @@ export function CountryEditDialog({ country, open, onOpenChange, onSave, mode = 
               uploading={iconUploading}
               error={iconError}
               emptyMessage='Save the country first to upload an icon.'
-              avatarKey={`${country?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
+              avatarKey={country?.id ?? 'new'}
             />
             <div className='space-y-2 md:col-span-2'>
               <Label htmlFor='country-name'>Name <span className='text-destructive'>*</span></Label>
@@ -187,6 +216,8 @@ export function CountryEditDialog({ country, open, onOpenChange, onSave, mode = 
                 onChange={event => setFormState(prev => ({ ...prev, name: event.target.value }))}
                 placeholder='United States'
                 required
+                autoComplete='off'
+                disabled={saving}
               />
             </div>
           </div>
@@ -200,7 +231,6 @@ export function CountryEditDialog({ country, open, onOpenChange, onSave, mode = 
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

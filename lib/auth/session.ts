@@ -2,94 +2,117 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 
-import { auth } from "./server";
+import { getCurrentSystemAdmin } from "@/lib/admin/access";
+import { auth } from "@/lib/auth/server";
+import { ensureMarketCustomerState } from "@/lib/billing/customer-state";
+import { getMarketRuntimeConfig } from "@/lib/environment";
+import { requireSameOriginBrowserMutation } from "@/lib/market-api/core/browser-route";
 
-// ---------------------------------------------------------------------------
-// Shared session fetcher
-// ---------------------------------------------------------------------------
+type MarketSessionUser = NonNullable<Awaited<ReturnType<typeof getSession>>>["user"];
 
-export async function getSession() {
-  const cookieStore = await cookies();
-  return auth.api.getSession({
-    headers: new Headers({
-      cookie: cookieStore.toString()
-    })
+export async function getSession(headers?: Headers) {
+  const requestHeaders = headers ?? new Headers({
+    cookie: (await cookies()).toString()
   });
+  const session = await auth.api.getSession({ headers: requestHeaders });
+
+  if (session?.user && !session.user.emailVerified && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled) {
+    return null;
+  }
+
+  if (session?.user) {
+    await ensureMarketCustomerState(session.user.id);
+  }
+
+  return session;
 }
 
-// ---------------------------------------------------------------------------
-// Page-level guards (redirect on failure — for layouts / server components)
-// ---------------------------------------------------------------------------
-
-export async function requireAuth() {
+export async function requireCustomerSession(callbackUrl = "/account/api-keys") {
   const session = await getSession();
   if (!session?.user) {
-    redirect("/login?callbackUrl=/admin");
+    redirect(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
   return session;
 }
 
-export async function requireAdmin() {
-  const session = await requireAuth();
-  if ((session.user as { role?: string }).role !== "admin") {
-    redirect("/admin");
+export async function requireSystemAdmin() {
+  const session = await requireCustomerSession("/admin");
+  const membership = await getCurrentSystemAdmin(session.user.id);
+  if (!membership) {
+    redirect("/account/api-keys");
   }
-  return session;
+  return { ...session, systemAdmin: membership };
 }
 
-export async function requireEditor() {
-  const session = await requireAuth();
-  const role = (session.user as { role?: string }).role;
-  if (!role || !["admin", "editor"].includes(role)) {
-    redirect("/admin");
-  }
-  return session;
-}
-
-// ---------------------------------------------------------------------------
-// API-level guards (return NextResponse on failure — for route handlers)
-// ---------------------------------------------------------------------------
-
-type SessionUser = {
-  id: string;
-  name: string;
-  email: string;
-  role?: string;
+type CustomerGuardSuccess = {
+  user: MarketSessionUser;
+  error?: never;
 };
 
-type ApiGuardOk = { user: SessionUser; error?: never };
-type ApiGuardFail = { user?: never; error: NextResponse };
-type ApiGuardResult = ApiGuardOk | ApiGuardFail;
+type CustomerGuardFailure = {
+  user?: never;
+  error: Response;
+};
 
-export async function apiRequireAuth(): Promise<ApiGuardResult> {
-  const session = await getSession();
+type CustomerGuardResult = CustomerGuardSuccess | CustomerGuardFailure;
+
+export async function apiRequireCustomerSession(request: Request): Promise<CustomerGuardResult> {
+  const originError = requireSameOriginBrowserMutation(request);
+  if (originError) return { error: originError };
+
+  let session: Awaited<ReturnType<typeof getSession>>;
+  try {
+    session = await getSession(request.headers);
+  } catch {
+    return {
+      error: NextResponse.json(
+        { error: "CUSTOMER_STATE_UNAVAILABLE" },
+        { status: 503 }
+      )
+    };
+  }
+
   if (!session?.user) {
     return {
-      error: NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+      error: NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 })
     };
   }
-  return { user: session.user as SessionUser };
+
+  return { user: session.user };
 }
 
-export async function apiRequireEditor(): Promise<ApiGuardResult> {
-  const result = await apiRequireAuth();
-  if (result.error) return result;
-  const role = result.user.role;
-  if (!role || !["admin", "editor"].includes(role)) {
-    return {
-      error: NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    };
-  }
-  return result;
-}
+type SystemAdminGuardResult =
+  | {
+      user: MarketSessionUser;
+      systemAdmin: NonNullable<Awaited<ReturnType<typeof getCurrentSystemAdmin>>>;
+      error?: never;
+    }
+  | CustomerGuardFailure;
 
-export async function apiRequireAdmin(): Promise<ApiGuardResult> {
-  const result = await apiRequireAuth();
-  if (result.error) return result;
-  if (result.user.role !== "admin") {
+export async function apiRequireSystemAdmin(request: Request): Promise<SystemAdminGuardResult> {
+  const customer = await apiRequireCustomerSession(request);
+  if (customer.error) return customer;
+
+  let membership: Awaited<ReturnType<typeof getCurrentSystemAdmin>>;
+  try {
+    membership = await getCurrentSystemAdmin(customer.user.id);
+  } catch {
     return {
-      error: NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      error: NextResponse.json(
+        { error: "ADMIN_STATE_UNAVAILABLE" },
+        { status: 503 }
+      )
     };
   }
-  return result;
+
+  if (!membership) {
+    return {
+      error: NextResponse.json({ error: "FORBIDDEN" }, { status: 403 })
+    };
+  }
+
+  return {
+    user: customer.user,
+    systemAdmin: membership
+  };
 }
