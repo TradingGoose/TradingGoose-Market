@@ -62,6 +62,8 @@ class AccessResponseError extends Error {
 
 let anonymousLimiterSignature: string | null = null;
 let anonymousLimiter: ReturnType<typeof createAnonymousLimiter> | null = null;
+const MAX_PRIVATE_REQUEST_BODY_BYTES = 64 * 1024;
+const PRIVATE_REQUEST_BODY_TIMEOUT_MS = 10_000;
 
 export async function handleKeyedMarketRoute(
   request: Request,
@@ -168,6 +170,7 @@ export async function handleKeyedMarketRoute(
     if (!mapping.adminGrantId) {
       return jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN");
     }
+    const bufferedRequest = await bufferPrivateRequestBody(request);
     return await withAdminGrantHandlerLock(mapping.adminGrantId, async (reservedDatabase) => {
       const admitted = await reservedDatabase.transaction(async (tx) => {
         await acquireAdminGrantLock(tx, mapping.adminGrantId!);
@@ -218,7 +221,7 @@ export async function handleKeyedMarketRoute(
         });
         return { actor, eventId };
       });
-      return invokeKeyedHandler(request, handler, admitted.actor, admitted.eventId);
+      return invokeKeyedHandler(bufferedRequest, handler, admitted.actor, admitted.eventId);
     });
   } catch (error) {
     if (error instanceof AccessResponseError) return error.response;
@@ -524,6 +527,57 @@ async function persistSpendObservation(
       updatedAt: new Date(),
     })
     .where(eq(marketApiKeys.id, key.id));
+}
+
+async function bufferPrivateRequestBody(request: Request): Promise<Request> {
+  if (!request.body) return request;
+  const tooLarge = () => new AccessResponseError(
+    jsonError("Request body exceeds 64 KiB", 413, "REQUEST_BODY_TOO_LARGE"),
+  );
+  if (Number(request.headers.get("content-length")) > MAX_PRIVATE_REQUEST_BODY_BYTES) {
+    void request.body.cancel().catch(() => {});
+    throw tooLarge();
+  }
+
+  const reader = request.body.getReader();
+  const bytes = new Uint8Array(MAX_PRIVATE_REQUEST_BODY_BYTES);
+  let size = 0;
+  let readFailure: AccessResponseError | null = null;
+  const cancelRead = (error: AccessResponseError) => {
+    readFailure ??= error;
+    // Transport cancellation must not extend the read deadline.
+    void reader.cancel().catch(() => {});
+  };
+  const abortRead = () => cancelRead(new AccessResponseError(
+    jsonError("Request body was aborted", 400, "INVALID_REQUEST_BODY"),
+  ));
+  const timeout = setTimeout(() => cancelRead(new AccessResponseError(
+    jsonError("Request body read timed out", 408, "REQUEST_BODY_TIMEOUT"),
+  )), PRIVATE_REQUEST_BODY_TIMEOUT_MS);
+  request.signal.addEventListener("abort", abortRead, { once: true });
+
+  try {
+    if (request.signal.aborted) abortRead();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (readFailure) throw readFailure;
+      if (done) break;
+      if (size + value.byteLength > bytes.length) throw tooLarge();
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+    return new Request(request, { body: bytes.subarray(0, size) });
+  } catch (error) {
+    if (error instanceof AccessResponseError) throw error;
+    throw new AccessResponseError(
+      jsonError("Request body could not be read", 400, "INVALID_REQUEST_BODY"),
+    );
+  } finally {
+    clearTimeout(timeout);
+    request.signal.removeEventListener("abort", abortRead);
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 async function invokeAnonymousHandler(request: Request, handler: MarketHandler) {

@@ -33,7 +33,7 @@ const ADMIN_GRANT_LOCK_NAMESPACE = 1_847_002;
 const API_KEY_LOCK_NAMESPACE = 1_847_003;
 
 type QueryEvent = {
-  operation: "lock" | "unlock" | "unlock_all";
+  operation: "lock" | "unlock" | "unlock_all" | "set_timeout" | "reset_timeout";
   namespace: number | null;
   id: string | null;
 };
@@ -42,21 +42,27 @@ function createReservedConnection(input?: {
   onQuery?: (event: QueryEvent) => unknown;
 }) {
   const events: QueryEvent[] = [];
+  const queries: QueryEvent[] = [];
   const release = vi.fn();
   const connection = Object.assign(
     vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const query = strings.join(" ");
-      const operation = query.includes("pg_advisory_unlock_all")
-        ? "unlock_all"
-        : query.includes("pg_advisory_unlock")
-          ? "unlock"
-          : "lock";
+      const operation = query.includes("set_config")
+        ? "set_timeout"
+        : query.includes("reset lock_timeout")
+          ? "reset_timeout"
+          : query.includes("pg_advisory_unlock_all")
+            ? "unlock_all"
+            : query.includes("pg_advisory_unlock")
+              ? "unlock"
+              : "lock";
       const event: QueryEvent = {
         operation,
         namespace: typeof values[0] === "number" ? values[0] : null,
         id: typeof values[1] === "string" ? values[1] : null,
       };
-      events.push(event);
+      queries.push(event);
+      if (operation !== "set_timeout" && operation !== "reset_timeout") events.push(event);
       const override = input?.onQuery?.(event);
       if (override instanceof Error) throw override;
       if (override !== undefined) return override;
@@ -64,7 +70,7 @@ function createReservedConnection(input?: {
     }),
     { release },
   );
-  return { connection, events, release };
+  return { connection, events, queries, release };
 }
 
 function createAdvisoryLockManager() {
@@ -94,6 +100,7 @@ function createAdvisoryLockManager() {
     const connection = Object.assign(
       vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
         const query = strings.join(" ");
+        if (!query.includes("pg_advisory")) return [];
         if (query.includes("pg_advisory_unlock_all")) {
           for (const [key, lockOwner] of held) {
             if (lockOwner !== owner) continue;
@@ -151,6 +158,108 @@ beforeEach(() => {
 });
 
 describe("API-key creation session locks", () => {
+  it("bounds each acquisition and restores the session setting before callback work", async () => {
+    const reserved = createReservedConnection();
+    mocks.reserveConnection.mockResolvedValue(reserved.connection);
+    mocks.drizzle.mockReturnValue({});
+
+    await withAdminGrantAndApiKeyCreationHandlerLocks("grant_bounded", async (_database, acquireKey) => {
+      expect(reserved.queries.map(({ operation }) => operation)).toEqual([
+        "set_timeout", "lock", "reset_timeout",
+      ]);
+      await acquireKey("key_bounded");
+      expect(reserved.queries.slice(-3).map(({ operation }) => operation)).toEqual([
+        "set_timeout", "lock", "reset_timeout",
+      ]);
+    });
+
+    const settings = reserved.connection.mock.calls.filter(([strings]) => strings.join(" ").includes("set_config"));
+    expect(settings).toHaveLength(2);
+    expect(settings.every(([strings]) => strings.join(" ").includes("'5s'"))).toBe(true);
+    expect(reserved.release).toHaveBeenCalledOnce();
+  });
+
+  it.each([ADMIN_GRANT_LOCK_NAMESPACE, API_KEY_LOCK_NAMESPACE])(
+    "unwinds a native lock timeout for namespace %s without running protected work",
+    async (namespace) => {
+      const failure = Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+      const reserved = createReservedConnection({
+        onQuery: (event) => {
+          if (event.operation === "lock" && event.namespace === namespace) return failure;
+          if (event.operation === "unlock" && event.namespace === namespace) return [{ unlocked: false }];
+        },
+      });
+      mocks.reserveConnection.mockResolvedValue(reserved.connection);
+      mocks.drizzle.mockReturnValue({});
+      const protectedWork = vi.fn();
+
+      await expect(withAdminGrantAndApiKeyCreationHandlerLocks("grant_timeout", async (_database, acquireKey) => {
+        await acquireKey("key_timeout");
+        protectedWork();
+      })).rejects.toBe(failure);
+
+      expect(protectedWork).not.toHaveBeenCalled();
+      expect(reserved.queries.at(-1)?.operation).toBe("reset_timeout");
+      expect(reserved.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("restores an ambiguously applied timeout before returning the reservation", async () => {
+    const failure = new Error("setting response lost");
+    const reserved = createReservedConnection({
+      onQuery: (event) => event.operation === "set_timeout" ? failure : undefined,
+    });
+    mocks.reserveConnection.mockResolvedValue(reserved.connection);
+    mocks.drizzle.mockReturnValue({});
+    const callback = vi.fn();
+
+    await expect(withAdminGrantHandlerLock("grant_setting", callback)).rejects.toBe(failure);
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(reserved.queries.map(({ operation }) => operation)).toEqual([
+      "set_timeout", "unlock", "reset_timeout",
+    ]);
+    expect(reserved.release).toHaveBeenCalledOnce();
+  });
+
+  it("retries an ambiguous timeout reset after unlocking and preserves its original error", async () => {
+    const failure = new Error("reset response lost");
+    let resets = 0;
+    const reserved = createReservedConnection({
+      onQuery: (event) => event.operation === "reset_timeout" && ++resets === 1 ? failure : undefined,
+    });
+    mocks.reserveConnection.mockResolvedValue(reserved.connection);
+    mocks.drizzle.mockReturnValue({});
+    const callback = vi.fn();
+
+    await expect(withAdminGrantHandlerLock("grant_reset", callback)).rejects.toBe(failure);
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(reserved.queries.map(({ operation }) => operation)).toEqual([
+      "set_timeout", "lock", "reset_timeout", "unlock", "reset_timeout",
+    ]);
+    expect(reserved.release).toHaveBeenCalledOnce();
+  });
+
+  it.each(["lock", "reset_timeout"] as const)("quarantines a reservation when timeout restoration after %s fails", async (phase) => {
+    const primary = new Error("original acquisition failure");
+    const cleanupFailure = new Error("timeout restoration unconfirmed");
+    let failed = false;
+    const reserved = createReservedConnection({
+      onQuery: (event) => {
+        if (!failed && event.operation === phase) { failed = true; return primary; }
+        if (event.operation === "reset_timeout") return cleanupFailure;
+      },
+    });
+    mocks.reserveConnection.mockResolvedValue(reserved.connection);
+    mocks.drizzle.mockReturnValue({});
+
+    await expect(withAdminGrantHandlerLock("grant_quarantined_timeout", vi.fn())).rejects.toBe(primary);
+
+    expect(reserved.queries.at(-1)?.operation).toBe("reset_timeout");
+    expect(reserved.release).not.toHaveBeenCalled();
+  });
+
   it("keeps the reservation out of the pool when transaction rollback remains unconfirmed", async () => {
     const reserved = createReservedConnection();
     const failure = new Error("transaction callback failed");

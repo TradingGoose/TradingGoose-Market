@@ -25,9 +25,18 @@ describe("session-lock database execution context", () => {
     let owner: number | null = null;
     let notifySaturated!: () => void;
     const saturated = new Promise<void>((resolve) => { notifySaturated = resolve; });
+    const lockTimeouts = new Map<number, "5s" | "default">();
     const waiters: Array<{ connectionId: number; resolve: (result: PostgresFixtureResult) => void }> = [];
     const fixture = await createPostgresProtocolFixture(({ connectionId, sql: query, parameters, phase }) => {
       const unlocked = { columns: [{ name: "unlocked", oid: 16 }], rows: [["t"]] };
+      if (/set_config\('lock_timeout', '5s', false\)/i.test(query)) {
+        if (phase === "execute") lockTimeouts.set(connectionId, "5s");
+        return {};
+      }
+      if (/^reset lock_timeout/i.test(query)) {
+        if (phase === "execute") lockTimeouts.set(connectionId, "default");
+        return {};
+      }
       if (/pg_advisory_unlock\(/i.test(query)) {
         if (phase === "execute") {
           expect(connectionId).toBe(owner);
@@ -39,6 +48,7 @@ describe("session-lock database execution context", () => {
       }
       if (/pg_advisory_lock\(/i.test(query)) {
         if (phase === "describe") return {};
+        expect(lockTimeouts.get(connectionId)).toBe("5s");
         if (owner === null) {
           owner = connectionId;
           return {};
@@ -53,7 +63,10 @@ describe("session-lock database execution context", () => {
         return { columns: [{ name: "event_id", oid: 25 }], rows: [[parameters[0] ?? "event"]] };
       }
       if (/select 42/i.test(query)) {
-        if (phase === "execute") expect(connectionId).toBe(owner);
+        if (phase === "execute") {
+          expect(connectionId).toBe(owner);
+          expect(lockTimeouts.get(connectionId)).toBe("default");
+        }
         return { columns: [{ name: "answer", oid: 23 }], rows: [["42"]] };
       }
       return {};

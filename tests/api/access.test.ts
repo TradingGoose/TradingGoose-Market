@@ -21,6 +21,7 @@ const accessState = vi.hoisted(() => ({
   recordPaymentFailure: vi.fn(),
   stripe: {},
   billingLocks: vi.fn(),
+  adminLocks: vi.fn(),
 }));
 
 vi.mock("@/lib/environment", () => ({
@@ -45,10 +46,7 @@ vi.mock("@/lib/billing/webhooks/invoices", () => ({
 vi.mock("@/lib/db/locks", () => ({
   acquireAdminGrantLock: vi.fn(async () => undefined),
   acquireApiKeyLock: vi.fn(async () => undefined),
-  withAdminGrantHandlerLock: async (
-    _grantId: string,
-    callback: (database: unknown) => unknown,
-  ) => callback(accessState.database),
+  withAdminGrantHandlerLock: (...args: unknown[]) => accessState.adminLocks(...args),
   withBillingSubjectAndApiKeyHandlerLocks: (...args: unknown[]) =>
     accessState.billingLocks(...args),
 }));
@@ -69,6 +67,10 @@ beforeEach(() => {
   accessState.recordPaymentFailure.mockReset().mockResolvedValue(undefined);
   accessState.billingLocks.mockReset().mockImplementation(
     async (_userId: string, _keyId: string, callback: (database: unknown) => unknown) =>
+      callback(accessState.database),
+  );
+  accessState.adminLocks.mockReset().mockImplementation(
+    async (_grantId: string, callback: (database: unknown) => unknown) =>
       callback(accessState.database),
   );
 });
@@ -322,6 +324,155 @@ describe("exclusive Market API actors", () => {
     expect(accessState.provider.verifyKey).toHaveBeenCalledWith({
       key: "tg_private",
       permission: "market.private",
+    });
+  });
+
+  describe("private request body admission", () => {
+    const route = resolveKeyedMarketRoute("/api/update/listing-rank")!;
+    const request = (body: BodyInit, init: RequestInit = {}) => new Request(
+      "https://market.example.com/api/update/listing-rank?version=v1",
+      { method: "POST", ...init, headers: { "x-api-key": "tg_private", ...init.headers }, body, duplex: "half" } as RequestInit,
+    );
+
+    beforeEach(() => {
+      accessState.provider.verifyKey = vi.fn(async () => ({
+        valid: true, code: "VALID", keyId: "provider_private", permissions: ["market.private"], ratelimits: [],
+      }));
+    });
+
+    it("finishes bounded chunked input before taking the grant lock and preserves handler JSON", async () => {
+      const database = privateAdmissionDatabase();
+      accessState.database = database;
+      const bytes = new TextEncoder().encode('{"listing_id":"listing_1"}'.padEnd(64 * 1024, " "));
+      let chunk = 0;
+      let finished = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunk < bytes.length) { controller.enqueue(bytes.subarray(chunk, chunk + 1024)); chunk += 1024; }
+          else { finished = true; controller.close(); }
+        },
+      });
+      accessState.adminLocks.mockImplementation(async (_grantId, callback) => {
+        expect(finished).toBe(true);
+        return callback(database);
+      });
+      const response = await handleKeyedMarketRoute(request(body, {
+        headers: { "HTTP-Referer": "https://studio.example/", "X-Title": "Studio" },
+      }), route, async (context) => {
+        expect(context.req.raw.headers.has("http-referer")).toBe(false);
+        expect(context.req.raw.headers.has("x-title")).toBe(false);
+        return context.json(await context.req.json());
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ listing_id: "listing_1" });
+      expect(accessState.adminLocks).toHaveBeenCalledOnce();
+      expect(database.transaction).toHaveBeenCalledOnce();
+    });
+
+    it("does not hold a grant lock while uploading and rechecks membership after the upload", async () => {
+      let grantStatus = "active";
+      const admission = vi.fn();
+      const database = privateAdmissionDatabase({ grantStatus: () => grantStatus, onAdmission: admission });
+      accessState.database = database;
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; controller.enqueue(new TextEncoder().encode("{")); } });
+      const input = request(body);
+      const handler = vi.fn(async (context) => context.json(await context.req.json()));
+      const pending = handleKeyedMarketRoute(input, route, handler);
+      try {
+        await vi.waitFor(() => expect(input.body?.locked).toBe(true));
+        expect(accessState.adminLocks).not.toHaveBeenCalled();
+        expect(database.transaction).not.toHaveBeenCalled();
+        grantStatus = "removing";
+        controller.enqueue(new TextEncoder().encode("}"));
+        controller.close();
+        const response = await pending;
+        expect(response.status).toBe(403);
+        expect(admission).not.toHaveBeenCalled();
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        try { controller.close(); } catch { /* Already closed or cancelled. */ }
+        await pending;
+      }
+    });
+
+    it.each(["announced", "streamed", "understated"] as const)("rejects an oversized %s body before lock acquisition or admission", async (kind) => {
+      const admission = vi.fn();
+      const database = privateAdmissionDatabase({ onAdmission: admission });
+      accessState.database = database;
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(kind === "announced" ? 1 : 64 * 1024 + 1)); },
+        cancel,
+      });
+      const handler = vi.fn(async () => Response.json({ ok: true }));
+      const response = await handleKeyedMarketRoute(request(body, {
+        headers: kind === "streamed" ? {} : { "content-length": kind === "announced" ? String(64 * 1024 + 1) : "1" },
+      }), route, handler);
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toMatchObject({ code: "REQUEST_BODY_TOO_LARGE" });
+      expect(accessState.adminLocks).not.toHaveBeenCalled();
+      expect(database.transaction).not.toHaveBeenCalled();
+      expect(admission).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it("times out stalled bodies even if transport cancellation never finishes", async () => {
+      vi.useFakeTimers();
+      const admission = vi.fn();
+      const database = privateAdmissionDatabase({ onAdmission: admission });
+      accessState.database = database;
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const cancel = vi.fn(() => new Promise<void>(() => {}));
+      const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel });
+      const handler = vi.fn(async (context) => context.json(await context.req.json()));
+      const pending = handleKeyedMarketRoute(request(body), route, handler);
+      try {
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(accessState.adminLocks).not.toHaveBeenCalled();
+        const response = await pending;
+        expect(response.status).toBe(408);
+        expect(await response.json()).toMatchObject({ code: "REQUEST_BODY_TIMEOUT" });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(admission).not.toHaveBeenCalled();
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        try { controller.close(); } catch { /* Already cancelled. */ }
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["before", "during", "stream"] as const)("rejects body transport failure (%s) without taking the grant lock", async (when) => {
+      const database = privateAdmissionDatabase();
+      accessState.database = database;
+      const abort = new AbortController();
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel });
+      if (when === "before") abort.abort();
+      const input = request(body, { signal: abort.signal });
+      const handler = vi.fn(async (context) => context.json(await context.req.json()));
+      const pending = handleKeyedMarketRoute(input, route, handler);
+      try {
+        if (when !== "before") {
+          await vi.waitFor(() => expect(input.body?.locked).toBe(true));
+          if (when === "stream") controller.error(new Error("Upload interrupted"));
+          else abort.abort();
+        }
+        expect(accessState.adminLocks).not.toHaveBeenCalled();
+        const response = await pending;
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ code: "INVALID_REQUEST_BODY" });
+        expect(database.transaction).not.toHaveBeenCalled();
+        expect(handler).not.toHaveBeenCalled();
+        expect(cancel).toHaveBeenCalledTimes(when === "stream" ? 0 : 1);
+      } finally {
+        try { controller.close(); } catch { /* Already cancelled. */ }
+        await pending;
+      }
     });
   });
 
@@ -597,7 +748,7 @@ function mappingDatabase(mapping: Record<string, unknown> | null) {
   return { select };
 }
 
-function privateAdmissionDatabase(input: { emailVerified?: boolean } = {}) {
+function privateAdmissionDatabase(input: { emailVerified?: boolean; grantStatus?: () => string; onAdmission?: () => void } = {}) {
   const key = {
     id: "local_private",
     usageOwnerId: "owner_1",
@@ -620,7 +771,7 @@ function privateAdmissionDatabase(input: { emailVerified?: boolean } = {}) {
           const value = selection
             ? [{
                 key,
-                grant: { id: "grant_1", userId: "admin_1", status: "active" },
+                grant: { id: "grant_1", userId: "admin_1", status: input.grantStatus?.() ?? "active" },
                 owner: { id: "owner_1", userId: "admin_1" },
                 activeUserId: "admin_1",
                 emailVerified: input.emailVerified ?? true,
@@ -631,7 +782,8 @@ function privateAdmissionDatabase(input: { emailVerified?: boolean } = {}) {
       };
       return builder;
     },
-    insert() {
+    insert(table?: unknown) {
+      if (table === marketApiUsageEvent) input.onAdmission?.();
       let values: Record<string, unknown> = {};
       const builder = {
         values(next: Record<string, unknown>) { values = next; return builder; },
@@ -649,8 +801,8 @@ function privateAdmissionDatabase(input: { emailVerified?: boolean } = {}) {
   };
   return {
     ...operations,
-    transaction: async <T>(callback: (tx: typeof operations) => Promise<T>) =>
-      callback(operations),
+    transaction: vi.fn(async <T>(callback: (tx: typeof operations) => Promise<T>) =>
+      callback(operations)),
   };
 }
 

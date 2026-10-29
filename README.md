@@ -160,6 +160,8 @@ Private `POST` routes require a database-admin-minted private key:
 
 There are no short-path aliases, wildcard endpoint families, logo-update API aliases, static service secrets, customer-key throughput limits, or private-key request/spend limits.
 
+Private request bodies are buffered before acquiring an admin-grant lock: at most 64 KiB, with a 10-second total read deadline (`413` for oversized bodies, `408` for slow bodies, `400` for aborted/failed reads). Authorization is rechecked under the lock afterward. Session advisory-lock acquisition has a 5-second wait bound; contention fails closed with the endpoint's existing unavailable response. These are transport/concurrency safeguards, not API rate limits.
+
 Public-key use requires literal active PAYG only while billing is enabled. Key creation, listing, limit editing, and revocation remain billing-independent. Each admitted keyed request is recorded before its data handler runs; completion is stored separately as success, client error, server error, or visibly pending after a crash.
 
 Clients may identify the calling application with `HTTP-Referer` and optional `X-Title`. Market normalizes and stores safe attribution snapshots for Activity and Logs; these headers never affect access, billing, spend enforcement, caching, or handler input.

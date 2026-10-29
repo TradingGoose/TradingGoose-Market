@@ -129,10 +129,13 @@ async function withReservedSessionLockOwner<T>(
   let hasPrimaryError = false;
   let primaryError: unknown;
   let session: ReturnType<typeof createReservedDatabaseSession> | undefined;
+  let lockTimeoutNeedsReset = false;
 
   const acquireSessionLock: AcquireSessionLock = async (lock) => {
     const attempt: SessionLockAttempt = { ...lock, held: false };
     attemptedLocks.push(attempt);
+    lockTimeoutNeedsReset = true;
+    await connection`select set_config('lock_timeout', '5s', false)`;
     await connection`
       select pg_advisory_lock(
         ${lock.namespace},
@@ -140,6 +143,8 @@ async function withReservedSessionLockOwner<T>(
       )
     `;
     attempt.held = true;
+    await connection`reset lock_timeout`;
+    lockTimeoutNeedsReset = false;
   };
 
   try {
@@ -209,7 +214,16 @@ async function withReservedSessionLockOwner<T>(
     }
   }
 
-  if (cleanupConfirmed && transactionCleanupConfirmed) {
+  if (lockTimeoutNeedsReset) {
+    try {
+      await connection`reset lock_timeout`;
+      lockTimeoutNeedsReset = false;
+    } catch (error) {
+      recordCleanupError(error);
+    }
+  }
+
+  if (cleanupConfirmed && transactionCleanupConfirmed && !lockTimeoutNeedsReset) {
     try {
       connection.release();
     } catch (error) {
