@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({ registrationMode: "open" }));
@@ -38,14 +39,43 @@ describe("Studio-shaped Market landing hierarchy", () => {
     expect(screen.getByTestId("structured-data")).toBeTruthy();
   });
 
-  it.each(["open", "close"])("wires real landing authentication links for registration=%s", (mode) => {
+  it.each(["open", "close"])("mirrors desktop and mobile registration actions for registration=%s", async (mode) => {
+    const interaction = userEvent.setup();
+    const registrationOpen = mode === "open";
     runtime.registrationMode = mode;
     render(<Landing />);
-    expect(screen.getAllByRole("link", { name: "Log in" }).every((link) => link.getAttribute("href") === "/login")).toBe(true);
+    const loginLinks = screen.queryAllByRole("link", { name: "Log in" });
+    expect(loginLinks).toHaveLength(registrationOpen ? 1 : 0);
+    expect(loginLinks.every((link) => link.getAttribute("href") === "/login")).toBe(true);
     const signupLinks = screen.queryAllByRole("link", { name: "Get started" });
-    expect(signupLinks.length).toBe(mode === "open" ? 2 : 0);
+    expect(signupLinks).toHaveLength(registrationOpen ? 2 : 0);
     expect(signupLinks.every((link) => link.getAttribute("href") === "/signup")).toBe(true);
-    expect(screen.queryByText(/comm?ing soon/i)).toBeNull();
+    const comingSoon = screen.queryAllByRole("button", { name: "Coming soon" });
+    expect(comingSoon).toHaveLength(registrationOpen ? 0 : 2);
+    expect(comingSoon.every((button) => button.hasAttribute("disabled") && !button.querySelector("a"))).toBe(true);
+
+    await interaction.click(screen.getByRole("button", { name: "Menu" }));
+    const menu = within(await screen.findByRole("menu"));
+    if (registrationOpen) {
+      expect(menu.getByRole("menuitem", { name: "Log in" }).getAttribute("href")).toBe("/login");
+      expect(menu.getByRole("menuitem", { name: "Get started" }).getAttribute("href")).toBe("/signup");
+      expect(menu.queryByText("Coming soon")).toBeNull();
+    } else {
+      expect(menu.getByRole("menuitem", { name: "Coming soon" }).getAttribute("aria-disabled")).toBe("true");
+      expect(menu.queryByRole("menuitem", { name: "Log in" })).toBeNull();
+      expect(menu.queryByRole("menuitem", { name: "Get started" })).toBeNull();
+    }
+  });
+
+  it("removes landing authentication links when registration closes", () => {
+    runtime.registrationMode = "open";
+    const { rerender } = render(<Landing />);
+    expect(screen.getAllByRole("link", { name: "Get started" })).toHaveLength(2);
+    runtime.registrationMode = "close";
+    rerender(<Landing />);
+    expect(screen.queryByRole("link", { name: "Log in" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Get started" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Coming soon" }).every((button) => button.hasAttribute("disabled"))).toBe(true);
   });
 
   it("uses Studio's brand-only navigation on auth pages", () => {

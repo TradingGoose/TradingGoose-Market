@@ -109,12 +109,12 @@ export function LandingNav({ registrationOpen, variant = "landing" }: {
           </div>
           <Separator orientation="vertical" className="hidden h-6 md:block" />
           <div className="hidden items-center gap-2 md:flex">
-            <Button variant="ghost" size="sm" className="rounded-md text-base" asChild>
+            {registrationOpen && <Button variant="ghost" size="sm" className="rounded-md text-base" asChild>
               <Link href="/login">Log in</Link>
-            </Button>
-            {registrationOpen && <Button size="sm" className="rounded-md text-base" asChild>
-              <Link href="/signup">Get started</Link>
             </Button>}
+            <Button size="sm" className="rounded-md text-base" asChild={registrationOpen} disabled={!registrationOpen}>
+              {registrationOpen ? <Link href="/signup">Get started</Link> : "Coming soon"}
+            </Button>
           </div>
 
           <DropdownMenu>
@@ -154,12 +154,12 @@ export function LandingNav({ registrationOpen, variant = "landing" }: {
                   </a>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/login">Log in</Link>
-                </DropdownMenuItem>
                 {registrationOpen && <DropdownMenuItem asChild>
-                  <Link href="/signup">Get started</Link>
+                  <Link href="/login">Log in</Link>
                 </DropdownMenuItem>}
+                <DropdownMenuItem asChild={registrationOpen} disabled={!registrationOpen}>
+                  {registrationOpen ? <Link href="/signup">Get started</Link> : "Coming soon"}
+                </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>

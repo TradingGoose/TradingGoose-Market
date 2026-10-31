@@ -60,10 +60,8 @@ export default function Hero({ registrationOpen }: { registrationOpen: boolean }
             </div>
 
             <div className="relative z-10 mt-4 flex flex-wrap items-center justify-center gap-3">
-              <Button size="lg" className="font-semibold text-lg" asChild>
-                <Link href={registrationOpen ? "/signup" : "/login"}>
-                  {registrationOpen ? "Get started" : "Log in"}
-                </Link>
+              <Button size="lg" className="font-semibold text-lg" asChild={registrationOpen} disabled={!registrationOpen}>
+                {registrationOpen ? <Link href="/signup">Get started</Link> : "Coming soon"}
               </Button>
               <Button variant="outline" size="lg" className="bg-background font-semibold text-lg" asChild>
                 <a
