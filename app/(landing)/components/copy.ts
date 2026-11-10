@@ -2,30 +2,32 @@ export const landingProduct = {
   brand: "TradingGoose Market",
   family: "TradingGoose",
   footerHoverText: "HONK!",
+  footerDescription: "Market hours and listing identities for financial applications.",
   description:
-    "Self-hostable canonical market reference data for TradingGoose, with admin curation and versioned API access."
+    "Market hours, exchange details, and listing IDs in one API. Connect your apps to trading sessions, holidays, currencies, and market time zones."
 } as const;
 
 export const landingExternalLinks = {
   marketGitHub: "https://github.com/TradingGoose/TradingGoose-Market",
-  marketReadme: "https://github.com/TradingGoose/TradingGoose-Market#readme",
   studioSite: "https://www.tradinggoose.ai",
-  discord: "https://discord.gg/wavf5JWhuT",
-  marketBlog:
-    "https://www.tradinggoose.ai/blog/building-tradinggoose-market#how-rule-resolution-works"
+  discord: "https://discord.gg/wavf5JWhuT"
 } as const;
 
 export type LandingNavLink = {
   label: string;
   href: string;
   ariaLabel?: string;
+  external?: boolean;
 };
 
 export const landingNavLinks: readonly LandingNavLink[] = [
   {
-    label: "Studio",
-    href: landingExternalLinks.studioSite,
-    ariaLabel: "TradingGoose Studio website"
+    label: "Hours",
+    href: "/#market-hours"
+  },
+  {
+    label: "Listings",
+    href: "/#listing-identities"
   }
 ];
 
@@ -69,15 +71,21 @@ export const apiEntryPoints = [
   },
   {
     method: "GET",
+    urlTemplate: "/api/get/market-hours?version=v1&listing_id={listing_id}&listingType=default&date={date}"
+  },
+  {
+    method: "GET",
     urlTemplate: "/api/get/crypto?version=v1&crypto_id={crypto_id}"
   }
 ] as const;
 
 export const structuredFeatureList = [
-  "Canonical market reference data management",
-  "Listings, exchanges, cryptocurrencies, currencies, countries, cities, time zones, chains, market groups, and trading hours",
-  "Admin browse, create, edit, export, and upload workflows",
+  "Market listing search by symbol and name",
+  "Single-record and batch listing lookups",
+  "Time-zone-aware trading schedules, holidays, and early closes",
+  "Exchange, currency, country, city, and time-zone reference lookups",
   "Versioned anonymous or customer-key public reads",
-  "Per-key spend windows with Market-owned Activity and Logs",
-  "Icon upload storage across local filesystem, Vercel Blob, or Azure Blob"
+  "Customer API keys, request activity, and request logs",
+  "Optional per-key API charge limits when usage billing is enabled",
+  "Self-hostable Market service"
 ] as const;

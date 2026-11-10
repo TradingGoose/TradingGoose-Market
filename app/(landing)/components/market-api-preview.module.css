@@ -1,0 +1,125 @@
+.console {
+  display: flex;
+  min-width: 0;
+  height: 440px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  color: hsl(var(--foreground));
+}
+
+.console .tabs {
+  flex: none;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.4);
+}
+
+.console .tab {
+  position: relative;
+  scroll-margin-top: 96px;
+  min-height: 52px;
+  padding: 0 18px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.console .tab:hover,
+.console .tab[data-state="active"] {
+  color: hsl(var(--foreground));
+}
+
+.console .tab[data-state="active"] {
+  background: hsl(var(--muted) / 0.5);
+}
+
+.panel {
+  scroll-margin-top: 96px;
+  min-height: 0;
+  flex: 1;
+}
+
+.panel[data-state="active"] {
+  display: flex;
+  flex-direction: column;
+}
+
+.request {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 20px 12px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.request code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--muted-foreground));
+}
+
+.method {
+  flex: none;
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+.responseHeading {
+  flex: none;
+  padding: 0 20px 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.response {
+  scroll-margin-top: 96px;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 0 20px 16px;
+  border-radius: 2px;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+.key {
+  color: hsl(var(--muted-foreground));
+}
+
+.value {
+  color: hsl(var(--foreground));
+}
+
+@media (max-width: 420px) {
+  .console .tab {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .request {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .responseHeading,
+  .response {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console .tab {
+    transition: none;
+  }
+}

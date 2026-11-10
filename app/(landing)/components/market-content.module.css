@@ -1,0 +1,167 @@
+.content {
+  position: relative;
+  z-index: 10;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.container {
+  margin-inline: auto;
+  padding-inline: 96px;
+}
+
+.hoursSection,
+.identitySection,
+.developerSection {
+  scroll-margin-top: 88px;
+}
+
+.developerSection > .sectionCopy {
+  order: 2;
+}
+.hoursSection {
+  padding-block: 96px 48px;
+}
+.introduction {
+  margin-bottom: 32px;
+}
+
+.introduction h2 {
+  max-width: 1000px;
+  text-wrap: balance;
+  margin: 0;
+  font-size: 48px;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1.08;
+}
+
+.introduction p {
+  max-width: 672px;
+  margin-top: 16px;
+  color: hsl(var(--muted-foreground));
+  font-size: 20px;
+  line-height: 1.55;
+}
+
+.capabilities {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 28px;
+  padding-block: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 15px;
+}
+
+.capabilities li {
+  padding-inline: 24px;
+  text-align: center;
+}
+.capabilities li + li {
+  border-left: 1px solid hsl(var(--border));
+}
+
+.identitySection,
+.developerSection {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: start;
+  gap: 24px;
+  padding-block: 96px;
+}
+
+.identitySection > .sectionCopy,
+.developerSection > .sectionCopy {
+  grid-column: span 2;
+}
+
+.identitySection > :last-child,
+.developerSection > :last-child {
+  grid-column: span 3;
+  width: 100%;
+  max-width: none;
+  justify-self: stretch;
+}
+
+@media (min-width: 1280px) {
+  .identitySection,
+  .developerSection {
+    gap: 40px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .container {
+    padding-inline: 24px;
+  }
+  .hoursSection {
+    padding-block: 64px 32px;
+  }
+  .identitySection,
+  .developerSection {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding-block: 64px;
+  }
+  .identitySection > .sectionCopy,
+  .developerSection > .sectionCopy {
+    grid-column: auto;
+  }
+  .developerSection > .sectionCopy {
+    order: 0;
+  }
+  .identitySection > :last-child,
+  .developerSection > :last-child {
+    grid-column: auto;
+    width: 100%;
+    max-width: 640px;
+    justify-self: center;
+  }
+}
+
+@media (max-width: 767px) {
+  .container {
+    padding-inline: 16px;
+  }
+  .hoursSection {
+    padding-block: 32px;
+  }
+  .introduction {
+    margin-bottom: 28px;
+  }
+  .introduction h2 {
+    font-size: 32px;
+  }
+  .introduction p {
+    font-size: 17px;
+    line-height: 1.6;
+    margin-top: 18px;
+  }
+  .capabilities {
+    grid-template-columns: 1fr;
+    gap: 9px;
+    margin-top: 20px;
+    font-size: 14px;
+  }
+  .capabilities li {
+    padding: 0;
+    text-align: left;
+  }
+  .capabilities li + li {
+    border-left: 0;
+  }
+  .capabilities li::before {
+    content: "";
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: hsl(var(--primary));
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  .identitySection,
+  .developerSection {
+    padding-block: 32px;
+  }
+}

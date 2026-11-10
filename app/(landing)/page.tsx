@@ -4,7 +4,7 @@ import { landingProduct } from "./components/copy";
 import Landing from "./landing";
 import { isLandingSiteUrlConfigured } from "./site-url";
 
-const landingTitle = "TradingGoose Market | Canonical Market Reference Data";
+const landingTitle = "TradingGoose Market | Market Hours & Listing Identities";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,8 @@ export function generateMetadata(): Metadata {
       "canonical ticker identity",
       "market data API",
       "trading hours",
+      "market holidays",
+      "listing identities",
       "exchanges",
       "listings",
       "self-hosted market data"

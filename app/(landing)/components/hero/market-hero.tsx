@@ -17,7 +17,7 @@ const featureBadgeIcons = [ListIcon, LandmarkIcon, ClockIcon, GitBranchIcon];
 
 export default function Hero({ registrationOpen }: { registrationOpen: boolean }) {
   return (
-    <section className="relative overflow-hidden">
+    <section className="relative h-[calc(100svh-57px)] min-h-[36rem] overflow-hidden sm:min-h-[30rem] md:h-[calc(100svh-53px)]">
       <div className="flex-1 pt-8 sm:pt-16 lg:pt-24">
         <div className="relative z-10 mx-auto flex max-w-7xl flex-col items-center gap-8 px-4 sm:gap-16 sm:px-6 lg:gap-24 lg:px-8">
           <div className="flex shrink-0 flex-col items-center gap-4 text-center">
