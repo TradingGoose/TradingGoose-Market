@@ -5,6 +5,7 @@ import {
 } from "@/lib/market-api/core/route-handler";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const handleUpdateRequest = createMarketRouteHandler({ namespace: "update" });
 const handleUpdatePreflight = createMarketPreflightHandler("update");

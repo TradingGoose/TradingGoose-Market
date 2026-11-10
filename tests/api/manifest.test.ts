@@ -9,6 +9,16 @@ import {
 import { guardMarketRouteMethod } from "../../lib/market-api/core/method-guards";
 
 describe("finite Market API authority", () => {
+  it("executes every keyed API entrypoint dynamically", async () => {
+    const routes = await Promise.all([
+      import("../../app/api/search/route"),
+      import("../../app/api/search/[...path]/route"),
+      import("../../app/api/get/[...path]/route"),
+      import("../../app/api/update/[...path]/route"),
+    ]);
+    for (const route of routes) expect(route).toHaveProperty("dynamic", "force-dynamic");
+  });
+
   it("gives every route one immutable access owner and one exact method set", () => {
     expect(Object.isFrozen(MARKET_API_ROUTE_MANIFEST)).toBe(true);
     expect(new Set(MARKET_API_ROUTE_MANIFEST.map((route) => route.path)).size).toBe(

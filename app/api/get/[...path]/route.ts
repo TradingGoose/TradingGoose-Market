@@ -6,6 +6,7 @@ import {
 import { withGetResponseCache } from "@/lib/market-api/v1/cache/response-cache";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const handleGetRequest = createMarketRouteHandler({
   namespace: "get",
