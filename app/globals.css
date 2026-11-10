@@ -170,6 +170,19 @@
     overscroll-behavior-x: none;
   }
 
+  /* Disable control rings globally while preserving ordinary box shadows. */
+  *,
+  ::before,
+  ::after {
+    --tw-ring-offset-shadow: 0 0 #0000 !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
+  }
+
+  :focus,
+  :focus-within {
+    outline: none !important;
+  }
+
   body {
     @apply bg-background text-foreground;
     overscroll-behavior-x: none;
