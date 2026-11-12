@@ -1,9 +1,9 @@
 .section {
   display: grid;
   grid-template-columns: 1fr;
-  align-items: start;
-  gap: 16px;
-  padding-block: 32px;
+  align-items: center;
+  gap: 24px;
+  padding-block: var(--landing-section-space);
   scroll-margin-top: 88px;
 }
 
@@ -259,10 +259,6 @@
 }
 
 @media (min-width: 768px) {
-  .section {
-    padding-block: 64px;
-  }
-
   .previewTitle {
     font-size: 15px;
   }
@@ -299,8 +295,6 @@
 @media (min-width: 1024px) {
   .section {
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 24px;
-    padding-block: 96px;
   }
 
   .section > .copy {

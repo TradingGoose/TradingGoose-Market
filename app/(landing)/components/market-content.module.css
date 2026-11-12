@@ -1,4 +1,5 @@
 .content {
+  --landing-section-space: 96px;
   position: relative;
   z-index: 10;
   background: hsl(var(--background));
@@ -7,7 +8,7 @@
 
 .container {
   margin-inline: auto;
-  padding-inline: 96px;
+  padding-inline: 80px;
 }
 
 .hoursSection,
@@ -20,10 +21,10 @@
   order: 2;
 }
 .hoursSection {
-  padding-block: 96px 48px;
+  padding-block: 64px 48px;
 }
 .introduction {
-  margin-bottom: 32px;
+  margin-bottom: 40px;
 }
 
 .introduction h2 {
@@ -37,11 +38,11 @@
 }
 
 .introduction p {
-  max-width: 672px;
+  max-width: 55ch;
   margin-top: 16px;
   color: hsl(var(--muted-foreground));
-  font-size: 20px;
-  line-height: 1.55;
+  font-size: 18px;
+  line-height: 1.6;
 }
 
 .capabilities {
@@ -65,9 +66,14 @@
 .developerSection {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  align-items: start;
+  align-items: center;
   gap: 24px;
-  padding-block: 96px;
+  padding-block: var(--landing-section-space);
+}
+
+.identitySection > *,
+.developerSection > * {
+  min-width: 0;
 }
 
 .identitySection > .sectionCopy,
@@ -84,6 +90,9 @@
 }
 
 @media (min-width: 1280px) {
+  .container {
+    padding-inline: 96px;
+  }
   .identitySection,
   .developerSection {
     gap: 40px;
@@ -91,6 +100,9 @@
 }
 
 @media (max-width: 1023px) {
+  .content {
+    --landing-section-space: 64px;
+  }
   .container {
     padding-inline: 24px;
   }
@@ -100,8 +112,6 @@
   .identitySection,
   .developerSection {
     grid-template-columns: 1fr;
-    gap: 16px;
-    padding-block: 64px;
   }
   .identitySection > .sectionCopy,
   .developerSection > .sectionCopy {
@@ -120,8 +130,8 @@
 }
 
 @media (max-width: 767px) {
-  .container {
-    padding-inline: 16px;
+  .content {
+    --landing-section-space: 40px;
   }
   .hoursSection {
     padding-block: 32px;
@@ -135,7 +145,7 @@
   .introduction p {
     font-size: 17px;
     line-height: 1.6;
-    margin-top: 18px;
+    margin-top: 16px;
   }
   .capabilities {
     grid-template-columns: 1fr;
@@ -160,8 +170,10 @@
     margin-right: 10px;
     vertical-align: middle;
   }
-  .identitySection,
-  .developerSection {
-    padding-block: 32px;
+}
+
+@media (max-width: 639px) {
+  .container {
+    padding-inline: 16px;
   }
 }

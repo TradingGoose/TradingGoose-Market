@@ -1,9 +1,9 @@
 .feature {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  align-items: start;
+  align-items: center;
   gap: 24px;
-  padding-block: 96px;
+  padding-block: var(--landing-section-space);
   scroll-margin-top: 88px;
 }
 
@@ -30,8 +30,6 @@
 @media (max-width: 1023px) {
   .feature {
     grid-template-columns: 1fr;
-    gap: 16px;
-    padding-block: 64px;
   }
 
   .copy,
@@ -43,11 +41,5 @@
   .preview {
     max-width: 640px;
     justify-self: center;
-  }
-}
-
-@media (max-width: 767px) {
-  .feature {
-    padding-block: 32px;
   }
 }

@@ -56,7 +56,7 @@ export function MarketFeatureTextCard({ headingId, label, icon, title, descripti
           style={{ backgroundColor: "hsl(var(--primary) / 0.7)" }}
         />
       </div>
-      <Card data-feature-text-surface="" className="relative flex h-full min-h-0 flex-col justify-between gap-10 overflow-hidden rounded-lg border bg-card/50 p-6 shadow-none backdrop-blur-sm transition-all duration-300 ease-in-out motion-reduce:transition-none">
+      <Card data-feature-text-surface="" className="relative flex h-full min-h-0 flex-col justify-between gap-8 overflow-hidden rounded-lg border bg-card p-6 shadow-none transition-all duration-300 ease-in-out motion-reduce:transition-none">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 z-0 opacity-0 transition-opacity duration-300 group-hover/feature:opacity-100 motion-reduce:transition-none"
@@ -67,9 +67,9 @@ export function MarketFeatureTextCard({ headingId, label, icon, title, descripti
             <div aria-hidden="true" className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-foreground shadow-sm">
               {icon}
             </div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">{label}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</p>
           </div>
-          <h2 id={headingId} className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{title}</h2>
+          <h2 id={headingId} className="text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">{title}</h2>
           <p className="max-w-xl text-base leading-7 text-muted-foreground">{description}</p>
         </div>
         <ul className="relative z-10 space-y-3.5">
@@ -77,7 +77,7 @@ export function MarketFeatureTextCard({ headingId, label, icon, title, descripti
             <li key={bullet} className="block">
               <div className="flex items-center gap-3">
                 <span aria-hidden="true" className="h-px w-4 shrink-0 bg-primary" />
-                <p className="text-sm text-muted-foreground">{bullet}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">{bullet}</p>
               </div>
             </li>
           ))}
