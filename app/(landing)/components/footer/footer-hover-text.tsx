@@ -117,11 +117,7 @@ export default function FooterHoverText({ text }: FooterHoverTextProps) {
               strokeWidth="0.5"
               className="fill-transparent font-semibold"
               style={{ fontSize: 132 }}
-              initial={
-                prefersReducedMotion
-                  ? { strokeDashoffset: 0, strokeDasharray: 900 }
-                  : { strokeDashoffset: 900, strokeDasharray: 900 }
-              }
+              initial={{ strokeDashoffset: 900, strokeDasharray: 900 }}
               animate={{ strokeDashoffset: 0, strokeDasharray: 900 }}
               transition={
                 prefersReducedMotion

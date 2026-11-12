@@ -29,10 +29,3 @@ export function resolveIconUrl(request: Request, iconUrl: string | null) {
   const prefix = servePrefix.endsWith("/") ? servePrefix : `${servePrefix}/`;
   return joinOrigin(origin, `${prefix}${normalized}`);
 }
-
-export function runInBackground(task: Promise<unknown>, errorPrefix: string) {
-  void task.catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`${errorPrefix}:`, message);
-  });
-}

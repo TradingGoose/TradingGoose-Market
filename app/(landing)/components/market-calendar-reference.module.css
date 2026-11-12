@@ -1,0 +1,326 @@
+.section {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  gap: 24px;
+  padding-block: var(--landing-section-space);
+  scroll-margin-top: 88px;
+}
+
+.calendar,
+.catalog {
+  width: 100%;
+  max-width: 640px;
+  min-width: 0;
+  margin: 0;
+  justify-self: center;
+  overflow: hidden;
+}
+
+.previewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.4);
+}
+
+.previewTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.previewTitle svg,
+.entityLabel svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  stroke-width: 1.5;
+}
+
+.previewTitle svg {
+  color: hsl(var(--muted-foreground));
+}
+
+.schedule {
+  min-height: 215px;
+  padding: 20px;
+}
+
+.dayStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+
+.dateControls {
+  display: flex;
+  gap: 8px;
+  padding: 20px 20px 0;
+}
+
+.sessionList {
+  display: grid;
+  gap: 14px;
+}
+
+.session {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.session dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.session dd {
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionTrack {
+  grid-column: 1 / -1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: hsl(var(--muted));
+}
+
+.sessionTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.exceptions {
+  display: grid;
+  gap: 2px;
+  margin-inline: 20px;
+  padding-block: 10px;
+  border-top: 1px solid hsl(var(--border));
+  font-size: 13px;
+}
+
+.timezone {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 12px 20px;
+  background: hsl(var(--muted) / 0.4);
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.timezone svg {
+  width: 13px;
+  height: 13px;
+}
+
+.timezone span:last-child {
+  margin-left: auto;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+}
+
+.catalog {
+  padding: 20px;
+}
+
+.exchangeTile {
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+}
+
+.entityLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.exchangeValue {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.exchangeValue strong {
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.exchangeValue span {
+  color: hsl(var(--muted-foreground));
+  font-size: 15px;
+}
+
+.referenceGrid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 20px;
+}
+
+.referenceGrid::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 25%;
+  width: 50%;
+  height: 12px;
+  border: 1px solid hsl(var(--primary));
+  border-bottom: 0;
+}
+
+.referenceGrid::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 8px;
+  border-left: 1px solid hsl(var(--primary));
+}
+
+.referenceTile,
+.timezoneTile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+}
+
+.referenceTile strong {
+  margin-top: 12px;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.referenceTile > span:last-child {
+  margin-top: 7px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.timezoneTile {
+  grid-column: 1 / -1;
+  gap: 12px;
+}
+
+.timezoneTile strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.catalogEntities {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+  padding-top: 20px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.catalogEntities span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.catalogEntities svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.5;
+}
+
+@media (min-width: 768px) {
+  .previewTitle {
+    font-size: 15px;
+  }
+
+  .previewHeader,
+  .catalog {
+    padding: 24px;
+  }
+
+  .schedule,
+  .dateControls {
+    padding-inline: 24px;
+  }
+
+  .exceptions {
+    margin-inline: 24px;
+  }
+
+  .timezone {
+    padding-inline: 24px;
+  }
+
+  .catalogEntities {
+    font-size: 12px;
+  }
+
+  .timezoneTile {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+@media (min-width: 1024px) {
+  .section {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .section > .copy {
+    grid-column: span 2;
+  }
+
+  .section > .calendar,
+  .section > .catalog {
+    grid-column: span 3;
+    max-width: none;
+    justify-self: stretch;
+  }
+
+  .section:not(.referenceSection) .copy {
+    grid-column: 4 / span 2;
+    grid-row: 1;
+  }
+
+  .section:not(.referenceSection) .calendar {
+    grid-column: 1 / span 3;
+    grid-row: 1;
+  }
+}
+
+@media (min-width: 1280px) {
+  .section {
+    gap: 40px;
+  }
+}

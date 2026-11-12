@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 export type MarketRow = {
   id: string;
@@ -82,7 +83,7 @@ export async function fetchMarketsFromDb(query: MarketsQuery) {
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
 
-  const [{ total }] = (await db!.execute(sql`
+  const [{ total }] = (await requireDatabase().execute(sql`
     SELECT COUNT(*)::int AS total
     FROM markets m
     LEFT JOIN countries c ON c.id = m.country_id
@@ -91,7 +92,7 @@ export async function fetchMarketsFromDb(query: MarketsQuery) {
     ${whereClause}
   `)) as { total: number }[];
 
-  const rowsFromDb = (await db!.execute(sql`
+  const rowsFromDb = (await requireDatabase().execute(sql`
     SELECT
       m.id,
       m.code,
@@ -120,7 +121,7 @@ export async function fetchMarketsFromDb(query: MarketsQuery) {
 }
 
 export async function fetchMarketsForExport() {
-  const rows = (await db!.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       m.code,
       m.name,

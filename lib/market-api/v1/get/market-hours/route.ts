@@ -1,8 +1,10 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveSearchParams } from "../../search/params";
+
 
 type ListingType = "default" | "crypto" | "currency";
 
@@ -431,8 +433,7 @@ function resolveMarketType(
 }
 
 async function fetchListingRow(listingId: string): Promise<ListingRow | null> {
-  if (!db) return null;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       e.asset_class AS "assetClass",
       e.market_id AS "marketId",
@@ -446,8 +447,7 @@ async function fetchListingRow(listingId: string): Promise<ListingRow | null> {
 }
 
 async function fetchMarketHoursByFilter(filter: SQL): Promise<MarketHoursRow | null> {
-  if (!db) return null;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       mh.hours AS "hours",
       tz.name AS "timeZoneName",
@@ -467,7 +467,6 @@ async function fetchMarketHoursRow(
   listingId: string,
   listingType: ListingType
 ): Promise<MarketHoursRow | null> {
-  if (!db) return null;
 
   const listing = await fetchListingRow(listingId);
   const assetClass = listing?.assetClass?.trim().toLowerCase() ?? null;
@@ -530,9 +529,6 @@ async function fetchMarketHoursRow(
 
 export async function getMarketHours(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);

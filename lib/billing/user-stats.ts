@@ -1,0 +1,66 @@
+import { marketApiUsageEvent, marketUsageOwner, subscription, userStats } from "@tradinggoose/db/schema";
+import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
+import { and, eq, gte, sql } from "drizzle-orm";
+import { requireDatabase } from "@/lib/db/runtime";
+import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd } from "./money";
+
+export async function getClosedPeriodUsage(
+  tx: MarketTransaction,
+  stats: Pick<typeof userStats.$inferSelect,
+    "usageOwnerId" | "currentPeriodRequestQuantity" | "currentPeriodCost">,
+  periodEnd: Date,
+) {
+  const [usage] = await tx.select({
+    requestQuantity: sql<string>`coalesce(sum(${marketApiUsageEvent.billableQuantity}), 0)::text`,
+    costUsd: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)::text`,
+  }).from(marketApiUsageEvent).where(and(
+    eq(marketApiUsageEvent.usageOwnerId, stats.usageOwnerId),
+    eq(marketApiUsageEvent.billableQuantity, 1),
+    gte(marketApiUsageEvent.admittedAt, periodEnd),
+  ));
+  if (!usage) throw new Error("PAYG closed-period usage is unavailable");
+  // The accumulator already excludes every prior settled activation. Replaying
+  // a timestamp-bounded prefix could include an old subscription that ended in
+  // the same Stripe second as reactivation. Remove only newer unswept events.
+  const requestQuantity = BigInt(stats.currentPeriodRequestQuantity) - BigInt(usage.requestQuantity);
+  const costNano = decimalUsdToNanoUsd(stats.currentPeriodCost) - decimalUsdToNanoUsd(usage.costUsd);
+  if (requestQuantity < 0n || costNano < 0n) {
+    throw new Error("Next-period PAYG usage exceeds its accumulator");
+  }
+  return { requestQuantity: requestQuantity.toString(), costUsd: nanoUsdToDecimalUsd(costNano) };
+}
+
+export async function resolveRetainedUserStatsForSubscription(
+  localSubscription: typeof subscription.$inferSelect,
+  database: MarketDatabase | MarketTransaction = requireDatabase(),
+) {
+  if (
+    localSubscription.referenceType !== "user" ||
+    localSubscription.plan !== "payg"
+  ) {
+    throw new Error("PAYG settlement requires a personal subscription reference");
+  }
+  const rows = await database
+    .select({ stats: userStats, owner: marketUsageOwner })
+    .from(userStats)
+    .innerJoin(marketUsageOwner, eq(marketUsageOwner.id, userStats.usageOwnerId))
+    .where(eq(userStats.billingReferenceId, localSubscription.referenceId))
+    .limit(2);
+  if (rows.length !== 1) {
+    throw new Error("PAYG subscription does not resolve exactly one retained usage accumulator");
+  }
+  if (rows[0].stats.usageOwnerId !== rows[0].owner.id) {
+    throw new Error("PAYG subscription usage-owner bridge is invalid");
+  }
+  if (
+    rows[0].stats.userId !== null &&
+    (rows[0].stats.userId !== localSubscription.referenceId ||
+      rows[0].owner.userId !== localSubscription.referenceId)
+  ) {
+    throw new Error("Active PAYG usage accumulator identity bridge is invalid");
+  }
+  if (rows[0].stats.userId === null && rows[0].owner.userId !== null) {
+    throw new Error("Retained PAYG usage-owner link is inconsistent");
+  }
+  return rows[0].stats;
+}

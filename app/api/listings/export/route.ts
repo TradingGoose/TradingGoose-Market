@@ -1,18 +1,18 @@
 import { NextResponse } from "next/server";
 
-import { db } from "@tradinggoose/db";
+
 import { fetchListingsForExport } from "../lib";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 export const runtime = "nodejs";
+const routePolicy = createSystemAdminRoutePolicy("/api/listings/export");
 
-export async function GET() {
+export async function GET(_request: Request) {
+  const auth = await routePolicy.authorize(_request);
+  if (auth.error) return auth.error;
+
   try {
-    if (!db) {
-      return NextResponse.json(
-        { error: "Database connection is not configured." },
-        { status: 503 }
-      );
-    }
 
     const data = await fetchListingsForExport();
     const body = JSON.stringify(data, null, 2);
@@ -31,3 +31,10 @@ export async function GET() {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const HEAD = (request: Request) => routePolicy.head(request, GET);
+export const OPTIONS = routePolicy.options;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

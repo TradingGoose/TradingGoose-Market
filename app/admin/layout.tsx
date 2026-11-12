@@ -1,31 +1,13 @@
 import { cookies } from "next/headers";
 
 import { AppShell } from "@/components/app-shell";
-import { requireAuth } from "@/lib/auth/session";
+import { requireSystemAdmin } from "@/lib/auth/session";
 
-type AdminLayoutProps = {
-  children: React.ReactNode;
-};
-
-export default async function AdminLayout({ children }: AdminLayoutProps) {
-  const session = await requireAuth();
-
+export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+  const session = await requireSystemAdmin();
   const cookieStore = await cookies();
-  const sidebarState = cookieStore.get("sidebar:state")?.value;
-  const sidebarWidth = cookieStore.get("sidebar:width")?.value;
-
-  const defaultOpen = sidebarState ? sidebarState === "true" : true;
-  const defaultWidth = sidebarWidth ?? undefined;
-
-  const user = {
-    name: session.user.name,
-    email: session.user.email,
-    image: (session.user as { image?: string | null }).image ?? null,
-    role: (session.user as { role?: string }).role ?? "viewer"
-  };
-
   return (
-    <AppShell defaultOpen={defaultOpen} defaultWidth={defaultWidth} user={user}>
+    <AppShell mode="admin" defaultOpen={cookieStore.get("sidebar:state")?.value !== "false"} defaultWidth={cookieStore.get("sidebar:width")?.value} user={{ id: session.user.id, name: session.user.name, email: session.user.email, image: session.user.image ?? null, isAdmin: true }}>
       {children}
     </AppShell>
   );

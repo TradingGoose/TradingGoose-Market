@@ -7,12 +7,12 @@
 ## Affected Areas
 <!-- Check all that apply. -->
 - [ ] Admin UI / components
-- [ ] Auth / invitations / team management
+- [ ] Customer auth / database-admin membership
 - [ ] Public API routes
-- [ ] Market API core / cache / Redis / rate limits / billing
+- [ ] Market API access / usage / billing / anonymous limiting
 - [ ] Database / Drizzle / migrations
 - [ ] Uploads / storage providers
-- [ ] Plugins / install tooling
+- [ ] API-key or provider integration
 - [ ] Email / external integrations
 - [ ] Config / env / deployment
 - [ ] Docs / repository metadata
@@ -21,9 +21,11 @@
 ## Validation
 <!-- Exact commands run and results. Include known warnings/failures. -->
 ```bash
-git diff --check main...HEAD
+bun install --frozen-lockfile
+bun run db:build
 bun run type-check
-ESLINT_USE_FLAT_CONFIG=false npx eslint .
+bun run lint
+bun run test
 ```
 
 ## Rollout Notes
@@ -34,7 +36,7 @@ ESLINT_USE_FLAT_CONFIG=false npx eslint .
 
 ## Checklist
 - [ ] I reviewed my own diff
-- [ ] I documented validation results
+- [ ] I documented the validation results that apply
 - [ ] I called out env, schema, cache, provider, and rollout impact
 - [ ] I did not manually edit generated files under `*/migrations/`
 - [ ] I did not include secrets or private credentials

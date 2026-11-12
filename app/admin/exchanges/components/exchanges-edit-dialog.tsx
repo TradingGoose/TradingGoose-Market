@@ -34,22 +34,40 @@ type ExchangeFormState = {
   parentId: string
 }
 
-export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode = 'edit' }: ExchangeEditDialogProps) {
+const createExchangeFormState = (exchange: ExchangeRow | null): ExchangeFormState => ({
+  mic: exchange?.mic ?? '',
+  name: exchange?.name ?? '',
+  lei: exchange?.lei ?? '',
+  url: exchange?.url ?? '',
+  createdAt: exchange?.createdAt ? exchange.createdAt.slice(0, 10) : '',
+  expiredAt: exchange?.expiredAt ? exchange.expiredAt.slice(0, 10) : '',
+  countryId: exchange?.countryId ?? '',
+  cityId: exchange?.cityId ?? '',
+  active: exchange?.active ?? true,
+  isSegment: exchange?.isSegment ?? false,
+  parentId: exchange?.parentId ?? ''
+})
+
+const createInitialCityOptions = (exchange: ExchangeRow | null) =>
+  exchange?.cityId && exchange.cityName ? [{ value: exchange.cityId, label: exchange.cityName }] : []
+
+export function ExchangeEditDialog(props: ExchangeEditDialogProps) {
+  const { exchange, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${exchange?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-2xl'>
+        <ExchangeEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ExchangeEditDialogContent({ exchange, open, onOpenChange, onSave, mode = 'edit' }: ExchangeEditDialogProps) {
   const isEdit = mode === 'edit' && !!exchange
 
-  const [formState, setFormState] = useState<ExchangeFormState>({
-    mic: '',
-    name: '',
-    lei: '',
-    url: '',
-    createdAt: '',
-    expiredAt: '',
-    countryId: '',
-    cityId: '',
-    active: true,
-    isSegment: false,
-    parentId: ''
-  })
+  const [formState, setFormState] = useState<ExchangeFormState>(() => createExchangeFormState(exchange))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [countrySearch, setCountrySearch] = useState('')
@@ -57,63 +75,15 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
   const [countryLoading, setCountryLoading] = useState(false)
   const [countryError, setCountryError] = useState<string | null>(null)
   const [citySearch, setCitySearch] = useState('')
-  const [cityOptions, setCityOptions] = useState<{ value: string; label: string }[]>([])
+  const [cityOptions, setCityOptions] = useState<{ value: string; label: string }[]>(() =>
+    createInitialCityOptions(exchange)
+  )
   const [cityLoading, setCityLoading] = useState(false)
   const [cityError, setCityError] = useState<string | null>(null)
   const [parentSearch, setParentSearch] = useState('')
   const [parentOptions, setParentOptions] = useState<ExchangeOption[]>([])
   const [parentLoading, setParentLoading] = useState(false)
   const [parentError, setParentError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-
-    if (exchange) {
-      setFormState({
-        mic: exchange.mic,
-        name: exchange.name ?? '',
-        lei: exchange.lei ?? '',
-        url: exchange.url ?? '',
-        createdAt: exchange.createdAt ? exchange.createdAt.slice(0, 10) : '',
-        expiredAt: exchange.expiredAt ? exchange.expiredAt.slice(0, 10) : '',
-        countryId: exchange.countryId ?? '',
-        cityId: exchange.cityId ?? '',
-        active: exchange.active,
-        isSegment: exchange.isSegment ?? false,
-        parentId: exchange.parentId ?? ''
-      })
-    } else {
-      setFormState({
-        mic: '',
-        name: '',
-        lei: '',
-        url: '',
-        createdAt: '',
-        expiredAt: '',
-        countryId: '',
-        cityId: '',
-        active: true,
-        isSegment: false,
-        parentId: ''
-      })
-    }
-
-    setError(null)
-    setCountrySearch('')
-    setCitySearch('')
-    setParentSearch('')
-    setParentError(null)
-  }, [exchange, open])
-
-  useEffect(() => {
-    if (!open || !exchange?.cityId || !exchange.cityName) return
-    const cityId = exchange.cityId
-    const cityName = exchange.cityName
-    setCityOptions(prev => {
-      if (prev.some(option => option.value === cityId)) return prev
-      return [...prev, { value: cityId, label: cityName }]
-    })
-  }, [open, exchange?.cityId, exchange?.cityName])
 
   useEffect(() => {
     if (!open) return
@@ -146,13 +116,7 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
   }, [countrySearch, open])
 
   useEffect(() => {
-    if (!open) return
-    if (!formState.countryId) {
-      if (!formState.cityId) {
-        setCityOptions([])
-      }
-      return
-    }
+    if (!open || !formState.countryId) return
 
     const controller = new AbortController()
     const timeout = setTimeout(() => {
@@ -182,7 +146,7 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
       clearTimeout(timeout)
       controller.abort()
     }
-  }, [citySearch, formState.countryId, formState.cityId, open])
+  }, [citySearch, formState.countryId, open])
 
   useEffect(() => {
     if (!open || !formState.cityId) return
@@ -211,13 +175,10 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [open, formState.cityId, formState.countryId, cityOptions])
+  }, [formState.cityId, formState.countryId, cityOptions, open])
 
   useEffect(() => {
-    if (!open || !formState.isSegment) {
-      setParentOptions([])
-      return
-    }
+    if (!open || !formState.isSegment) return
     const controller = new AbortController()
     const timeout = setTimeout(() => {
       setParentLoading(true)
@@ -244,7 +205,7 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
       clearTimeout(timeout)
       controller.abort()
     }
-  }, [parentSearch, open, formState.isSegment])
+  }, [parentSearch, formState.isSegment, open])
 
   useEffect(() => {
     if (!open || !formState.isSegment || !formState.parentId) return
@@ -269,7 +230,7 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [open, formState.isSegment, formState.parentId, parentOptions])
+  }, [formState.isSegment, formState.parentId, parentOptions, open])
 
   const countryDropdownOptions = useMemo(
     () => countryOptions.map(option => ({ value: option.id, label: `${option.code} — ${option.name}` })),
@@ -363,8 +324,7 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-2xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit exchange' : 'Add exchange'}
           description={isEdit ? 'Update exchange details and status.' : 'Create a new exchange.'}
@@ -379,7 +339,7 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
                 onChange={event => setFormState(prev => ({ ...prev, mic: event.target.value }))}
                 required
               />
-              {!formState.mic.trim() && <p className='text-xs text-destructive'>Required</p>}
+              <FormError message={!formState.mic.trim() ? 'MIC code is required.' : null} />
             </div>
             <div className='space-y-2'>
               <Label htmlFor='edit-exchange-name'>Name</Label>
@@ -447,6 +407,9 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
                 emptyMessage={countryError ?? 'No countries found.'}
                 onChange={value => {
                   setFormState(prev => ({ ...prev, countryId: value, cityId: '' }))
+                  setCitySearch('')
+                  setCityOptions([])
+                  setCityError(null)
                 }}
               />
             </div>
@@ -486,7 +449,11 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
                       isSegment: checked,
                       parentId: checked ? prev.parentId : ''
                     }))
-                    if (!checked) setParentSearch('')
+                    if (!checked) {
+                      setParentSearch('')
+                      setParentOptions([])
+                      setParentError(null)
+                    }
                   }}
                 />
               </div>
@@ -537,7 +504,6 @@ export function ExchangeEditDialog({ exchange, open, onOpenChange, onSave, mode 
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

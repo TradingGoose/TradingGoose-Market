@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 
 import { EditDialogFooter, EditDialogHeader, FormError, IconUploadField } from '@/components/edit-dialog'
 import {
@@ -26,34 +26,34 @@ type ChainFormState = {
   iconUrl: string
 }
 
-export function ChainEditDialog({ chain, open, onOpenChange, onSave, mode = 'edit' }: ChainEditDialogProps) {
+const createChainFormState = (chain: ChainRow | null): ChainFormState => ({
+  code: chain?.code ?? '',
+  name: chain?.name ?? '',
+  iconUrl: chain?.iconUrl ?? ''
+})
+
+export function ChainEditDialog(props: ChainEditDialogProps) {
+  const { chain, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${chain?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-2xl'>
+        <ChainEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ChainEditDialogContent({ chain, onOpenChange, onSave, mode = 'edit' }: ChainEditDialogProps) {
   const chainId = chain?.id?.trim() ?? ''
   const isEdit = mode === 'edit' && chainId.length > 0
 
-  const [formState, setFormState] = useState<ChainFormState>({
-    code: '',
-    name: '',
-    iconUrl: ''
-  })
+  const [formState, setFormState] = useState<ChainFormState>(() => createChainFormState(chain))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [iconUploading, setIconUploading] = useState(false)
   const [iconError, setIconError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    if (chain) {
-      setFormState({
-        code: chain.code,
-        name: chain.name,
-        iconUrl: chain.iconUrl ?? ''
-      })
-    } else {
-      setFormState({ code: '', name: '', iconUrl: '' })
-    }
-    setError(null)
-    setIconError(null)
-  }, [chain, open])
 
   const isFormValid = formState.code.trim().length >= 1 && formState.name.trim().length > 0 && !saving
 
@@ -158,8 +158,7 @@ export function ChainEditDialog({ chain, open, onOpenChange, onSave, mode = 'edi
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-2xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Chain' : 'Add Chain'}
           description={isEdit ? 'Update chain details.' : 'Create a new chain.'}
@@ -206,7 +205,6 @@ export function ChainEditDialog({ chain, open, onOpenChange, onSave, mode = 'edi
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

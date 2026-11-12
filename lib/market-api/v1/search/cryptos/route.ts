@@ -1,12 +1,13 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
-import type { PluginContext } from "@/lib/market-api/plugins/types";
-import { triggerEntityEnrichersInBackground } from "@/lib/market-api/plugins/runtime";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { resolveIconUrl } from "../utils";
 import type { CryptoPair } from "../types";
 import { resolveSearchParams } from "../params";
+import { parseListParam, parsePositiveInt, uniqueNonEmpty } from "../parsing";
+
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -40,75 +41,6 @@ type CurrencyRow = {
 type QuoteCandidate =
   | ({ type: "crypto" } & CryptoRowMeta)
   | ({ type: "currency" } & CurrencyRow);
-
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
-function uniqueNonEmpty(values: Array<string | null | undefined>) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-function parseListParam(searchParams: URLSearchParams, key: string) {
-  const rawValues = [
-    ...searchParams.getAll(key),
-    ...searchParams.getAll(`${key}[]`)
-  ];
-  if (!rawValues.length) return [];
-
-  const tokens: string[] = [];
-  for (const raw of rawValues) {
-    if (!raw) continue;
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-
-    const pushToken = (value: string) => {
-      const cleaned = value.trim().replace(/^['"]|['"]$/g, "");
-      if (cleaned) tokens.push(cleaned);
-    };
-
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item === null || item === undefined) continue;
-            pushToken(String(item));
-          }
-          continue;
-        }
-      } catch {
-        // fall through
-      }
-      const inner = trimmed.slice(1, -1);
-      if (inner) {
-        inner.split(",").forEach((value) => pushToken(value));
-      }
-      continue;
-    }
-
-    if (trimmed.includes(",")) {
-      trimmed.split(",").forEach((value) => pushToken(value));
-      continue;
-    }
-
-    pushToken(trimmed);
-  }
-
-  return uniqueNonEmpty(tokens);
-}
 
 function normalizeQuoteType(value: string | null) {
   const normalized = value?.trim().toLowerCase();
@@ -157,9 +89,8 @@ async function fetchCryptos(
   filters: SQL[],
   limit: number
 ): Promise<CryptoRowMeta[]> {
-  if (!db) return [];
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       cr.id,
       cr.code,
@@ -181,9 +112,8 @@ async function fetchCurrencies(
   filters: SQL[],
   limit: number
 ): Promise<CurrencyRow[]> {
-  if (!db) return [];
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       id,
       code,
@@ -200,12 +130,8 @@ async function fetchCurrencies(
 
 export async function fetchCryptoById(
   request: Request,
-  cryptoId: string,
-  options?: { forceLogoRefresh?: boolean }
+  cryptoId: string
 ): Promise<CryptoDetail | null> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const trimmedId = cryptoId.trim();
   if (!trimmedId) return null;
@@ -221,12 +147,8 @@ export async function fetchCryptoById(
 
 export async function fetchCryptosByIds(
   request: Request,
-  cryptoIds: string[],
-  options?: { forceLogoRefresh?: boolean }
+  cryptoIds: string[]
 ): Promise<Map<string, CryptoDetail>> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const ids = uniqueNonEmpty(
     cryptoIds.map((id) => id.trim()).filter((id) => id.length > 0)
@@ -246,12 +168,8 @@ export async function fetchCryptosByIds(
 export async function searchCryptoPairs(
   request: Request,
   searchParams: URLSearchParams,
-  options?: { preferCurrencyQuote?: boolean },
-  plugin?: PluginContext
+  options?: { preferCurrencyQuote?: boolean }
 ): Promise<CryptoPair[]> {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const limit = parsePositiveInt(searchParams.get("limit"), DEFAULT_LIMIT, MAX_LIMIT);
   const quoteType = normalizeQuoteType(
@@ -388,24 +306,14 @@ export async function searchCryptoPairs(
     quoteCurrencyPromise,
   ]);
 
-  // Apply enrichers if plugin context is available
-  if (plugin) {
-    triggerEntityEnrichersInBackground(plugin, "crypto", "search", rawBaseCryptos);
-  }
   const baseCryptos = rawBaseCryptos;
 
   const quoteCandidates: QuoteCandidate[] = [];
   if (quoteType !== "currency" && rawCryptoQuotes.length) {
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "crypto", "search", rawCryptoQuotes);
-    }
     const cryptoQuotes = rawCryptoQuotes;
     cryptoQuotes.forEach((row) => quoteCandidates.push({ type: "crypto", ...row }));
   }
   if (quoteType !== "crypto" && rawCurrencyQuotes.length) {
-    if (plugin) {
-      triggerEntityEnrichersInBackground(plugin, "currency", "search", rawCurrencyQuotes);
-    }
     const currencyQuotes = rawCurrencyQuotes;
     currencyQuotes.forEach((row) => quoteCandidates.push({ type: "currency", ...row }));
   }
@@ -488,22 +396,19 @@ export async function searchCryptoPairs(
   }));
 }
 
-export async function getSearchCrypto(c: ApiContext, plugin?: PluginContext) {
+export async function getSearchCrypto(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ data: [], error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);
     const cryptoId = searchParams.get("crypto_id")?.trim() ?? searchParams.get("cryptoId")?.trim();
     if (cryptoId) {
       return c.json(
-        { data: [], error: "crypto_id is not supported on /search/cryptos. Use /get/crypto instead." },
+        { data: [], error: "crypto_id is not supported on /api/search/cryptos. Use /api/get/crypto instead." },
         400
       );
     }
-    const data = await searchCryptoPairs(request, searchParams, undefined, plugin);
+    const data = await searchCryptoPairs(request, searchParams);
 
     return c.json({ data });
   } catch (error) {

@@ -5,6 +5,7 @@ import { useMemo } from 'react'
 import { useFileUpload, type FileWithPreview } from '@/hooks/use-file-upload'
 import { Alert, AlertContent, AlertDescription, AlertIcon } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { TriangleAlert, Plus, X } from 'lucide-react'
 import { cn } from '@/lib/ui/utils'
 
@@ -72,9 +73,13 @@ export default function AvatarUpload({
     <div className={cn('flex items-center gap-4', className)}>
       {/* Avatar Preview */}
       <div className='relative'>
-        <div
+        <Input {...getInputProps()} className='hidden' />
+        <Button
+          type='button'
+          variant='outline'
+          size='icon'
           className={cn(
-            'group/avatar relative h-10 w-10 cursor-pointer overflow-hidden rounded-full border-2 border-dashed transition-colors',
+            'group/avatar relative size-10 cursor-pointer overflow-hidden rounded-full border-2 border-dashed bg-transparent p-0 transition-colors hover:bg-transparent',
             isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25 hover:border-muted-foreground/20',
             previewUrl && 'border-solid'
           )}
@@ -83,9 +88,8 @@ export default function AvatarUpload({
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           onClick={openFileDialog}
+          aria-label={previewUrl ? 'Replace icon' : 'Upload icon'}
         >
-          <input {...getInputProps()} className='sr-only' />
-
           {previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={previewUrl} alt='Avatar' className='h-full w-full object-cover' />
@@ -94,7 +98,7 @@ export default function AvatarUpload({
               <Plus className='size-6 text-muted-foreground' />
             </div>
           )}
-        </div>
+        </Button>
 
         {/* Remove Button - only show when file is uploaded */}
         {hasImage && (

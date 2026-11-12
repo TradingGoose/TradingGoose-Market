@@ -19,12 +19,12 @@ import {
 import { TimeZoneEditDialog } from './timezones-edit-dialog'
 import { TimeZoneRow } from './types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { buildTimeZoneColumns } from './timezones-columns'
 import { usePagination } from '@/hooks/use-pagination'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
@@ -44,7 +44,6 @@ type TimeZonesApiResponse = {
 }
 
 export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
-  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<TimeZoneRow[]>(data ?? [])
@@ -253,7 +252,7 @@ export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
   return (
     <>
       <div className='flex min-h-0 w-full flex-1 flex-col gap-4 overflow-hidden min-w-0'>
-        <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card'>
+        <Card className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden shadow-none'>
           <div className='flex flex-col gap-4 border-b p-6 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between'>
             <TableFilter column={table.getColumn('id')!} placeholder='Search time zone (ID, name, or offset/DST)' hideLabel />
             <div className='flex-1' />
@@ -266,12 +265,10 @@ export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
                 <span>Export JSON</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              {canEdit && (
-                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                  <PlusIcon className='h-4 w-4' />
-                  Add Time Zone
-                </Button>
-              )}
+              <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
+                <PlusIcon className='h-4 w-4' />
+                Add Time Zone
+              </Button>
             </div>
           </div>
           <DataTable
@@ -280,7 +277,7 @@ export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
             loadError={loadError}
             loadingMessage='Loading time zones...'
           />
-        </div>
+        </Card>
 
         <div className='flex items-center justify-between gap-3 p-0 max-sm:flex-col'>
           <p className='text-muted-foreground text-sm whitespace-nowrap' aria-live='polite'>
@@ -310,23 +307,19 @@ export function TimeZonesTable({ data, totalCount }: TimeZonesTableProps = {}) {
           />
         </div>
       </div>
-      {canEdit && (
-        <TimeZoneEditDialog
-          timeZone={editingTimeZone}
-          open={isEditorOpen}
-          onOpenChange={handleEditorOpenChange}
-          onSave={handleTimeZoneUpdated}
-        />
-      )}
-      {canEdit && (
-        <TimeZoneEditDialog
-          timeZone={null}
-          open={isCreateOpen}
-          onOpenChange={setIsCreateOpen}
-          onSave={handleTimeZoneCreated}
-          mode='create'
-        />
-      )}
+      <TimeZoneEditDialog
+        timeZone={editingTimeZone}
+        open={isEditorOpen}
+        onOpenChange={handleEditorOpenChange}
+        onSave={handleTimeZoneUpdated}
+      />
+      <TimeZoneEditDialog
+        timeZone={null}
+        open={isCreateOpen}
+        onOpenChange={setIsCreateOpen}
+        onSave={handleTimeZoneCreated}
+        mode='create'
+      />
     </>
   )
 }

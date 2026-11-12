@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 export type TimeZoneRow = {
   id: string;
@@ -49,13 +50,13 @@ export async function fetchTimeZonesFromDb(query: TimeZonesQuery) {
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offsetVal = (query.page - 1) * query.pageSize;
 
-  const [{ total }] = (await db!.execute(sql`
+  const [{ total }] = (await requireDatabase().execute(sql`
     SELECT COUNT(*)::int AS total
     FROM time_zones tz
     ${whereClause}
   `)) as { total: number }[];
 
-  const rowsFromDb = (await db!.execute(sql`
+  const rowsFromDb = (await requireDatabase().execute(sql`
     SELECT
       tz.id,
       tz.name,
@@ -79,7 +80,7 @@ export async function fetchTimeZonesFromDb(query: TimeZonesQuery) {
 }
 
 export async function fetchTimeZonesForExport() {
-  const rows = (await db!.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       tz.name,
       tz."offset" AS "offset",

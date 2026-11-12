@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 
 import { EditDialogFooter, EditDialogHeader, FormError } from '@/components/edit-dialog'
 import {
@@ -27,38 +27,37 @@ type TimeZoneFormState = {
   observesDst: boolean
 }
 
-export function TimeZoneEditDialog({
+const createTimeZoneFormState = (timeZone: TimeZoneRow | null): TimeZoneFormState => ({
+  name: timeZone?.name ?? '',
+  offset: timeZone?.offset ?? '',
+  offsetDst: timeZone?.offsetDst ?? '',
+  observesDst: timeZone?.observesDst ?? false
+})
+
+export function TimeZoneEditDialog(props: TimeZoneEditDialogProps) {
+  const { timeZone, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${timeZone?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-xl'>
+        <TimeZoneEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function TimeZoneEditDialogContent({
   timeZone,
-  open,
   onOpenChange,
   onSave,
   mode = 'edit'
 }: TimeZoneEditDialogProps) {
   const isEdit = mode === 'edit' && !!timeZone
 
-  const [formState, setFormState] = useState<TimeZoneFormState>({
-    name: '',
-    offset: '',
-    offsetDst: '',
-    observesDst: false
-  })
+  const [formState, setFormState] = useState<TimeZoneFormState>(() => createTimeZoneFormState(timeZone))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    if (timeZone) {
-      setFormState({
-        name: timeZone.name,
-        offset: timeZone.offset,
-        offsetDst: timeZone.offsetDst ?? '',
-        observesDst: timeZone.observesDst ?? false
-      })
-    } else {
-      setFormState({ name: '', offset: '', offsetDst: '', observesDst: false })
-    }
-    setError(null)
-  }, [timeZone, open])
 
   const isFormValid =
     formState.name.trim().length > 0 &&
@@ -123,8 +122,7 @@ export function TimeZoneEditDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Time Zone' : 'Add Time Zone'}
           description={isEdit ? 'Update time zone details.' : 'Create a new time zone.'}
@@ -191,7 +189,6 @@ export function TimeZoneEditDialog({
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

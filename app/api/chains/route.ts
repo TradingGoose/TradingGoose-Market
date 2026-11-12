@@ -2,12 +2,16 @@ import { NextResponse } from "next/server";
 import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchChainsFromDb, type ChainsQuery } from "./lib";
-import { apiRequireEditor } from "@/lib/auth/session";
 import { parsePositiveInt, normalizeNullableString } from "@/lib/api-utils";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 export const runtime = "nodejs";
+const routePolicy = createSystemAdminRoutePolicy("/api/chains");
 
 type ChainOptionRow = {
   id: string;
@@ -17,13 +21,10 @@ type ChainOptionRow = {
 };
 
 export async function GET(request: Request) {
+  const auth = await routePolicy.authorize(request);
+  if (auth.error) return auth.error;
+
   try {
-    if (!db) {
-      return NextResponse.json(
-        { data: [], error: "Database connection is not configured." },
-        { status: 503 }
-      );
-    }
 
     const { searchParams } = new URL(request.url);
     const pageParam = searchParams.get("page");
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
 
       const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
 
-      const rows = (await db.execute(sql`
+      const rows = (await requireDatabase().execute(sql`
         SELECT id, code, name, icon_url AS "iconUrl"
         FROM chains
         ${whereClause}
@@ -85,15 +86,9 @@ const createChainSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   let payload: z.infer<typeof createChainSchema>;
   try {
@@ -109,14 +104,19 @@ export async function POST(request: Request) {
 
   let newId: string | null = null;
   try {
-    const result = await db
+    const result = await requireDatabase()
       .insert(schema.chains)
       .values({ code, name, iconUrl })
       .returning({ id: schema.chains.id });
 
     newId = result[0]?.id ?? null;
-  } catch (error: any) {
-    if (error?.code === "23505") {
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "23505"
+    ) {
       return NextResponse.json({ error: "Chain already exists." }, { status: 409 });
     }
     const message = error instanceof Error ? error.message : "Failed to create chain.";
@@ -138,3 +138,9 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ data: createdChain }, { status: 201 });
 }
+
+export const HEAD = (request: Request) => routePolicy.head(request, GET);
+export const OPTIONS = routePolicy.options;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;

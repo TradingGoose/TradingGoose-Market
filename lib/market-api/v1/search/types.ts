@@ -57,8 +57,6 @@ export type CurrencyPair = {
   };
 };
 
-export type ListingResult = Listing;
-
 export type CurrencyRow = {
   id: string;
   code: string;

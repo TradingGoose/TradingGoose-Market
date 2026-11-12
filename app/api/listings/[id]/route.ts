@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { deleteFile, extractStorageKey } from "@uploads/core/storage-client";
 import {
   fetchListingsFromDb,
@@ -13,13 +15,15 @@ import {
   resolveMarketId,
   resolveExchIds
 } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
 import { normalizeNullableString } from "@/lib/api-utils";
-import { runAppRouteAfterWriteEnricher } from "@/lib/market-api/plugins/app-routes";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/listings/[id]");
 
 const iconUrlSchema = z.union([
   z.string().trim().url(),
-  z.string().trim().regex(/^(\/|api\/files\/core\/serve\/|icons\/)/i),
+  z.string().trim().regex(/^(\/|api\/files\/serve\/|icons\/)/i),
   z.literal(""),
   z.null()
 ]);
@@ -45,16 +49,10 @@ const updateListingSchema = z
 type UpdateListingInput = z.infer<typeof updateListingSchema>;
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
   const { id: listingId } = await params;
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   if (!listingId) {
     return NextResponse.json({ error: "Listing id is required." }, { status: 400 });
@@ -81,7 +79,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const updateData: Record<string, unknown> = {};
 
   // Load existing row (for cleanup, fall back to 404 below if not found)
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({
       iconUrl: schema.listings.iconUrl,
       base: schema.listings.base,
@@ -180,7 +178,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const nextAssetClass = (updateData.assetClass as string | undefined) ?? existingRow.assetClass;
 
   if (nextPrimaryExchId) {
-    const duplicate = (await db.execute(sql`
+    const duplicate = (await requireDatabase().execute(sql`
       SELECT id
       FROM listings
       WHERE base = ${nextBase}
@@ -204,7 +202,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.listings)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.listings.id, listingId))
@@ -214,7 +212,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       return NextResponse.json({ error: "Listing not found." }, { status: 404 });
     }
 
-  } catch (error: any) {
+  } catch (error) {
     const code = extractPgErrorCode(error);
     const constraint = extractPgConstraint(error);
     if (code === "23505" || constraint === "listings_base_quote_primary_exch_idx") {
@@ -229,7 +227,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         { status: 400 }
       );
     }
-    const message = error instanceof Error ? error.message : "Failed to update listing.";
     console.error("[listings:update] API error:", error);
     return NextResponse.json({ error: "Failed to update listing." }, { status: 500 });
   }
@@ -241,31 +238,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   });
 
   const updatedListing = refreshed.data.find((row) => row.id === listingId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "listing", updatedListing, auth.user.id);
-
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: updatedListing });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: listingId } = await params;
   if (!listingId) {
     return NextResponse.json({ error: "Listing id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ iconUrl: schema.listings.iconUrl })
     .from(schema.listings)
     .where(eq(schema.listings.id, listingId))
@@ -276,7 +265,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.listings).where(eq(schema.listings.id, listingId));
+    await requireDatabase().delete(schema.listings).where(eq(schema.listings.id, listingId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete listing.";
     console.error("[listings:delete] API error:", message);
@@ -295,3 +284,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: listingId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;

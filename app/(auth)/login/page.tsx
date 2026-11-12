@@ -1,15 +1,15 @@
-import { db, schema } from "@tradinggoose/db";
 import LoginForm from "./login-form";
+import { Suspense } from "react";
+
+import { Skeleton } from "@/components/ui/skeleton";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 
 export const dynamic = "force-dynamic";
 
-export default async function LoginPage() {
-  if (!db) {
-    throw new Error("DATABASE_POOL_URL or DATABASE_URL is not configured.");
-  }
-
-  const rows = await db.select({ id: schema.user.id }).from(schema.user).limit(1);
-  const showSignupLink = rows.length === 0;
-
-  return <LoginForm showSignupLink={showSignupLink} />;
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<Skeleton className="min-h-80" aria-hidden="true" />}>
+      <LoginForm registrationOpen={getMarketRuntimeConfig().registrationMode === "open"} />
+    </Suspense>
+  );
 }

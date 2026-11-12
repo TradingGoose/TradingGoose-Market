@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
+import {
+  createManifestMethodPolicy,
+  toExplicitHeadResponse,
+} from "@/lib/market-api/core/method-guards";
 
 const GITHUB_REPO = "TradingGoose/TradingGoose-Market";
+const methods = createManifestMethodPolicy("/api/github-stars");
 
 function formatStarCount(num: number): string {
   if (num < 1000) {
@@ -11,7 +16,7 @@ function formatStarCount(num: number): string {
   return formatted.endsWith(".0") ? `${formatted.slice(0, -2)}k` : `${formatted}k`;
 }
 
-export async function GET() {
+export async function GET(_request: Request) {
   try {
     const token = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT;
     const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}`, {
@@ -46,3 +51,10 @@ export async function GET() {
     return NextResponse.json({ stars: formatStarCount(0) });
   }
 }
+
+export const HEAD = (request: Request) => toExplicitHeadResponse(GET(request));
+export const POST = methods.POST;
+export const PUT = methods.PUT;
+export const PATCH = methods.PATCH;
+export const DELETE = methods.DELETE;
+export const OPTIONS = methods.OPTIONS;

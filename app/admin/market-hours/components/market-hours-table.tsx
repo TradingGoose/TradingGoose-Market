@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { CheckIcon, ChevronsUpDownIcon, FileTextIcon, PlusIcon, UploadIcon } from 'lucide-react'
+import { CheckIcon, ChevronsUpDownIcon, FileTextIcon, Loader2, Trash2, UploadIcon } from 'lucide-react'
 
 import type { ColumnFiltersState, PaginationState, RowData } from '@tanstack/react-table'
 import {
@@ -18,8 +18,19 @@ import {
 
 import { MarketHourRow } from './types'
 import { buildMarketHoursColumns } from './market-hours-columns'
-import { MarketHoursEditDialog } from './market-hours-edit-dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -27,9 +38,10 @@ import { DataTable } from '@/components/tables/data-table'
 import { TableFilter } from '@/components/tables/table-filter'
 import { TablePagination } from '@/components/tables/table-pagination'
 import { usePagination } from '@/hooks/use-pagination'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 declare module '@tanstack/react-table' {
+  // Type parameter names must match every declaration merged by TanStack tables.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
     filterVariant?: 'text' | 'range' | 'select'
     selectOptions?: { label: string; value: string }[]
@@ -47,7 +59,6 @@ type MarketHoursApiResponse = {
 }
 
 export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {}) {
-  const canEdit = useCanEdit()
   const isRemote = data === undefined
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [tableData, setTableData] = useState<MarketHourRow[]>(data ?? [])
@@ -63,9 +74,10 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
   const [marketLoading, setMarketLoading] = useState(false)
   const [marketError, setMarketError] = useState<string | null>(null)
   const [pageSizeOpen, setPageSizeOpen] = useState(false)
-  const [editingRow, setEditingRow] = useState<MarketHourRow | null>(null)
-  const [isEditorOpen, setIsEditorOpen] = useState(false)
-  const [isCreateOpen, setIsCreateOpen] = useState(false)
+  const [deletingRow, setDeletingRow] = useState<MarketHourRow | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const pageSize = 10
 
@@ -75,16 +87,10 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
   })
   const paginationItemsToDisplay = 10
 
-  const handleEdit = useCallback((row: MarketHourRow) => {
-    setEditingRow(row)
-    setIsEditorOpen(true)
-  }, [])
   const handleDelete = useCallback(
     async (row: MarketHourRow) => {
-      const label = row.listingBase ?? row.marketCode ?? row.marketName ?? row.id
-      if (!window.confirm(`Delete market hours for ${label}? This cannot be undone.`)) {
-        return
-      }
+      setIsDeleting(true)
+      setActionError(null)
       try {
         const response = await fetch(`/api/market-hours/${row.id}`, { method: 'DELETE' })
         if (!response.ok) {
@@ -100,33 +106,18 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
         if (isRemote && tableData.length <= 1 && pagination.pageIndex > 0) {
           setPagination(prev => ({ ...prev, pageIndex: Math.max(0, prev.pageIndex - 1) }))
         }
-        if (editingRow?.id === row.id) {
-          setEditingRow(null)
-          setIsEditorOpen(false)
-        }
+        setDeletingRow(null)
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unable to delete market hours.'
         console.error('[market-hours] delete failed:', error)
-        window.alert(message)
+        setActionError(message)
+      } finally {
+        setIsDeleting(false)
       }
     },
-    [editingRow?.id, isRemote, pagination.pageIndex, tableData.length]
+    [isRemote, pagination.pageIndex, tableData.length]
   )
-
-  const handleMarketHoursUpdated = (updated: MarketHourRow) => {
-    setTableData(prev => prev.map(row => (row.id === updated.id ? updated : row)))
-    setEditingRow(updated)
-  }
-
-  const handleMarketHoursCreated = (created: MarketHourRow) => {
-    setTableData(prev => {
-      const withoutDup = prev.filter(row => row.id !== created.id)
-      return [created, ...withoutDup]
-    })
-    setRemoteTotal(prev => prev + 1)
-    setPagination(prev => ({ ...prev, pageIndex: 0 }))
-  }
 
   const filtersKey = useMemo(
     () => columnFilters.map(filter => `${filter.id}:${String(filter.value)}`).join('|'),
@@ -271,11 +262,10 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
 
   const pageCount = isRemote ? Math.ceil(remoteTotal / pagination.pageSize) : undefined
 
-  const columns = useMemo(
-    () => buildMarketHoursColumns(handleEdit, handleDelete),
-    [handleEdit, handleDelete]
-  )
+  const columns = useMemo(() => buildMarketHoursColumns(setDeletingRow), [])
 
+  // TanStack Table intentionally returns non-memoizable functions that own the table state machine.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data: tableData,
     columns,
@@ -312,6 +302,8 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
   })
 
   const exportToJSON = async () => {
+    setIsExporting(true)
+    setActionError(null)
     try {
       const response = await fetch('/api/market-hours/export')
       if (!response.ok) {
@@ -333,6 +325,9 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
       URL.revokeObjectURL(url)
     } catch (error) {
       console.error('[market-hours] export failed:', error)
+      setActionError('Unable to export market hours right now.')
+    } finally {
+      setIsExporting(false)
     }
   }
 
@@ -341,14 +336,28 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
     totalPages: table.getPageCount(),
     paginationItemsToDisplay
   })
+  const resultCount = isRemote ? remoteTotal : table.getRowCount()
+  const visibleResultStart = resultCount === 0
+    ? 0
+    : table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1
+  const visibleResultEnd = Math.min(
+    table.getState().pagination.pageIndex * table.getState().pagination.pageSize
+      + table.getState().pagination.pageSize,
+    resultCount
+  )
 
   return (
     <>
       <div className='flex min-h-0 w-full flex-1 flex-col gap-4 overflow-hidden min-w-0'>
-        <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card'>
+        {actionError ? (
+          <Alert variant='destructive' appearance='light'>
+            <AlertDescription>{actionError}</AlertDescription>
+          </Alert>
+        ) : null}
+        <Card className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden shadow-none'>
           <div className='flex flex-col gap-4 border-b p-6 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between'>
             <TableFilter column={table.getColumn('q')!} placeholder='Search market hours (ID, market, listing, country)' hideLabel />
-            <div className='grid flex-1 grid-cols-3 gap-4 min-w-0 xs:grid-cols-3 xl:grid-cols-4 sm:items-end'>
+            <div className='grid w-full min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end xl:grid-cols-3'>
               <TableFilter
                 column={table.getColumn('countryId')!}
                 selectOptions={countryOptions}
@@ -416,18 +425,13 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
               </div>
               <Button
                 className='bg-primary/10 text-primary hover:bg-primary/20 focus-visible:ring-primary/20 dark:focus-visible:ring-primary/40'
-                onClick={exportToJSON}
+                onClick={() => void exportToJSON()}
+                disabled={isExporting || isLoading}
               >
-                <UploadIcon className='h-4 w-4' />
-                <span>Export JSON</span>
+                {isExporting ? <Loader2 className='h-4 w-4 animate-spin' /> : <UploadIcon className='h-4 w-4' />}
+                <span>{isExporting ? 'Exporting…' : 'Export JSON'}</span>
                 <FileTextIcon className='h-4 w-4 opacity-70' />
               </Button>
-              {canEdit && (
-                <Button variant='secondary' onClick={() => setIsCreateOpen(true)}>
-                  <PlusIcon className='h-4 w-4' />
-                  Add Market Hours
-                </Button>
-              )}
             </div>
           </div>
           <DataTable
@@ -435,27 +439,15 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
             isLoading={isLoading}
             loadError={loadError}
             loadingMessage='Loading market hours...'
+            emptyMessage='No market hours found.'
           />
-        </div>
+        </Card>
 
         <div className='flex items-center justify-between gap-3 p-0 max-sm:flex-col'>
           <p className='text-muted-foreground text-sm whitespace-nowrap' aria-live='polite'>
             Showing{' '}
-            <span>
-              {isRemote && remoteTotal === 0
-                ? 0
-                : table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1}{' '}
-              to{' '}
-              {Math.min(
-                Math.max(
-                  table.getState().pagination.pageIndex * table.getState().pagination.pageSize +
-                  table.getState().pagination.pageSize,
-                  0
-                ),
-                isRemote ? remoteTotal : table.getRowCount()
-              )}
-            </span>{' '}
-            of <span>{(isRemote ? remoteTotal : table.getRowCount()).toString()} entries</span>
+            <span>{visibleResultStart} to {visibleResultEnd}</span>{' '}
+            of <span>{resultCount.toString()} entries</span>
           </p>
 
           <TablePagination
@@ -466,23 +458,36 @@ export function MarketHoursTable({ data, totalCount }: MarketHoursTableProps = {
           />
         </div>
       </div>
-      {canEdit && (
-        <MarketHoursEditDialog
-          row={editingRow}
-          open={isEditorOpen}
-          onOpenChange={setIsEditorOpen}
-          onSave={handleMarketHoursUpdated}
-        />
-      )}
-      {canEdit && (
-        <MarketHoursEditDialog
-          row={null}
-          open={isCreateOpen}
-          onOpenChange={setIsCreateOpen}
-          onSave={handleMarketHoursCreated}
-          mode='create'
-        />
-      )}
+      <AlertDialog
+        open={deletingRow !== null}
+        onOpenChange={open => {
+          if (!open && !isDeleting) setDeletingRow(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete market hours?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes market hours for{' '}
+              {deletingRow?.listingBase ?? deletingRow?.marketCode ?? deletingRow?.marketName ?? 'this listing'}.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              disabled={!deletingRow || isDeleting}
+              onClick={event => {
+                event.preventDefault()
+                if (deletingRow) void handleDelete(deletingRow)
+              }}
+            >
+              {isDeleting ? <><Loader2 className='mr-2 size-4 animate-spin' />Deleting…</> : <><Trash2 className='mr-2 size-4' />Delete</>}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

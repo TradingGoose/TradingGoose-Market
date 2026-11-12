@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchChainsFromDb } from "../lib";
-import { apiRequireEditor } from "@/lib/auth/session";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/chains/[id]");
 
 const updateChainSchema = z
   .object({
@@ -26,15 +31,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: chainId } = await params;
   if (!chainId) {
@@ -59,7 +58,7 @@ export async function PATCH(
   }
 
   try {
-    const result = await db
+    const result = await requireDatabase()
       .update(schema.chains)
       .set({ ...updateData, updatedAt: sql`now()` })
       .where(eq(schema.chains.id, chainId))
@@ -89,22 +88,16 @@ export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: chainId } = await params;
   if (!chainId) {
     return NextResponse.json({ error: "Chain id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.chains.id })
     .from(schema.chains)
     .where(eq(schema.chains.id, chainId))
@@ -115,7 +108,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.chains).where(eq(schema.chains.id, chainId));
+    await requireDatabase().delete(schema.chains).where(eq(schema.chains.id, chainId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete chain.";
     console.error("[chains:delete] API error:", message);
@@ -124,3 +117,9 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: chainId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;
