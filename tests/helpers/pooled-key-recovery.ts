@@ -71,6 +71,21 @@ export async function assertPooledKeyRecovery(observer: ReturnType<typeof postgr
   };
   const createNormally = provider.createKey.getMockImplementation()!;
   const enableNormally = provider.enableKey.getMockImplementation()!;
+  // Pause the originator after a real COMMIT, with both advisory locks released.
+  function pauseAfterCommit(skipDispatch = false) {
+    const committed = gate();
+    const resume = gate();
+    const spy = vi.spyOn(db, "transaction");
+    if (skipDispatch) spy.mockImplementationOnce(transaction);
+    spy.mockImplementationOnce(async (callback, options) => {
+      spy.mockRestore();
+      const result = await transaction(callback, options);
+      committed.release();
+      await resume.promise;
+      return result;
+    });
+    return { committed: committed.promise, resume: resume.release };
+  }
   async function waitForContender() {
     await vi.waitFor(async () => {
       const rows = await observer`
@@ -165,27 +180,81 @@ export async function assertPooledKeyRecovery(observer: ReturnType<typeof postgr
     const replacement = await publicKey();
     expect(replacement.secret).not.toBe(lost.secret);
 
-    const dispatch = gate();
-    const finish = gate();
-    provider.createKey.mockImplementationOnce(async input => {
-      const key = await createNormally(input);
-      dispatch.release();
-      await finish.promise;
-      return key;
-    });
-    const first = publicKey();
-    await dispatch.promise;
-    const race = Promise.allSettled([first, publicKey()]);
-    try {
-      await waitForContender();
-      expect(await attempts()).toHaveLength(1);
-    } finally {
-      finish.release();
+    for (const issue of [publicKey, privateKey]) {
+      const createdBefore = provider.createKey.mock.calls.length;
+      const enabledBefore = provider.enableKey.mock.calls.length;
+      const deletedBefore = provider.deleteKey.mock.calls.length;
+      const dispatch = pauseAfterCommit();
+      const original = issue();
+      try {
+        await Promise.race([dispatch.committed, original]);
+        const [pending] = await attempts();
+        expect(pending.provider_key_id).toBeNull();
+        await expect(issue()).rejects.toThrow("already in progress");
+        expect(await attempts()).toEqual([pending]);
+
+        // Advance the fixture past the initial lease. The provider result
+        // must renew it before another request observes that committed ID.
+        await observer`
+          update market_api_key_creation_attempts set dispatched_at = now() - interval '2 minutes',
+            updated_at = now() - interval '2 minutes' where id = ${pending.id}
+        `;
+        const projection = pauseAfterCommit();
+        dispatch.resume();
+        try {
+          await Promise.race([projection.committed, original]);
+          const [projected] = await attempts();
+          expect(projected.id).toBe(pending.id);
+          expect(projected.updated_at.getTime() - projected.dispatched_at.getTime()).toBeGreaterThan(60_000);
+          expect(keys.get(projected.provider_key_id)?.enabled).toBe(false);
+          await expect(issue()).rejects.toThrow("already in progress");
+          expect(await attempts()).toEqual([projected]);
+        } finally {
+          projection.resume();
+        }
+      } finally {
+        dispatch.resume();
+        await Promise.allSettled([original]);
+      }
+      const issued = await original;
+      const providerId = secrets.get(issued.secret);
+      expect(keys.get(providerId!)?.enabled).toBe(true);
+      expect((await mappings()).filter(key => key.unkey_key_id === providerId)).toMatchObject([{ id: issued.key.id }]);
+      expect(provider.createKey).toHaveBeenCalledTimes(createdBefore + 1);
+      expect(provider.enableKey).toHaveBeenCalledTimes(enabledBefore + 1);
+      expect(provider.deleteKey).toHaveBeenCalledTimes(deletedBefore);
+      expect(await attempts()).toHaveLength(0);
+      await unused();
     }
-    const outcomes = await race;
-    expect(outcomes.filter(o => o.status === "fulfilled").length).toBeLessThanOrEqual(1);
-    expect(await attempts()).toHaveLength(0);
-    await unused();
+
+    // Recovery wins the lock after an originator stalls with a projected ID.
+    // Even if it resumes after replacement, it cannot enable or delete that key.
+    const stalled = pauseAfterCommit(true);
+    const stale = publicKey();
+    try {
+      await Promise.race([stalled.committed, stale]);
+      const [prior] = await attempts();
+      expect(keys.get(prior.provider_key_id)?.enabled).toBe(false);
+      await observer`
+        update market_api_key_creation_attempts set updated_at = now() - interval '61 seconds'
+        where id = ${prior.id}
+      `;
+      await expect(publicKey()).rejects.toThrow("A prior key creation was reconciled");
+      expect(await attempts()).toHaveLength(0);
+      expect(keys.has(prior.provider_key_id)).toBe(false);
+      const fresh = await publicKey();
+      const deletes = provider.deleteKey.mock.calls.length;
+      const enables = provider.enableKey.mock.calls.length;
+      stalled.resume();
+      await expect(stale).rejects.toBeInstanceOf(create.ApiKeyCreationConflict);
+      expect(provider.deleteKey).toHaveBeenCalledTimes(deletes);
+      expect(provider.enableKey).toHaveBeenCalledTimes(enables);
+      expect(keys.get(secrets.get(fresh.secret)!)?.enabled).toBe(true);
+      await unused();
+    } finally {
+      stalled.resume();
+      await Promise.allSettled([stale]);
+    }
 
     for (const isPrivate of [false, true]) {
       const issued = await (isPrivate ? privateKey() : publicKey());

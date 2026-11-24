@@ -50,6 +50,7 @@ type Attempt = typeof marketApiKeyCreationAttempts.$inferSelect;
 type AttemptInsert = typeof marketApiKeyCreationAttempts.$inferInsert;
 
 class FakeCreationDatabase {
+  readonly now = new Date("2026-01-01T12:00:00Z");
   readonly events: string[] = [];
   readonly attemptMutationParameters: unknown[][] = [];
   attempts: Attempt[] = [];
@@ -70,6 +71,11 @@ class FakeCreationDatabase {
   finalizationReady: (() => void) | null = null;
   private transactionLabel: string | null = null;
   private readonly dialect = new PgDialect();
+
+  async execute() {
+    this.requireKeyLock();
+    return [{ now: this.now.toISOString() }];
+  }
 
   select(selection?: Record<string, unknown>) {
     return {
@@ -355,7 +361,8 @@ describe("API-key creation lifecycle across committed phases", () => {
 
     const eventIndex = (event: string) => fixture.events.indexOf(event);
     const inserted = fixture.database.lastInsertedAttempt;
-    expect(inserted).not.toBeNull();
+    expect(inserted?.dispatchedAt).toEqual(fixture.database.now);
+    expect(inserted?.updatedAt).toEqual(fixture.database.now);
     expect(fixture.lockedKeyId).toBe(inserted?.reservedKeyId);
     expect(eventIndex("attempt:dispatched")).toBeLessThan(eventIndex("reservation:commit"));
     expect(eventIndex("reservation:commit")).toBeLessThan(eventIndex("provider:create"));
@@ -452,12 +459,13 @@ describe("API-key creation lifecycle across committed phases", () => {
     expect(fixture.database.attempts).toEqual([]);
   });
 
-  it("locks a prior reserved ID, cleans a lost provider response, and requires a fresh request", async () => {
+  it("protects a dispatched attempt until exactly 60 seconds of inactivity", async () => {
     fixture.database.attempts = [
       priorAttempt({
         state: "dispatched",
         reservedKeyId: "reserved_prior",
         correlationId: "correlation_prior",
+        updatedAt: new Date(fixture.database.now.getTime() - 59_999),
       }),
     ];
 
@@ -471,6 +479,13 @@ describe("API-key creation lifecycle across committed phases", () => {
 
     expect(fixture.lockedKeyId).toBe("reserved_prior");
     expect(fixture.provider.createKey).not.toHaveBeenCalled();
+    expect(mocks.deleteCandidates).not.toHaveBeenCalled();
+    expect(fixture.database.attempts).toHaveLength(1);
+
+    fixture.database.now.setTime(fixture.database.now.getTime() + 1);
+    await expect(createCustomerApiKey({
+      userId: "user_1", name: "Retry", allowance: { limitUsd: null, windowDays: null },
+    })).rejects.toThrow("A prior key creation was reconciled");
     expect(fixture.events).toContain("provider:confirm_zero:correlation_prior");
     expect(fixture.database.attempts).toEqual([]);
 

@@ -14,6 +14,7 @@ import {
   withBoundedLockAcquisition,
 } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
+import { databaseNow } from "@/lib/db/clock";
 import { deleteAndConfirmProvisioningCandidates } from "@/lib/unkey/provisioning";
 import type { CreatedProviderKey } from "@/lib/unkey/client";
 import { getMarketKeyProvider } from "@/lib/unkey/runtime";
@@ -21,6 +22,7 @@ import { getMarketRuntimeConfig } from "@/lib/environment";
 import type { CustomerKeyAllowance } from "./validation";
 
 export type ApiKeyClass = "public" | "private";
+const CREATION_LEASE_MS = 60_000;
 
 export class ApiKeyCreationConflict extends Error {
   override readonly name = "ApiKeyCreationConflict";
@@ -78,6 +80,7 @@ async function createApiKey(input: CreationInput) {
     const reservedKeyId = prior?.attempt.reservedKeyId ?? crypto.randomUUID();
     await withBoundedLockAcquisition(tx, () => acquireApiKeyLock(tx, reservedKeyId));
     const usageOwnerId = await assertCreationAdmission(tx, input);
+    const now = await databaseNow(tx);
 
     if (prior) {
       const attempt = prior.attempt;
@@ -88,6 +91,9 @@ async function createApiKey(input: CreationInput) {
         attempt.keyClass !== input.keyClass
       ) {
         throw new ApiKeyCreationConflict("A prior key creation belongs to a different owner or grant");
+      }
+      if (attempt.state === "dispatched" && now.getTime() - attempt.updatedAt.getTime() < CREATION_LEASE_MS) {
+        throw new ApiKeyCreationConflict("Key creation is already in progress. Try again later.");
       }
       return { cleanup: await reconcileCreationAttempt(tx, attempt) } as const;
     }
@@ -105,7 +111,8 @@ async function createApiKey(input: CreationInput) {
         spendLimitUsd: input.allowance.limitUsd,
         spendWindowDays: input.allowance.windowDays,
         state: "dispatched",
-        dispatchedAt: new Date(),
+        dispatchedAt: now,
+        updatedAt: now,
       })
       .returning();
     if (!attempt) throw new Error("Key creation attempt could not be recorded");
@@ -134,7 +141,7 @@ async function createApiKey(input: CreationInput) {
         .set({
           providerKeyId: created.keyId,
           providerDisplayValue: maskRawKey(created.key),
-          updatedAt: new Date(),
+          updatedAt: await databaseNow(tx),
         })
         .where(dispatchPredicate(attempt, null))
         .returning({ id: marketApiKeyCreationAttempts.id });
