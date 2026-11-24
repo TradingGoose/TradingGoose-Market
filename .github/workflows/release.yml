@@ -65,7 +65,15 @@ jobs:
           EOF
           pgbouncer -d quality-pool.ini
           export PGHOST=127.0.0.1 PGPORT=26432 PGUSER=market
-          psql -XAt -d pgbouncer -c 'show config' | grep '^pool_mode|transaction|'
+          deadline=$((SECONDS + 30))
+          until config=$(timeout 2s psql -XAtw -v ON_ERROR_STOP=1 -d pgbouncer -c 'show config'); do
+            if (( SECONDS >= deadline )); then
+              cat "$RUNNER_TEMP/quality-pool.log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q '^pool_mode|transaction|' <<< "$config" || { echo "PgBouncer must use transaction pooling" >&2; exit 1; }
           export PGDATABASE=market_quality
           for i in {1..5}; do psql -XAt -c 'select pg_sleep(0.2)' & done
           wait
