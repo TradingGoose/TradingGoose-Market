@@ -8,6 +8,7 @@ import { withBillingSubjectLock } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
 import type Stripe from "stripe";
 import { getOptionalStripeClient } from "@/lib/billing/stripe-client";
+import { getPaygActivationAttemptId, withoutPaygActivationAttemptId } from "./subscription";
 
 export type MarketCustomerState = {
   usageOwner: typeof schema.marketUsageOwner.$inferSelect;
@@ -150,9 +151,8 @@ export async function ensureStripeUserCustomer(
   const identity = await withBillingSubjectLock(
     userId,
     async (transaction) => {
-      // The billing-subject lock protects the subscription bridge. Only the
-      // user is updated here; locking joined owner rows reverses key-operation
-      // lock order and can deadlock an unrelated key/grant advisory scope.
+      // The billing-subject lock protects the subscription bridge. Locking the
+      // joined usage owner here would reverse key-operation lock order.
       const [record] = await transaction
         .select({
           user: schema.user,
@@ -225,6 +225,12 @@ export async function ensureStripeUserCustomer(
         .update(schema.user)
         .set({ stripeCustomerId: customer.id, updatedAt: new Date() })
         .where(eq(schema.user.id, userId));
+      if (staleCustomerId && getPaygActivationAttemptId(record.subscription.metadata)) {
+        // Stripe cancels the deleted Customer's subscriptions and rejects future creates on it.
+        await transaction.update(schema.subscription)
+          .set({ metadata: withoutPaygActivationAttemptId(record.subscription.metadata) })
+          .where(eq(schema.subscription.id, record.subscription.id));
+      }
       return { customer, email: record.user.email, name: record.user.name };
     },
     database
