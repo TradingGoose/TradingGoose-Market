@@ -304,11 +304,20 @@ describe("Studio-parity PAYG threshold settlement", () => {
     expect(stripe.invoiceCreate).not.toHaveBeenCalled();
     expect(transaction.updates).toEqual([]);
   });
+
+  it("skips threshold payment when a prior settlement blocked the locked accumulator", async () => {
+    const transaction = transactionFixture({ currentPeriodCost: "2", billedOverageThisPeriod: "0", billingBlocked: true });
+    await checkAndBillMarketThreshold(transaction.client, "user_1");
+    expect(transaction.selectCount()).toBe(2);
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(transaction.updates).toEqual([]);
+  });
 });
 
 function transactionFixture(costs: {
   currentPeriodCost: string;
   billedOverageThisPeriod: string;
+  billingBlocked?: boolean;
 }) {
   let selects = 0;
   const updates: Array<Record<string, unknown>> = [];
@@ -324,8 +333,7 @@ function transactionFixture(costs: {
   };
   const stats = {
     id: "stats_1",
-    currentPeriodCost: costs.currentPeriodCost,
-    billedOverageThisPeriod: costs.billedOverageThisPeriod,
+    ...costs,
     currentPeriodRequestQuantity: "1000",
   };
   const client = {

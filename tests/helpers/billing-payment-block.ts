@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import Stripe from "stripe";
 import { expect, vi } from "vitest";
+import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd } from "../../lib/billing/money";
 import { gate } from "./private-rank-order";
 import { usageStripeFixture } from "../billing/stripe-usage-fixture";
 
@@ -75,8 +76,8 @@ export async function assertBillingPaymentBlock(database: ReturnType<typeof post
     const [result] = await database<{
       billing_blocked: boolean; cost: string; billed: string; quantity: string; events: number;
     }[]>`
-      select billing_blocked, current_period_cost::text as cost,
-        billed_overage_this_period::text as billed,
+      select billing_blocked, trim_scale(current_period_cost)::text as cost,
+        trim_scale(billed_overage_this_period)::text as billed,
         current_period_request_quantity::text as quantity,
         (select count(*)::integer from market_api_usage_events where market_api_key_id = ${keyId}) as events
       from user_stats where user_id = ${userId}
@@ -84,11 +85,23 @@ export async function assertBillingPaymentBlock(database: ReturnType<typeof post
     return result;
   }
   try {
-    for (let read = 0; read < 10; read++) {
+    const read = () => access.handleKeyedMarketRoute(request(), route, handler);
+    for (let i = 0; i < 9; i++) {
       expect((await access.handleKeyedMarketRoute(request(), route, handler)).status).toBe(200);
     }
-    expect(await stats()).toMatchObject({ billing_blocked: true, quantity: "10", billed: "0", events: 10 });
-    expect(Number((await stats()).cost)).toBe(0.01);
+    const create = stripe.invoiceCreate.getMockImplementation()!;
+    const [admitted, queued] = await whileProviderPaused(database, pause => {
+      stripe.invoiceCreate.mockImplementationOnce(async (...args) => {
+        const created = await create(...args);
+        await pause();
+        return created;
+      });
+      return read();
+    }, read);
+    expect(admitted.status).toBe(200);
+    expect(queued.status).toBe(402);
+    expect(await queued.json()).toMatchObject({ code: "BILLING_REQUIRED" });
+    expect(await stats()).toMatchObject({ billing_blocked: true, quantity: "10", billed: "0", cost: "0.01", events: 10 });
     for (let read = 0; read < 3; read++) {
       const denied = await access.handleKeyedMarketRoute(request(), route, handler);
       expect(denied.status).toBe(402);
@@ -102,16 +115,38 @@ export async function assertBillingPaymentBlock(database: ReturnType<typeof post
     const delayedFailure = structuredClone(invoice);
     // The global disabled mode remains ungated and never adds billable cost.
     configSpy.mockReturnValue({ ...enabledConfig, billing: { ...enabledConfig.billing, enabled: false } });
-    expect((await access.handleKeyedMarketRoute(request(), route, handler)).status).toBe(200);
+    const { requireDatabase } = await import("../../lib/db/runtime");
+    const { acquireApiKeyLock, acquireBillingSubjectLock } = await import("../../lib/db/locks");
+    const stripeCalls = stripeSpy.mock.calls.length;
+    let blockedRead: Promise<Response> | undefined;
+    try {
+      await requireDatabase().transaction(async tx => {
+        await acquireBillingSubjectLock(tx, userId);
+        expect((await read()).status).toBe(200);
+        await acquireApiKeyLock(tx, keyId);
+        blockedRead = read();
+        let deadline: NodeJS.Timeout | undefined;
+        try {
+          const response = await Promise.race([blockedRead, new Promise<never>((_, reject) => {
+            deadline = setTimeout(() => reject(new Error("Disabled read exceeded the key lock timeout")), 8_000);
+          })]);
+          expect(response.status).toBe(503);
+          expect(await response.json()).toMatchObject({ code: "ADMISSION_UNAVAILABLE" });
+        } finally {
+          clearTimeout(deadline);
+        }
+      });
+    } finally {
+      await blockedRead;
+    }
+    expect(stripeSpy).toHaveBeenCalledTimes(stripeCalls);
     expect(await stats()).toMatchObject({ billing_blocked: true, quantity: "10", events: 11 });
     configSpy.mockReturnValue(enabledConfig);
     await stripe.payInvoice(invoice.id, { payment_method: "pm_repaired" });
     await invoices.handleMarketUsageInvoicePayment(stripe.client, structuredClone(invoice));
     expect((await stats()).billing_blocked).toBe(false);
     expect((await access.handleKeyedMarketRoute(request(), route, handler)).status).toBe(200);
-    expect(await stats()).toMatchObject({ billing_blocked: false, quantity: "11", events: 12 });
-    expect(Number((await stats()).billed)).toBe(0.01);
-    expect(Number((await stats()).cost)).toBe(0.011);
+    expect(await stats()).toMatchObject({ billing_blocked: false, quantity: "11", billed: "0.01", cost: "0.011", events: 12 });
     expect(stripe.charges).toEqual([1]);
     // A delayed failure delivery rereads the paid invoice.
     await invoices.handleMarketUsageInvoicePayment(stripe.client, delayedFailure);
@@ -127,7 +162,6 @@ export async function assertBillingPaymentBlock(database: ReturnType<typeof post
 
     stripe.invoices.delete(otherDebt.id);
     await invoices.handleMarketUsageInvoicePayment(stripe.client, delayedFailure);
-    const read = () => access.handleKeyedMarketRoute(request(), route, handler);
     const setRate = (rate: string, cost: bigint, threshold = "0.01") => configSpy.mockReturnValue({
       ...enabledConfig,
       billing: { ...enabledConfig.billing, invoiceThresholdUsd: threshold, usdPer1000Reads: rate, requestNanoUsd: cost },
@@ -162,12 +196,69 @@ export async function assertBillingPaymentBlock(database: ReturnType<typeof post
       expect((await read()).status).toBe(200);
       const recovered = await stats();
       expect(recovered.events).toBe(failed.events + 1);
-      expect(Number(recovered.billed)).toBe(Number(failed.cost));
+      expect(recovered.billed).toBe(failed.cost);
       expect(stripe.invoices.size).toBe(count + 1);
       expect(stripe.items).toHaveLength(count + 1);
       expect(stripe.charges).toHaveLength(count + 1);
     }
 
+    // Queue the second read before the first admission releases the subject lock.
+    setRate("10", 10_000_000n);
+    const db = requireDatabase();
+    const transaction = db.transaction.bind(db);
+    const transactionSpy = vi.spyOn(db, "transaction");
+    const secondFinished = gate();
+    try {
+      const before = await stats();
+      const payments = stripe.payInvoice.mock.calls.length;
+      const invoiceCount = stripe.invoices.size;
+      const handled = handler.mock.calls.length;
+      let atDecline: Awaited<ReturnType<typeof stats>> | undefined;
+      stripe.payInvoice.mockImplementationOnce(async () => {
+        atDecline = await stats();
+        throw new Stripe.errors.StripeCardError({
+          type: "card_error", code: "card_declined", message: "Your card was declined",
+        });
+      });
+      const [first, contender] = await whileProviderPaused(database, pause => {
+        transactionSpy.mockImplementationOnce(async (callback, options) => {
+          const admission = await transaction(async tx => {
+            const result = await callback(tx);
+            await pause();
+            return result;
+          }, options);
+          // The first admission has committed. Let the queued reader admit and settle first.
+          await secondFinished.promise;
+          return admission;
+        });
+        return read();
+      }, () => read().finally(secondFinished.release));
+      const bothAdmitted = {
+        billing_blocked: false, billed: before.billed,
+        events: before.events + 2, quantity: String(BigInt(before.quantity) + 2n),
+        cost: nanoUsdToDecimalUsd(decimalUsdToNanoUsd(before.cost) + 20_000_000n),
+      };
+      expect(atDecline).toEqual(bothAdmitted);
+      expect([first.status, contender.status]).toEqual([200, 200]);
+      expect(handler).toHaveBeenCalledTimes(handled + 2);
+      const blocked = await stats();
+      expect(blocked).toEqual({ ...bothAdmitted, billing_blocked: true });
+      const later = await read();
+      expect(later.status).toBe(402);
+      expect(await later.json()).toMatchObject({ code: "BILLING_REQUIRED" });
+      expect(await stats()).toEqual(blocked);
+      expect(handler).toHaveBeenCalledTimes(handled + 2);
+      expect(stripe.payInvoice).toHaveBeenCalledTimes(payments + 1);
+      expect(stripe.invoices.size).toBe(invoiceCount + 1);
+      const open = [...stripe.invoices.values()].filter(candidate => candidate.status === "open");
+      expect(open).toHaveLength(1);
+      await stripe.payInvoice(open[0].id, { payment_method: "pm_repaired" });
+      await invoices.handleMarketUsageInvoicePayment(stripe.client, open[0]);
+      expect((await stats()).billing_blocked).toBe(false);
+    } finally {
+      secondFinished.release();
+      transactionSpy.mockRestore();
+    }
     setRate("1000", 1_000_000_000n, "99999");
     await assertSpendConcurrency(database, userId, customer.usageOwner.id);
 
@@ -206,7 +297,9 @@ export async function assertBillingPaymentBlock(database: ReturnType<typeof post
             return pay(...args);
           });
         }
-        return Promise.all([deliver(), deliver()]);
+        return Promise.allSettled([deliver(), deliver()]).then(results => {
+          for (const result of results) if (result.status === "rejected") throw result.reason;
+        });
       }, 2);
       expect(admitted.status).toBe(200);
       expect(stripe.invoices.size).toBe(before + 1);
@@ -245,10 +338,11 @@ async function whileProviderPaused<T, U>(
   try {
     await Promise.race([entered.promise, first.then(() => { throw new Error("Request missed its provider barrier"); })]);
     second = contend();
-    await vi.waitFor(async () => {
-      const [{ count }] = await database`select count(*)::int as count from pg_stat_activity
-        where datname = current_database() and wait_event = 'advisory'`;
-      expect(count).toBe(waiters);
+    const early = second.then(() => { throw new Error("Contender finished before reaching the lock"); });
+    await vi.waitUntil(async () => {
+      const [{ count }] = await Promise.race([early, database`select count(*)::int as count from pg_stat_activity
+        where datname = current_database() and wait_event = 'advisory'`]);
+      return count === waiters;
     }, { timeout: 4_000 });
   } finally {
     resume.release();
@@ -312,7 +406,7 @@ async function assertSpendConcurrency(database: ReturnType<typeof postgres>, use
     keyId, userId, expectedRevision: revision, allowance: { limitUsd: limit, windowDays: 1 },
   });
   async function totals() {
-    const [row] = await database`select count(e.id)::int as events, coalesce(sum(e.billable_cost_usd), 0)::int as cost,
+    const [row] = await database`select count(e.id)::int as events, trim_scale(coalesce(sum(e.billable_cost_usd), 0))::text as cost,
       k.provider_remaining_units, k.spend_limit_revision as revision, k.provider_observed_revision as observed,
       k.provider_decision as decision, stats.total_request_quantity::int - ${baseline} as accrued
       from market_api_keys k join user_stats stats on stats.user_id = k.user_id
@@ -323,28 +417,28 @@ async function assertSpendConcurrency(database: ReturnType<typeof postgres>, use
   try {
     const [winner, denied] = await whileProviderPaused(database, heldRead, read);
     expect([winner.status, denied.status]).toEqual([200, 429]);
-    expect(await totals()).toMatchObject({ cost: 1, events: 1, accrued: 1, observed: 1, revision: 1,
+    expect(await totals()).toMatchObject({ cost: "1", events: 1, accrued: 1, observed: 1, revision: 1,
       provider_remaining_units: "0", decision: "rate_limited" });
 
     // Unkey's window resets between the probe and consume. The exact ledger is still full.
     resetDuringConsume = true;
     expect((await read()).status).toBe(429);
-    expect(await totals()).toMatchObject({ cost: 1, events: 1, accrued: 1, decision: "allowed" });
+    expect(await totals()).toMatchObject({ cost: "1", events: 1, accrued: 1, decision: "allowed" });
     await edit(1, "2");
     const [last] = await whileProviderPaused(database, heldRead, () => edit(2, "3"));
     expect(last.status).toBe(200);
-    expect(await totals()).toMatchObject({ cost: 2, events: 2, accrued: 2, observed: 2, revision: 3 });
+    expect(await totals()).toMatchObject({ cost: "2", events: 2, accrued: 2, observed: 2, revision: 3 });
     loseReply = true;
     expect((await read()).status).toBe(503);
     expect(consumed).toBe(3_000_000_000);
     expect((await read()).status).toBe(429);
-    expect(await totals()).toMatchObject({ cost: 2, events: 2, accrued: 2, observed: 3, provider_remaining_units: "0" });
+    expect(await totals()).toMatchObject({ cost: "2", events: 2, accrued: 2, observed: 3, provider_remaining_units: "0" });
     await edit(3, "4");
     const [accepted, revoked] = await whileProviderPaused(database, heldRead, () => revocation.revokeCustomerApiKey(userId, keyId));
     expect(accepted.status).toBe(200);
     expect(revoked.status).toBe("revoked");
     expect((await read()).status).toBe(403);
-    expect(await totals()).toMatchObject({ cost: 3, events: 3, accrued: 3, observed: 4, revision: 4 });
+    expect(await totals()).toMatchObject({ cost: "3", events: 3, accrued: 3, observed: 4, revision: 4 });
     expect(handler).toHaveBeenCalledTimes(3);
   } finally {
     spy.mockReturnValue(prior);

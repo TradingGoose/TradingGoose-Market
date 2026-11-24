@@ -606,12 +606,17 @@ describe("exclusive Market API actors", () => {
       unkey: { anonymous: null },
     };
     const usageConditions: SQL[] = [];
+    const clock = new Date(now);
+    const approvedAt = new Date(clock.getTime() + 2_000);
+    const admission = vi.fn();
     accessState.database = publicAdmissionDatabase({
       emailVerified: true,
       ownerUserId: "user_1",
       spendLimitUsd: "1",
       spendWindowDays: 1,
-      now: new Date(now),
+      now: clock,
+      rollingCost: () => clock < approvedAt ? "1" : "0",
+      onAdmission: admission,
       usageConditions,
     });
     const providerCalls: Array<{ cost: number; duration: number }> = [];
@@ -620,6 +625,7 @@ describe("exclusive Market API actors", () => {
     }) => {
       const ratelimit = input.ratelimit;
       if (ratelimit) providerCalls.push(ratelimit);
+      if (ratelimit?.cost) clock.setTime(approvedAt.getTime());
       return {
         valid: true,
         code: "VALID",
@@ -627,7 +633,7 @@ describe("exclusive Market API actors", () => {
         permissions: ["market.public"],
         ratelimits: ratelimit ? [{
           ...ratelimit,
-          remaining: ratelimit.limit - ratelimit.cost,
+          remaining: ratelimit.cost === 0 ? 0 : ratelimit.limit - ratelimit.cost,
           reset: new Date(now).getTime() + ratelimit.duration,
           autoApply: false,
           exceeded: false,
@@ -646,12 +652,13 @@ describe("exclusive Market API actors", () => {
     expect(response.status).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
     const dialect = new PgDialect();
-    expect(usageConditions).toHaveLength(1);
-    for (const condition of usageConditions) {
-      const query = dialect.sqlToQuery(condition);
-      expect(query.params).toEqual(["local_public", cutoff]);
-      expect(query.sql).not.toMatch(/interval/i);
-    }
+    const cutoffs = usageConditions.map(condition => dialect.sqlToQuery(condition));
+    expect(cutoffs.map(query => query.params)).toEqual([
+      ["local_public", cutoff],
+      ["local_public", new Date(approvedAt.getTime() - 86_400_000).toISOString()],
+    ]);
+    for (const query of cutoffs) expect(query.sql).not.toMatch(/interval/i);
+    expect(admission).toHaveBeenCalledWith(approvedAt);
     expect(providerCalls.map(({ cost, duration }) => ({ cost, duration }))).toEqual([
       { cost: 0, duration: 86_400_000 },
       { cost: 1_000_000, duration: 86_400_000 },
@@ -805,6 +812,8 @@ function publicAdmissionDatabase(input: {
   spendWindowDays?: number;
   now?: Date;
   usageConditions?: SQL[];
+  rollingCost?: () => string;
+  onAdmission?: (admittedAt: Date) => void;
   billingBlocked?: { value: boolean };
 }) {
   const key = {
@@ -857,7 +866,7 @@ function publicAdmissionDatabase(input: {
               }];
             }
             if (table === marketApiUsageCompletion) return [];
-            if (table === marketApiUsageEvent) return [{ cost: "0" }];
+            if (table === marketApiUsageEvent) return [{ cost: input.rollingCost?.() ?? "0" }];
             throw new Error("Unexpected public admission select table");
           };
           const builder = {
@@ -891,6 +900,7 @@ function publicAdmissionDatabase(input: {
             return Promise.reject(new Error("Unexpected public admission insert table"))
               .then(resolve, reject);
           }
+          if (table === marketApiUsageEvent) input.onAdmission?.(values.admittedAt as Date);
           return Promise.resolve(undefined).then(resolve, reject);
         },
       };

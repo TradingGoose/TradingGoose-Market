@@ -33,6 +33,7 @@ import {
   exactRequiredProviderUnits,
   probeSpendLimit,
   providerCostForRequest,
+  type SpendLimitCodec,
 } from "@/lib/unkey/spend-limit";
 import { parseMarketAppAttribution } from "@/lib/usage/attribution";
 import { completeUsageWithoutChangingResponse } from "@/lib/usage/completion";
@@ -268,19 +269,23 @@ async function admitPublicRequest(input: {
 
   const billed = config.billing.enabled;
   const admitted = await database.transaction(async (tx) => {
-    if (billed) {
-      await withBoundedLockAcquisition(tx, async () => {
-        await acquireBillingSubjectLock(tx, userId);
-        await acquireApiKeyLock(tx, input.keyId);
-      });
-    } else {
+    await withBoundedLockAcquisition(tx, async () => {
+      if (billed) await acquireBillingSubjectLock(tx, userId);
       await acquireApiKeyLock(tx, input.keyId);
-    }
+    });
     const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId, billed);
-    const admittedAt = await databaseNow(tx);
-    if (billed && row.key.spendLimitUsd && row.key.spendWindowDays) {
-      const denial = await enforceProviderSpendWindow(tx, row.key, input.rawKey, admittedAt);
+    const cap = billed && row.key.spendLimitUsd && row.key.spendWindowDays
+      ? createSpendLimitCodec(row.key.spendLimitUsd, row.key.spendWindowDays) : null;
+    if (cap) {
+      const denial = await enforceProviderSpendWindow(tx, row.key, input.rawKey, cap);
       if (denial) return { response: denial };
+    }
+    const admittedAt = await databaseNow(tx);
+    if (cap) {
+      const spent = await rollingSpend(tx, input.keyId, admittedAt, cap.duration);
+      if (spent + config.billing.requestNanoUsd > cap.limitNanoUsd) {
+        return { response: jsonError("API key spend limit exceeded", 429, "API_KEY_SPEND_LIMIT_EXCEEDED") };
+      }
     }
     const actor = actorFromKey(row.key);
     const eventId = await insertMarketUsageAdmission({
@@ -386,15 +391,13 @@ async function reloadAuthorizedPublicKey(
   return row;
 }
 
-async function enforceProviderSpendWindow(
+async function rollingSpend(
   tx: MarketTransaction,
-  key: typeof marketApiKeys.$inferSelect,
-  rawKey: string,
-  admittedAt: Date,
-): Promise<Response | null> {
-  const config = getMarketRuntimeConfig();
-  const codec = createSpendLimitCodec(key.spendLimitUsd!, key.spendWindowDays!);
-  const cutoff = new Date(admittedAt.getTime() - codec.duration);
+  keyId: string,
+  at: Date,
+  duration: number,
+) {
+  const cutoff = new Date(at.getTime() - duration);
   const totals = await tx
     .select({
       cost: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)`,
@@ -402,11 +405,21 @@ async function enforceProviderSpendWindow(
     .from(marketApiUsageEvent)
     .where(
       and(
-        eq(marketApiUsageEvent.marketApiKeyId, key.id),
+        eq(marketApiUsageEvent.marketApiKeyId, keyId),
         gte(marketApiUsageEvent.admittedAt, cutoff),
       ),
     );
-  const exactRollingNanoUsd = decimalUsdToNanoUsd(totals[0]?.cost ?? "0");
+  return decimalUsdToNanoUsd(totals[0]?.cost ?? "0");
+}
+
+async function enforceProviderSpendWindow(
+  tx: MarketTransaction,
+  key: typeof marketApiKeys.$inferSelect,
+  rawKey: string,
+  codec: SpendLimitCodec,
+): Promise<Response | null> {
+  const config = getMarketRuntimeConfig();
+  const exactRollingNanoUsd = await rollingSpend(tx, key.id, await databaseNow(tx), codec.duration);
   const provider = getMarketKeyProvider();
   let observation;
   try {
@@ -459,9 +472,6 @@ async function enforceProviderSpendWindow(
     );
   }
 
-  if (exactRollingNanoUsd + config.billing.requestNanoUsd > codec.limitNanoUsd) {
-    return jsonError("API key spend limit exceeded", 429, "API_KEY_SPEND_LIMIT_EXCEEDED");
-  }
   return null;
 }
 

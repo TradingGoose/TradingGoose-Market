@@ -326,6 +326,7 @@ export async function checkAndBillMarketThreshold(
     .limit(1);
   const stats = statsRows[0];
   if (!stats) throw new Error("PAYG usage accumulator is missing");
+  if (stats.billingBlocked) return;
 
   const currentNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
   const storedBilledNano = decimalUsdToNanoUsd(stats.billedOverageThisPeriod);
