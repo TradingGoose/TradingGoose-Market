@@ -671,12 +671,13 @@ describe("exclusive Market API actors", () => {
   it("redacts malformed verification and initial mapping failures", async () => {
     accessState.provider.verifyKey = vi.fn(async () => null);
     const route = resolveKeyedMarketRoute("/api/get/timezone")!;
+    const handler = vi.fn();
     const malformed = await handleKeyedMarketRoute(
       new Request("https://market.example.com/api/get/timezone?version=v1", {
         headers: { "x-api-key": "tg_malformed" },
       }),
       route,
-      vi.fn(),
+      handler,
     );
     expect(malformed.status).toBe(503);
     expect(await malformed.json()).toMatchObject({ code: "KEY_SERVICE_UNAVAILABLE" });
@@ -698,13 +699,14 @@ describe("exclusive Market API actors", () => {
         headers: { "x-api-key": "tg_mapping" },
       }),
       route,
-      vi.fn(),
+      handler,
     );
     expect(mappingFailure.status).toBe(503);
     expect(await mappingFailure.json()).toEqual({
       error: "API request admission is temporarily unavailable",
       code: "ADMISSION_UNAVAILABLE",
     });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it.each([
