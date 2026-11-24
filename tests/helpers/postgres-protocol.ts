@@ -65,6 +65,7 @@ function dataRow(row: Array<string | null>) {
 /** Minimal wire server: tests exercise the installed Postgres.js/Drizzle drivers. */
 export async function createPostgresProtocolFixture(
   respond: (query: PostgresFixtureQuery) => PostgresFixtureResult | Promise<PostgresFixtureResult>,
+  port = 0,
 ) {
   let nextConnectionId = 0;
   const sockets = new Set<Socket>();
@@ -168,7 +169,13 @@ export async function createPostgresProtocolFixture(
     socket.on("close", () => sockets.delete(socket));
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Fixture port was not assigned");
 

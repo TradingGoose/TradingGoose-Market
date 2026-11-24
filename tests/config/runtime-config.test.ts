@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMarketRuntimeConfig } from "../../lib/environment";
+import { createPostgresProtocolFixture } from "../helpers/postgres-protocol";
 
 function validEnvironment(
   overrides: Record<string, string | undefined> = {}
@@ -25,6 +26,50 @@ function validEnvironment(
   }
   return environment;
 }
+
+describe("Market runtime registration", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    const originalEnvironment = process.env;
+    process.env = validEnvironment({ NEXT_RUNTIME: "nodejs" });
+    return () => { process.env = originalEnvironment; };
+  });
+
+  it("propagates the Postgres.js URL validation error", async () => {
+    process.env.DATABASE_URL = "postgres://market:%GG@localhost:5432/market";
+    const { register } = await import("../../instrumentation");
+    await expect(register()).rejects.toThrow(URIError);
+  });
+
+  it("registers after a configuration error is corrected in the same process", async () => {
+    process.env.REGISTRATION_MODE = "closed";
+    const { register } = await import("../../instrumentation");
+    await expect(register()).rejects.toThrow('REGISTRATION_MODE must be exactly "open" or "close".');
+
+    process.env.REGISTRATION_MODE = "close";
+    await expect(register()).resolves.toBeUndefined();
+  });
+
+  it("registers without opening a connection or issuing SQL", async () => {
+    const fixture = await createPostgresProtocolFixture(() => ({}));
+    try {
+      process.env.DATABASE_URL = fixture.url;
+      const { register } = await import("../../instrumentation");
+      await expect(register()).resolves.toBeUndefined();
+      expect(fixture.connectionCount()).toBe(0);
+      expect(fixture.queries).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("skips Node configuration outside the Node runtime", async () => {
+    process.env.NEXT_RUNTIME = "edge";
+    delete process.env.DATABASE_URL;
+    const { register } = await import("../../instrumentation");
+    await expect(register()).resolves.toBeUndefined();
+  });
+});
 
 describe("getMarketRuntimeConfig", () => {
   it("parses the disabled, unlimited-anonymous baseline exactly", () => {

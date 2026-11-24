@@ -196,7 +196,8 @@ describe("release workflow contract", () => {
     expect(harness).toContain('await rm(NEXT_BUILD_DIRECTORY, { recursive: true, force: true');
     expect(harness).toContain('await runCommand("bun", ["run", "build"]');
     expect(harness).toContain('"node_modules/next/dist/bin/next", "start"');
-    expect(harness).toContain('request(target, "/api/health", "GET")');
+    expect(harness).toContain('path: "/api/health" | "/login" = "/api/health"');
+    expect(harness).toContain('await waitForReadiness(target, server, "/login")');
     expect(harness).toContain('appUrl.protocol === "https:"');
     expect(harness).toContain('serverOrigin.protocol = "http:"');
     expect(harness).toContain('serverOrigin.hostname = "127.0.0.1"');
@@ -235,7 +236,9 @@ describe("release workflow contract", () => {
     expect(harness).toContain("for (const descriptor of MARKET_API_ROUTE_MANIFEST)");
     expect(harness).toMatch(/try \{[\s\S]*smokeExactManifest[\s\S]*\} finally \{\n\s+await terminateServer/u);
     expect(harness).toContain("export async function runMarketReleaseValidationMatrix");
-    expect(harness).toContain("void runMarketReleaseValidationMatrix().catch");
+    expect(harness).toContain('runMarketReleaseValidationMatrix(process.argv.includes("--startup-recovery"))');
+    expect(harness).toContain("if (!startupRecoveryOnly) await runMode(target, environment, mode)");
+    expect(harness).toMatch(/if \(mode\.registrationMode === "close" && !mode\.billingEnabled\) \{\s+await smokeStartupRecovery\(target, environment\)/u);
     expect(harness).not.toContain("db:migrate");
   });
 

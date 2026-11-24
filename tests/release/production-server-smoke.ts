@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -10,6 +11,7 @@ import {
   type MarketApiMethod,
   type MarketRouteDescriptor,
 } from "../../lib/market-api/core/manifest";
+import { createPostgresProtocolFixture, type PostgresFixtureQuery } from "../helpers/postgres-protocol";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const NEXT_BUILD_DIRECTORY = resolve(PROJECT_ROOT, ".next");
@@ -65,7 +67,7 @@ type RunningServer = {
 
 type SmokeTarget = {
   publicOrigin: URL;
-  serverOrigin: string;
+  serverOrigin: URL;
 };
 
 type SmokeRequestOptions = {
@@ -164,16 +166,15 @@ async function runCommand(
 
 function startProductionServer(
   environment: NodeJS.ProcessEnv,
-  hostname: string,
-  port: number,
+  { hostname, port }: URL,
 ): RunningServer {
   let output = "";
   const child = spawn(
     "bun",
-    ["node_modules/next/dist/bin/next", "start", "-H", hostname, "-p", String(port)],
+    ["node_modules/next/dist/bin/next", "start", "-H", hostname, "-p", port],
     {
       cwd: PROJECT_ROOT,
-      env: { ...environment, PORT: String(port) },
+      env: { ...environment, PORT: port },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -237,7 +238,11 @@ async function request(
   });
 }
 
-async function waitForReadiness(target: SmokeTarget, server: RunningServer): Promise<void> {
+async function waitForReadiness(
+  target: SmokeTarget,
+  server: RunningServer,
+  path: "/api/health" | "/login" = "/api/health",
+): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   let lastFailure = "no response";
   while (Date.now() < deadline) {
@@ -246,7 +251,8 @@ async function waitForReadiness(target: SmokeTarget, server: RunningServer): Pro
       `Production server exited before readiness.\n${server.output()}`,
     );
     try {
-      const response = await request(target, "/api/health", "GET");
+      const response = await request(target, path, "GET");
+      if (path === "/login" && response.status === 200) return;
       if (response.status === 200 && response.headers.get("x-market-api") === "next") {
         const payload = (await response.json()) as { status?: unknown; service?: unknown };
         if (payload.status === "ok" && payload.service === "tradinggoose-market") return;
@@ -307,6 +313,20 @@ async function smokeCanonicalRedirect(target: SmokeTarget): Promise<void> {
   invariant(!canonical.headers.has("location"), "Canonical proxied UI request redirected to itself.");
 }
 
+async function smokePrivateWithoutKey(target: SmokeTarget): Promise<void> {
+  const privateWithoutKey = await request(
+    target,
+    "/api/update/crypto-rank?version=v1",
+    "POST",
+    { body: "{}", headers: { "content-type": "application/json" } },
+  );
+  invariant(privateWithoutKey.status === 401, `Private owner returned ${privateWithoutKey.status}.`);
+  invariant(
+    (await privateWithoutKey.json() as { code?: unknown }).code === "API_KEY_REQUIRED",
+    "Private owner did not return the canonical missing-key response.",
+  );
+}
+
 async function smokeAllowedOwners(target: SmokeTarget): Promise<void> {
   for (const descriptor of MARKET_API_ROUTE_MANIFEST.filter(
     (candidate): candidate is Extract<MarketRouteDescriptor, { keyed: true }> => candidate.keyed,
@@ -361,17 +381,7 @@ async function smokeAllowedOwners(target: SmokeTarget): Promise<void> {
     invariant(!anonymousRead.headers.has(header), `Unlimited anonymous read exposed ${header}.`);
   }
 
-  const privateWithoutKey = await request(
-    target,
-    "/api/update/crypto-rank?version=v1",
-    "POST",
-    { body: "{}", headers: { "content-type": "application/json" } },
-  );
-  invariant(privateWithoutKey.status === 401, `Private owner returned ${privateWithoutKey.status}.`);
-  invariant(
-    (await privateWithoutKey.json() as { code?: unknown }).code === "API_KEY_REQUIRED",
-    "Private owner did not return the canonical missing-key response.",
-  );
+  await smokePrivateWithoutKey(target);
 
   for (const path of ["/api/account/billing", "/api/admin/api-keys"]) {
     const response = await request(target, path, "GET");
@@ -446,14 +456,7 @@ async function smokeRetainedOwners(
     `Unauthenticated account shell returned ${account.status} instead of a redirect.`,
   );
 
-  for (const path of ["/api/health", "/health"]) {
-    const response = await request(target, path, "GET");
-    invariant(response.status === 200, `Support owner ${path} returned ${response.status}.`);
-    invariant(
-      response.headers.get("x-market-api") === "next",
-      `Support owner ${path} did not return the Market ownership header.`,
-    );
-  }
+  await smokeHealth(target, 200);
 }
 
 async function smokeRegistrationPolicy(
@@ -516,24 +519,83 @@ async function smokeRemovedOwners(target: SmokeTarget): Promise<void> {
   }
 }
 
+function isHealthProbe({ sql }: PostgresFixtureQuery): boolean {
+  return sql.trim().replace(/\s+/gu, " ") ===
+    'select 1 from "user", "system_admin", "market_usage_owner", "subscription", "user_stats", "market_api_keys", "market_api_usage_events" where false';
+}
+
+async function smokeHealth(
+  target: SmokeTarget,
+  status: 200 | 503,
+  fixture?: Awaited<ReturnType<typeof createPostgresProtocolFixture>>,
+): Promise<void> {
+  const body = status === 200
+    ? { status: "ok", service: "tradinggoose-market", runtime: "nodejs" }
+    : { status: "unavailable" };
+  let requests = 0;
+  for (const path of ["/api/health", "/health"]) {
+    for (const method of ["GET", "HEAD"]) {
+      const response = await request(target, path, method);
+      const label = `${method} ${path}`;
+      invariant(response.status === status, `${label} returned ${response.status}, expected ${status}.`);
+      invariant(response.headers.get("x-market-api") === "next", `${label} lost its ownership header.`);
+      invariant(response.headers.get("cache-control") === "no-store", `${label} must disable caching.`);
+      invariant(response.headers.get("content-type")?.includes("application/json"), `${label} must serve JSON.`);
+      if (method === "HEAD") invariant(await response.text() === "", `${label} must have an empty body.`);
+      else deepStrictEqual(await response.json(), body, `${label} readiness body`);
+      if (fixture) {
+        requests++;
+        const executions = fixture.queries.filter(isHealthProbe).length;
+        invariant(executions === requests, `${label}: ${executions} schema probes for ${requests} requests.`);
+      }
+    }
+  }
+}
+
+async function smokeStartupRecovery(target: SmokeTarget, environment: NodeJS.ProcessEnv): Promise<void> {
+  const offline = await createPostgresProtocolFixture(() => ({}));
+  await offline.close();
+  const server = startProductionServer({ ...environment, DATABASE_URL: offline.url }, target.serverOrigin);
+  const pid = server.child.pid;
+  try {
+    await waitForReadiness(target, server, "/login");
+    await smokeHealth(target, 503);
+    await smokePrivateWithoutKey(target);
+
+    const fixture = await createPostgresProtocolFixture(
+      (query) => isHealthProbe(query) || query.sql.includes("from pg_catalog.pg_type")
+        ? { rows: [] }
+        : { error: "Unexpected recovery smoke query" },
+      Number(new URL(offline.url).port),
+    );
+    try {
+      await smokeHealth(target, 200, fixture);
+      invariant(
+        pid && server.child.pid === pid && server.child.exitCode === null && server.child.signalCode === null,
+        `Production server exited during recovery.\n${server.output()}`,
+      );
+      console.log(
+        `Startup recovery (PID ${pid}): /login 200, both health paths GET/HEAD 503, keyless POST 401, ` +
+        `both health paths GET/HEAD 200, ${fixture.queries.filter(isHealthProbe).length} recovered schema probes.`,
+      );
+    } finally {
+      await fixture.close();
+    }
+  } finally {
+    await terminateServer(server);
+  }
+}
+
 async function runMode(
-  base: ReleaseBaseEnvironment,
+  target: SmokeTarget,
+  environment: NodeJS.ProcessEnv,
   mode: (typeof MARKET_RELEASE_MODES)[number],
 ): Promise<void> {
-  const environment = createModeEnvironment(base, mode);
-  const publicOrigin = new URL(base.NEXT_PUBLIC_APP_URL);
-  const serverOrigin = new URL(publicOrigin);
-  serverOrigin.protocol = "http:";
-  serverOrigin.hostname = "127.0.0.1";
-  const port = Number(serverOrigin.port);
-  invariant(Number.isSafeInteger(port) && port > 0, "Release validation port is invalid.");
-
   await rm(NEXT_BUILD_DIRECTORY, { recursive: true, force: true, maxRetries: 3 });
   const label = `${mode.registrationMode}/${mode.billingEnabled ? "billing-enabled" : "billing-disabled"}`;
   await runCommand("bun", ["run", "build"], environment, `Production build (${label})`);
 
-  const server = startProductionServer(environment, serverOrigin.hostname, port);
-  const target = { publicOrigin, serverOrigin: serverOrigin.origin };
+  const server = startProductionServer(environment, target.serverOrigin);
   try {
     await waitForReadiness(target, server);
     await smokeCanonicalRedirect(target);
@@ -547,14 +609,27 @@ async function runMode(
   }
 }
 
-export async function runMarketReleaseValidationMatrix(): Promise<void> {
+export async function runMarketReleaseValidationMatrix(startupRecoveryOnly = false): Promise<void> {
   const base = requireBaseEnvironment(process.env);
-  for (const mode of MARKET_RELEASE_MODES) await runMode(base, mode);
+  const publicOrigin = new URL(base.NEXT_PUBLIC_APP_URL);
+  const serverOrigin = new URL(publicOrigin);
+  serverOrigin.protocol = "http:";
+  serverOrigin.hostname = "127.0.0.1";
+  const port = Number(serverOrigin.port);
+  invariant(Number.isSafeInteger(port) && port > 0, "Release validation port is invalid.");
+  const target = { publicOrigin, serverOrigin };
+  for (const mode of MARKET_RELEASE_MODES) {
+    const environment = createModeEnvironment(base, mode);
+    if (!startupRecoveryOnly) await runMode(target, environment, mode);
+    if (mode.registrationMode === "close" && !mode.billingEnabled) {
+      await smokeStartupRecovery(target, environment);
+    }
+  }
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  void runMarketReleaseValidationMatrix().catch((error: unknown) => {
+  void runMarketReleaseValidationMatrix(process.argv.includes("--startup-recovery")).catch((error: unknown) => {
     console.error(error instanceof Error ? error.stack ?? error.message : "Release validation failed.");
     process.exitCode = 1;
   });
