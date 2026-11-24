@@ -40,6 +40,7 @@ export function withPaygActivationAttemptId(
     [PAYG_ACTIVATION_ATTEMPT_METADATA_KEY]: attemptId,
     [PAYG_ACTIVATION_PRICE_METADATA_KEY]: priceId,
     paygActivationStartedAt: startedAt.toISOString(),
+    paygActivationPostPossible: false,
     ...(candidateId && { paygActivationCandidateId: candidateId }),
   };
 }
@@ -50,6 +51,7 @@ export function withoutPaygActivationAttemptId(value: unknown) {
   delete metadata[PAYG_ACTIVATION_PRICE_METADATA_KEY];
   delete metadata.paygActivationStartedAt;
   delete metadata.paygActivationCandidateId;
+  delete metadata.paygActivationPostPossible;
   return Object.keys(metadata).length ? metadata : null;
 }
 

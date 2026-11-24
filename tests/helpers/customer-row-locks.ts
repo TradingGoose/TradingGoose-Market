@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import type Stripe from "stripe";
-import { gate } from "./private-rank-order";
+import { beforeCompletion, gate } from "./private-rank-order";
 import { expect, vi } from "vitest";
 
 type DirectSql = ReturnType<typeof postgres>;
@@ -85,24 +85,28 @@ export async function assertCustomerRowLockOrder(
       return { id: "cus_row_lock", email: customer.email, name: customer.name };
     });
     const syncing = customerState.ensureStripeUserCustomer(customer.id);
-    await reading.promise;
-    const previous = emittedQueries.length;
-    const result = operation();
+    let result: Promise<T> | undefined;
+    let previous: number;
     try {
-      await vi.waitFor(async () => {
-        const blocked = await monitor`
+      await beforeCompletion(reading.promise, syncing, "Customer retrieval");
+      previous = emittedQueries.length;
+      const pending = operation();
+      result = pending;
+      await vi.waitUntil(async () => {
+        const blocked = await beforeCompletion(monitor`
           select pid from pg_stat_activity where datname = current_database()
             and wait_event_type = 'Lock'
-        `;
-        expect(blocked).toHaveLength(1);
+        `, pending, "the operation waited for Customer synchronization");
+        return blocked.length === 1;
       }, { timeout: 3_000 });
       await monitor`
         select id from market_usage_owner where id = ${customer.owner_id} for update nowait
       `;
     } finally {
       resume.release();
-      await syncing;
+      await Promise.allSettled([syncing, result]);
     }
+    await syncing;
     const value = await result;
     expect(emittedQueries.slice(previous).some(query =>
       /inner join/i.test(query) && /for update of "user"/i.test(query)

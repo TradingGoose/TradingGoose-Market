@@ -18,6 +18,7 @@ import {
   getPaygActivationCandidateId,
   getPaygActivationPriceId,
   getPaygActivationStartedAt,
+  normalizeSubscriptionMetadata,
   PAYG_ACTIVATION_ATTEMPT_METADATA_KEY,
   withPaygActivationAttemptId,
   withoutPaygActivationAttemptId,
@@ -69,16 +70,15 @@ export async function activateMarketPayg(userId: string) {
     return { attemptId, candidateId };
   });
 
-  const result = await withBillingSubjectLock(userId, async (tx) => {
+  const execute = ({ attemptId, candidateId }: typeof prepared) => withBillingSubjectLock(userId, async (tx) => {
     const { subscription: local, stripeCustomerId } = await readActivation(tx, state.subscription.id);
     if (!stripeCustomerId) throw retryRequired();
     const expected = { customerId: stripeCustomerId, localSubscriptionId: local.id, priceId, userId };
-    const { attemptId } = prepared;
     if (local.stripeSubscriptionId) {
       const bound = await stripe.subscriptions.retrieve(local.stripeSubscriptionId);
       if (bound.id !== local.stripeSubscriptionId || local.stripeCustomerId !== stripeCustomerId ||
         bound.status !== "active" || !isUsableMarketSubscription(bound, expected) ||
-        (bound.id !== prepared.candidateId && getPaygActivationAttemptId(bound.metadata) !== attemptId)) {
+        (bound.id !== candidateId && getPaygActivationAttemptId(bound.metadata) !== attemptId)) {
         throw retryRequired();
       }
       return { subscriptionId: bound.id };
@@ -87,17 +87,29 @@ export async function activateMarketPayg(userId: string) {
       getPaygActivationPriceId(local.metadata) !== priceId) throw retryRequired();
 
     const customer = await liveCustomer(stripe, stripeCustomerId);
-    let candidate = await inspectInventory(stripe, expected, attemptId, prepared.candidateId);
+    let candidate = await inspectInventory(stripe, expected, attemptId, candidateId);
     if (!candidate) {
-      if (prepared.candidateId) throw retryRequired();
+      if (candidateId) throw retryRequired();
       // Stripe may prune an idempotency key after 24h. Use wall time after
       // lock and provider waits; now() is frozen at transaction start.
       const startedAt = getPaygActivationStartedAt(local.metadata);
       const [clock] = await tx.execute<{ replayable: boolean }>(sql`
         select clock_timestamp() < ${startedAt}::timestamptz + interval '24 hours' as replayable
       `);
-      if (!clock?.replayable) throw retryRequired();
+      const metadata = normalizeSubscriptionMetadata(local.metadata);
+      if (typeof clock?.replayable !== "boolean") throw retryRequired();
+      if (!clock.replayable && metadata.paygActivationPostPossible !== false) throw retryRequired();
       if (!customer.invoice_settings.default_payment_method) throw missingCard();
+      if (metadata.paygActivationPostPossible === false) {
+        // Empty inventory can replace an expired generation only if no executor could have sent its POST.
+        const nextId = clock.replayable ? attemptId : crypto.randomUUID();
+        const nextMetadata = clock.replayable ? metadata : withPaygActivationAttemptId(
+          withoutPaygActivationAttemptId(metadata), nextId, priceId, await databaseNow(tx),
+        );
+        await updateLockedActivationAttempt(tx, local, attemptId, { ...nextMetadata, paygActivationPostPossible: true });
+        return { dispatch: { attemptId: nextId, candidateId: null } };
+      }
+      if (metadata.paygActivationPostPossible !== true) throw retryRequired();
       try {
         candidate = await stripe.subscriptions.create({
           customer: customer.id,
@@ -109,7 +121,7 @@ export async function activateMarketPayg(userId: string) {
       } catch (error) {
         if (!isAuthoritativeActivationRejection(error)) throw error;
         if (await inspectInventory(stripe, expected, attemptId)) throw retryRequired();
-        await clearLockedActivationAttempt(tx, local, attemptId);
+        await updateLockedActivationAttempt(tx, local, attemptId, withoutPaygActivationAttemptId(local.metadata));
         return { error: new PaygActivationError(
           "The payment method could not activate PAYG. Review billing details and try again.",
           error.statusCode === 402 ? 402 : 409, "PAYG_PROVIDER_REJECTED",
@@ -121,12 +133,13 @@ export async function activateMarketPayg(userId: string) {
     if (providerSubscription.id !== candidate.id || !isUsableMarketSubscription(providerSubscription, expected)) {
       throw ambiguousInventory();
     }
+    // Pre-cutover subscriptions missing an attempt UUID must be reconciled before deployment (README).
     const sameAttempt = getPaygActivationAttemptId(providerSubscription.metadata) === attemptId;
-    if (providerSubscription.status === "canceled" && (sameAttempt || providerSubscription.id === prepared.candidateId)) {
-      await clearLockedActivationAttempt(tx, local, attemptId);
+    if (providerSubscription.status === "canceled" && (sameAttempt || providerSubscription.id === candidateId)) {
+      await updateLockedActivationAttempt(tx, local, attemptId, withoutPaygActivationAttemptId(local.metadata));
       return { error: retryRequired("The canceled PAYG activation was retired. Try activating again.") };
     }
-    if (providerSubscription.status !== "active" || (!sameAttempt && providerSubscription.id !== prepared.candidateId)) {
+    if (providerSubscription.status !== "active" || (!sameAttempt && providerSubscription.id !== candidateId)) {
       throw retryRequired();
     }
     const item = providerSubscription.items.data[0];
@@ -162,6 +175,8 @@ export async function activateMarketPayg(userId: string) {
     }
     return { subscriptionId: bound[0].stripeSubscriptionId };
   });
+  let result = await execute(prepared);
+  while (result.dispatch) result = await execute(result.dispatch);
   if (result.error) throw result.error;
   return { success: true, status: "activated", stripeSubscriptionId: result.subscriptionId };
 }
@@ -248,12 +263,17 @@ async function inspectInventory(
   attemptId: string | null,
   candidateId: string | null = null,
 ) {
+  function unrelatedHistory(entry: Stripe.Subscription) {
+    return (entry.status === "canceled" || entry.status === "incomplete_expired") &&
+      entry.id !== candidateId && (!attemptId || getPaygActivationAttemptId(entry.metadata) !== attemptId);
+  }
   let match: Stripe.Subscription | null = null;
   for await (const listed of stripe.subscriptions.list({ customer: expected.customerId, status: "all", limit: 100 })) {
+    if (unrelatedHistory(listed)) continue;
     const fresh = await stripe.subscriptions.retrieve(listed.id);
     if (fresh.id !== listed.id) throw ambiguousInventory();
     const sameAttempt = !!attemptId && getPaygActivationAttemptId(fresh.metadata) === attemptId;
-    if (!sameAttempt && fresh.id !== candidateId && (fresh.status === "canceled" || fresh.status === "incomplete_expired")) continue;
+    if (unrelatedHistory(fresh)) continue;
     if (!isUsableMarketSubscription(fresh, expected) || (match && match.id !== fresh.id)) throw ambiguousInventory();
     if (attemptId && !sameAttempt && fresh.id !== candidateId) throw retryRequired();
     if (fresh.status !== "active" && fresh.status !== "canceled") throw retryRequired();
@@ -262,22 +282,23 @@ async function inspectInventory(
   return match;
 }
 
-async function clearLockedActivationAttempt(
+async function updateLockedActivationAttempt(
   tx: MarketTransaction,
   current: typeof subscription.$inferSelect,
   expectedAttemptId: string,
+  metadata: Record<string, unknown> | null,
 ) {
   if (current.stripeSubscriptionId ||
     getPaygActivationAttemptId(current.metadata) !== expectedAttemptId) throw retryRequired();
-  const cleared = await tx.update(subscription)
-    .set({ metadata: withoutPaygActivationAttemptId(current.metadata) })
+  const changed = await tx.update(subscription)
+    .set({ metadata })
     .where(and(
       eq(subscription.id, current.id),
       isNull(subscription.stripeSubscriptionId),
       sql`${subscription.metadata} ->> ${PAYG_ACTIVATION_ATTEMPT_METADATA_KEY} = ${expectedAttemptId}`,
     ))
     .returning({ id: subscription.id });
-  if (cleared.length !== 1) throw retryRequired();
+  if (changed.length !== 1) throw retryRequired();
 }
 
 function isAuthoritativeActivationRejection(

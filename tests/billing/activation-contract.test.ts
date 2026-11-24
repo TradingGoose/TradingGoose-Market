@@ -128,6 +128,7 @@ describe("PAYG activation contract", () => {
       paygActivationAttemptId: "attempt_1",
       paygActivationPriceId: "price_payg",
       paygActivationStartedAt: start.toISOString(),
+      paygActivationPostPossible: false,
     });
     expect(getPaygActivationAttemptId(withAttempt)).toBe("attempt_1");
     expect(getPaygActivationPriceId(withAttempt)).toBe("price_payg");

@@ -47,12 +47,14 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     return provider;
   });
   const create = vi.fn(async (parameters: Stripe.SubscriptionCreateParams, options: { idempotencyKey: string }) => {
-    const [{ attempt }] = await monitor<{ attempt: string | null }[]>`
-      select metadata ->> 'paygActivationAttemptId' as attempt
+    const [{ attempt, possible }] = await monitor<{ attempt: string | null; possible: boolean }[]>`
+      select metadata ->> 'paygActivationAttemptId' as attempt,
+        (metadata ->> 'paygActivationPostPossible')::boolean as possible
       from subscription where id = ${localSubscriptionId}
     `;
     // A provider call cannot happen before its recovery identity has committed.
     expect(attempt).toEqual(expect.any(String));
+    expect(possible).toBe(true);
     expect(parameters.metadata).toMatchObject({ paygActivationAttemptId: attempt });
     expect(deletedCustomers.has(parameters.customer)).toBe(false);
     expect(options.idempotencyKey).toBe(`payg-activate:${localSubscriptionId}:${attempt}:${parameters.customer}`);
@@ -83,14 +85,15 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
   const optionalSpy = vi.spyOn(stripeClient, "getOptionalStripeClient").mockReturnValue(provider);
   const priceSpy = vi.spyOn(stripeClient, "validateMarketStripePrice").mockResolvedValue(null);
 
-  async function expectWaitingActivation(count = 1) {
-    await vi.waitFor(async () => {
-      const [{ waiting }] = await monitor<{ waiting: number }[]>`
+  async function expectWaitingActivation(count = 1, earlyCompletion?: Promise<never>) {
+    await vi.waitUntil(async () => {
+      const observation = monitor<{ waiting: number }[]>`
         select count(*)::integer as waiting from pg_stat_activity
         where datname = current_database() and pid <> pg_backend_pid()
           and wait_event_type = 'Lock' and cardinality(pg_blocking_pids(pid)) > 0
       `;
-      expect(waiting).toBe(count);
+      const [{ waiting }] = await (earlyCompletion ? Promise.race([earlyCompletion, observation]) : observation);
+      return waiting === count;
     }, { timeout: 5_000 });
   }
   const outstanding: Promise<unknown>[] = [];
@@ -161,7 +164,10 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
       return created;
     });
     const creator = startActivation();
-    await creating.promise;
+    await Promise.race([creating.promise, creator.then((result) => {
+      if ("error" in result) throw result.error;
+      throw new Error("Activation completed before Stripe subscription creation");
+    })]);
     const customerReads = retrieveCustomer.mock.calls.length;
     retrieveCustomer.mockImplementation(async () => customer(null));
     const staleContender = startActivation();
@@ -200,6 +206,24 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     expect(await startActivation()).toMatchObject({ value: { status: "activated" } });
     expect(create).toHaveBeenCalledTimes(createdBeforeRecovery);
     expect([...providers.values()].filter((entry) => entry.status === "active")).toHaveLength(1);
+
+    // An interrupted inventory prevented dispatch. After expiry a new generation can safely create.
+    await resetBinding();
+    list.mockReturnValueOnce([]).mockImplementationOnce(() => { throw new Error("inventory unavailable"); });
+    const postsBeforeExpiry = create.mock.calls.length;
+    expect(await startActivation()).toMatchObject({ error: { message: "inventory unavailable" } });
+    const [unsent] = await monitor`
+      update subscription set metadata = jsonb_set(metadata::jsonb, '{paygActivationStartedAt}',
+        to_jsonb((now() - interval '25 hours')::text)) where id = ${localSubscriptionId}
+      returning metadata
+    `;
+    expect(unsent.metadata).toMatchObject({ paygActivationAttemptId: expect.any(String), paygActivationPostPossible: false });
+    expect(create).toHaveBeenCalledTimes(postsBeforeExpiry);
+    expect(await startActivation()).toMatchObject({ value: { status: "activated" } });
+    expect(create).toHaveBeenCalledTimes(postsBeforeExpiry + 1);
+    expect(create.mock.lastCall![0].metadata).not.toMatchObject({
+      paygActivationAttemptId: unsent.metadata.paygActivationAttemptId,
+    });
 
     // Stripe may have pruned its 24h create cache while the durable attempt is unresolved.
     await resetBinding();
@@ -280,7 +304,9 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     deleteCustomer(replacement, nextCustomer);
     const replacing = customerState.ensureStripeUserCustomer(userId);
     outstanding.push(replacing);
-    await expectWaitingActivation();
+    await expectWaitingActivation(1, replacing.then(() => {
+      throw new Error("Customer replacement completed before waiting for the billing-subject lock");
+    }));
     finishPinning.release();
     expect((await replacing).id).toBe(nextCustomer);
     expect(await oldContender).toMatchObject({ error: { code: "PAYG_ACTIVATION_RETRY_REQUIRED" } });
