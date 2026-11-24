@@ -65,7 +65,7 @@ Adding admin membership preserves the user’s customer billing, public keys, an
 
 Core runtime:
 
-- `DATABASE_URL` — the PostgreSQL endpoint, including a Neon pooled URL or PgBouncer in transaction mode. Billing and key workflows acquire their handler locks within five seconds and release them at transaction end.
+- `DATABASE_URL` — the PostgreSQL endpoint, including a Neon pooled URL or PgBouncer in transaction mode. Each bounded lock acquisition can wait up to five seconds. A transaction can acquire several locks and holds them until it ends.
 - `NEXT_PUBLIC_APP_URL` and the same-origin `BETTER_AUTH_URL`
 - `BETTER_AUTH_SECRET`; production requires exactly 64 lowercase hexadecimal
   characters generated with `openssl rand -hex 32`
@@ -88,8 +88,10 @@ email changes still use Resend; changing an email still requires verification.
 Copy the **API ID** (`api_...`) from the Market [Keyspace Settings](https://www.unkey.com/docs/api-management/keyspaces/settings),
 not its separate **Keyspace ID** (`ks_...`). The installed v2 SDK requires
 `apiId` for key creation and listing. Create one root key scoped to that
-keyspace with keyspace read and key read/write/delete/verify
-permissions. Unkey permission paths use the Keyspace ID (`ks_...`), not the API
+keyspace with keyspace read and key read/create/update/delete/verify
+permissions. Before deployment, grant `unkey:v1:<workspace_id>:keyspaces/<keyspace_id>/keys/*#update_key` to the existing
+Market root key. Market uses it to enable a newly created key after recording its provider ID.
+Unkey permission paths use the Keyspace ID (`ks_...`), not the API
 ID. Market does not need key decryption or workspace-wide permissions.
 See [Unkey's root-key setup](https://www.unkey.com/docs/platform/root-keys/configure)
 and [permission reference](https://www.unkey.com/docs/platform/root-keys/permission-reference).
@@ -102,6 +104,10 @@ Enabled billing also requires:
 - positive `PAYG_INVOICE_THRESHOLD_USD`
 
 Enabled customer-key access requires an active subscription and no failed-usage-payment block, mirroring Studio's `userStats.billingBlocked`. A confirmed decline preserves the already-admitted request but pauses later billable requests until invoice payment recovery. Key management remains available. Threshold billing waits for at least one full cent of unbilled usage, even when the configured threshold is smaller; cycle/final settlement retains nearest-cent rounding.
+
+Before switching an existing deployment to transaction pooling, pause traffic, webhook delivery and the admin CLI. Drain in-flight writers and reconcile outstanding key creations on the old build. Inspect each unbound PAYG subscription with a pending activation UUID. An older Stripe POST can lack `paygActivationAttemptId`, and the local row can lack a candidate ID. Find the original POST in Stripe request logs using `payg-activate:<local subscription ID>:<attempt UUID>:<canonical Customer ID>`. List **all pages and statuses** for that Customer and retrieve the identified subscription. Verify its ID, Customer, ownership metadata (`userId`, `referenceId`, `subscriptionId`), single configured Price, quantity one and valid billing period.
+
+For one verified active match, run the old build’s activation recovery while writers are drained and verify that the local row binds that exact Stripe ID and period. A missing list entry alone cannot rule out a dispatched POST. Keep the deployment paused for incomplete inventory, unresolved ownership or dispatch, multiple candidates, or a binding that cannot be verified. Resume traffic only after every pending row is resolved. The new build enforces its recorded attempt or candidate identity. [Stripe idempotency](https://docs.stripe.com/api/idempotent_requests) · [Subscription inventory](https://docs.stripe.com/api/subscriptions/list)
 
 Disabled billing supports no Stripe values, `STRIPE_SECRET_KEY` alone for best-effort Customer provisioning, or the complete secret/webhook/Price synchronization triple. Activation and Portal stay disabled, keyed requests remain usable and are recorded as non-billable, saved per-key limits are not consumed, and no disabled-era request is retrocharged.
 
@@ -160,7 +166,7 @@ Private `POST` routes require a database-admin-minted private key:
 
 There are no short-path aliases, wildcard endpoint families, logo-update API aliases, static service secrets, customer-key throughput limits, or private-key request/spend limits.
 
-Private requests buffer up to 64 KiB before taking a grant lock. A 10-second read deadline returns `408` for slow bodies, `413` for oversized bodies and `400` for aborted or failed reads. Admission and mutation each recheck authorization under transaction-scoped grant and key locks. Lock acquisition waits up to five seconds and returns `503 ADMISSION_UNAVAILABLE` on contention. A revocation committed between the two transactions returns `403` before the mutation runs.
+Private requests buffer up to 64 KiB before taking a grant lock. A 10-second read deadline returns `408` for slow bodies, `413` for oversized bodies and `400` for aborted or failed reads. Admission acquires the grant lock and then the key lock. After admission commits, the mutation acquires both locks again in the same order and rechecks authorization. Each acquisition has its own five-second timeout and returns `503 ADMISSION_UNAVAILABLE` on expiry. A revocation committed between the two transactions returns `403` before the mutation runs.
 
 Public-key use requires literal active PAYG only while billing is enabled. Key creation, listing, limit editing, and revocation remain billing-independent. Each admitted keyed request is recorded before its data handler runs; completion is stored separately as success, client error, server error, or visibly pending after a crash.
 
