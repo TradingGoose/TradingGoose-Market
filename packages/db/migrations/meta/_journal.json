@@ -50,6 +50,13 @@
       "when": 1783728161949,
       "tag": "0006_early_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792474476396,
+      "tag": "0007_market_user_system",
+      "breakpoints": true
     }
   ]
 }

@@ -1,63 +1,97 @@
+import { handleKeyedMarketRoute } from "@/lib/market-api/core/access";
 import { withApiContextRequest } from "@/lib/market-api/core/context";
-import { handleMarketRequest } from "@/lib/market-api/core/handler";
+import { applyMarketCors, handleMarketPreflight } from "@/lib/market-api/core/cors";
+import {
+  resolveKeyedMarketRoute,
+  type KeyedMarketRouteDescriptor,
+} from "@/lib/market-api/core/manifest";
+import {
+  guardMarketRouteMethod,
+  marketMethodNotAllowed,
+  marketRouteNotFound,
+  toExplicitHeadResponse,
+} from "@/lib/market-api/core/method-guards";
 import { requireApiVersion } from "@/lib/market-api/core/version";
-import { withPluginContextRequest } from "@/lib/market-api/plugins/context";
-import { resolvePluginRoutes } from "@/lib/market-api/plugins/runtime";
-import type { PluginRouteHandler, PluginRouteNamespace } from "@/lib/market-api/plugins/types";
 
 export type CacheWrapper = (
   request: Request,
   key: string,
-  fn: (req: Request) => Promise<Response>
+  fn: (request: Request) => Promise<Response>,
 ) => Promise<Response>;
 
-export interface MarketRouteOptions {
-  coreRoutes: Readonly<Record<string, PluginRouteHandler>>;
-  namespace: PluginRouteNamespace;
+export type MarketRouteNamespace = "search" | "get" | "update";
+
+export type MarketRouteOptions = Readonly<{
+  namespace: MarketRouteNamespace;
   cache?: CacheWrapper;
-  /** Use the full joined path as route key (default: first segment only) */
-  useFullPathKey?: boolean;
+}>;
+
+function pathBelongsToNamespace(
+  descriptor: KeyedMarketRouteDescriptor,
+  namespace: MarketRouteNamespace,
+) {
+  return descriptor.path === `/api/${namespace}` || descriptor.path.startsWith(`/api/${namespace}/`);
 }
 
-export function createMarketRouteHandler({
-  coreRoutes,
-  namespace,
-  cache,
-  useFullPathKey = false,
-}: MarketRouteOptions) {
-  return async (
-    request: Request,
-    { params }: { params: Promise<{ path?: string[] }> }
-  ) => {
-    const routes = await resolvePluginRoutes(namespace, coreRoutes);
-    const { path = [] } = await params;
-    const key = useFullPathKey ? path.join("/") : (path[0] ?? "");
-    const routeKey = path.join("/") || key;
-    const handler = routes[key];
+export function createMarketRouteHandler({ namespace, cache }: MarketRouteOptions) {
+  return async (request: Request): Promise<Response> => {
+    const pathname = new URL(request.url).pathname;
+    const descriptor = resolveKeyedMarketRoute(pathname);
+    if (!descriptor || !pathBelongsToNamespace(descriptor, namespace)) {
+      return marketRouteNotFound(request.method);
+    }
 
-    return handleMarketRequest(request, async (c, plugin) => {
-      const versionError = await requireApiVersion(request);
-      if (versionError) return versionError;
+    const methodError = guardMarketRouteMethod(descriptor, request.method);
+    if (methodError) return applyMarketCors(request, descriptor, methodError);
 
-      if (!handler) {
-        return new Response(
-          JSON.stringify({ error: "Not Found", path: `/${namespace}/${path.join("/")}` }),
-          {
-            status: 404,
-            headers: { "content-type": "application/json", "x-market-api": "next" },
-          }
+    const versionError = requireApiVersion(request);
+    if (versionError) return applyMarketCors(request, descriptor, versionError);
+
+    const response = await handleKeyedMarketRoute(
+      request,
+      descriptor,
+      async (context, actor) => {
+        if (!cache) return descriptor.handler(context, actor);
+
+        return cache(context.req.raw, descriptor.id, async (cacheRequest) =>
+          descriptor.handler(withApiContextRequest(context, cacheRequest), actor),
         );
-      }
+      },
+    );
 
-      if (cache) {
-        return cache(request, `${namespace}/${routeKey}`, async (cacheRequest) => {
-          const cacheContext = withApiContextRequest(c, cacheRequest);
-          const cachePluginContext = withPluginContextRequest(plugin, cacheRequest);
-          return handler(cacheContext, cachePluginContext);
-        });
-      }
+    const methodResponse =
+      request.method.toUpperCase() === "HEAD"
+        ? await toExplicitHeadResponse(response)
+        : response;
+    return applyMarketCors(request, descriptor, methodResponse);
+  };
+}
 
-      return handler(c, plugin);
-    });
+export function createMarketPreflightHandler(namespace: MarketRouteNamespace) {
+  return (request: Request): Response => {
+    const pathname = new URL(request.url).pathname;
+    const descriptor = resolveKeyedMarketRoute(pathname);
+    if (!descriptor || !pathBelongsToNamespace(descriptor, namespace)) {
+      return marketRouteNotFound(request.method);
+    }
+
+    const versionError = requireApiVersion(request);
+    if (versionError) return applyMarketCors(request, descriptor, versionError);
+    return handleMarketPreflight(request, descriptor);
+  };
+}
+
+export function createMarketRejectedMethodHandler(namespace: MarketRouteNamespace) {
+  return async (request: Request): Promise<Response> => {
+    const descriptor = resolveKeyedMarketRoute(new URL(request.url).pathname);
+    if (!descriptor || !pathBelongsToNamespace(descriptor, namespace)) {
+      return marketRouteNotFound(request.method);
+    }
+    const response = marketMethodNotAllowed(descriptor, request.method);
+    const methodResponse =
+      request.method.toUpperCase() === "HEAD"
+        ? await toExplicitHeadResponse(response)
+        : response;
+    return applyMarketCors(request, descriptor, methodResponse);
   };
 }

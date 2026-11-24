@@ -33,17 +33,6 @@ type ListingFormState = {
   iconUrl: string | null
 }
 
-const isSameFormState = (a: ListingFormState, b: ListingFormState) =>
-  a.base === b.base &&
-  a.quote === b.quote &&
-  a.quoteName === b.quoteName &&
-  a.name === b.name &&
-  a.assetClass === b.assetClass &&
-  a.marketId === b.marketId &&
-  a.marketLabel === b.marketLabel &&
-  a.active === b.active &&
-  a.iconUrl === b.iconUrl
-
 const assetClassOptions = [
   { label: 'future', value: 'future' },
   { label: 'stock', value: 'stock' },
@@ -52,20 +41,43 @@ const assetClassOptions = [
   { label: 'indice', value: 'indice' }
 ]
 
-export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 'edit' }: ListingEditDialogProps) {
+const createListingFormState = (listing: ListingRow | null): ListingFormState => {
+  const marketLabel = listing?.marketCode
+    ? listing.marketName
+      ? `${listing.marketCode} — ${listing.marketName}`
+      : listing.marketCode
+    : listing?.marketName ?? ''
+
+  return {
+    base: listing?.base ?? '',
+    quote: listing?.quote ?? '',
+    quoteName: listing?.quoteName ?? null,
+    name: listing?.name ?? '',
+    assetClass: listing?.assetClass ?? '',
+    marketId: listing?.marketId ?? '',
+    marketLabel,
+    active: listing?.active ?? true,
+    iconUrl: listing?.iconUrl ?? null
+  }
+}
+
+export function ListingEditDialog(props: ListingEditDialogProps) {
+  const { listing, open, onOpenChange, mode = 'edit' } = props
+  const sessionKey = `${mode}:${listing?.id ?? 'new'}`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-3xl'>
+        <ListingEditDialogContent key={`${sessionKey}:${open ? 'open' : 'closed'}`} {...props} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ListingEditDialogContent({ listing, open, onOpenChange, onSave, mode = 'edit' }: ListingEditDialogProps) {
   const isEdit = mode === 'edit' && !!listing
 
-  const [formState, setFormState] = useState<ListingFormState>({
-    base: '',
-    quote: '',
-    quoteName: null,
-    name: '',
-    assetClass: '',
-    marketId: '',
-    marketLabel: '',
-    active: true,
-    iconUrl: null
-  })
+  const [formState, setFormState] = useState<ListingFormState>(() => createListingFormState(listing))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [marketSearch, setMarketSearch] = useState('')
@@ -79,46 +91,6 @@ export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 
   const [iconUploading, setIconUploading] = useState(false)
   const [iconError, setIconError] = useState<string | null>(null)
   const [assetClassOpen, setAssetClassOpen] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-
-    const marketLabel = listing?.marketCode
-      ? listing.marketName
-        ? `${listing.marketCode} — ${listing.marketName}`
-        : listing.marketCode
-      : listing?.marketName ?? ''
-
-    const nextState: ListingFormState = listing
-      ? {
-        base: listing.base,
-        quote: listing.quote ?? '',
-        quoteName: listing.quoteName,
-        name: listing.name ?? '',
-        assetClass: listing.assetClass ?? '',
-        marketId: listing.marketId ?? '',
-        marketLabel,
-        active: listing.active,
-        iconUrl: listing.iconUrl ?? null
-      }
-      : {
-        base: '',
-        quote: '',
-        quoteName: null,
-        name: '',
-        assetClass: '',
-        marketId: '',
-        marketLabel: '',
-        active: true,
-        iconUrl: null
-      }
-
-    setFormState(prev => (isSameFormState(prev, nextState) ? prev : nextState))
-
-    setError(null)
-    setMarketSearch('')
-    setCurrencySearch('')
-  }, [listing, open])
 
   useEffect(() => {
     if (!open) return
@@ -222,7 +194,7 @@ export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 
       })
 
     return () => controller.abort()
-  }, [open, formState.marketId, formState.marketLabel, marketOptions])
+  }, [formState.marketId, formState.marketLabel, marketOptions, open])
 
   const marketOptionMap = useMemo(
     () => new Map(marketOptions.map(option => [option.id, option])),
@@ -348,8 +320,7 @@ export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 
   }
 
   return (
-    <Dialog open={open} onOpenChange={nextOpen => onOpenChange(nextOpen)}>
-      <DialogContent className='max-w-3xl'>
+    <>
         <EditDialogHeader
           title={isEdit ? 'Edit Listing' : 'Add Listing'}
           description={isEdit ? 'Update listing details, market, and status.' : 'Create a new listing and set its details.'}
@@ -366,9 +337,7 @@ export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 
                 onChange={event => setFormState(prev => ({ ...prev, base: event.target.value }))}
                 required
               />
-              {!formState.base.trim() && (
-                <p className='text-xs text-destructive'>Required</p>
-              )}
+              <FormError message={!formState.base.trim() ? 'Asset base is required.' : null} />
             </div>
             <IconUploadField
               isEdit={isEdit}
@@ -377,7 +346,7 @@ export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 
               uploading={iconUploading}
               error={iconError}
               emptyMessage='Save the listing first to upload an icon.'
-              avatarKey={`${listing?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
+              avatarKey={listing?.id ?? 'new'}
             />
             <div className='space-y-2'>
               <Label htmlFor='edit-quote'>Quote</Label>
@@ -488,7 +457,6 @@ export function ListingEditDialog({ listing, open, onOpenChange, onSave, mode = 
             loading={saving}
           />
         </form>
-      </DialogContent>
-    </Dialog>
+    </>
   )
 }

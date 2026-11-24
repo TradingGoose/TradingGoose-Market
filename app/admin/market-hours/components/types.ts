@@ -18,5 +18,5 @@ export type MarketHourRow = {
   sessionsCount: number
   holidaysCount: number
   updatedAt: string | null
-  hours?: any
+  hours?: unknown
 }

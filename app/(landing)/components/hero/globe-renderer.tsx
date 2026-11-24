@@ -331,6 +331,17 @@ export function GlobeRenderer({ data, globeConfig }: GlobeRendererProps) {
       window.cancelAnimationFrame(animationFrameId);
     };
 
+    // A static frame can precede three-globe's asynchronous initialization.
+    // Draw again once its layers are visible, without starting a motion loop.
+    globe.onGlobeReady(() => {
+      if (!isAnimated) {
+        animationFrameId = window.requestAnimationFrame(() => {
+          syncArcEffects(1 / 60);
+          renderFrame();
+        });
+      }
+    });
+
     const visibilityObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         startLoop();
@@ -346,6 +357,8 @@ export function GlobeRenderer({ data, globeConfig }: GlobeRendererProps) {
     visibilityObserver.observe(container);
 
     return () => {
+      globe.onGlobeReady(() => {});
+      window.cancelAnimationFrame(animationFrameId);
       visibilityObserver.disconnect();
       stopLoop();
       resizeObserver.disconnect();
@@ -371,6 +384,10 @@ function configureGlobe(
   /* arcTime 0 disables three-globe's dash animation with the dash frozen
      outside the arc; render solid arcs instead. */
   const staticArcs = globeConfig.arcTime === 0;
+
+  if (staticArcs) {
+    globe.arcsTransitionDuration(0);
+  }
 
   globeMaterial.color = new Color(globeConfig.globeColor);
   globeMaterial.emissive = new Color(globeConfig.emissive);

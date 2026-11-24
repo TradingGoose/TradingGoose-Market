@@ -10,30 +10,13 @@ import {
 import { DiscordMark, GitHubMark } from "../social-icons";
 import FooterHoverText from "./footer-hover-text";
 
-const productLinks = [
-  {
-    label: "Studio",
-    href: landingExternalLinks.studioSite,
-    external: true
-  },
-  {
-    label: "Market GitHub",
-    href: landingExternalLinks.marketGitHub,
-    external: true
-  },
-  {
-    label: "Discord",
-    href: landingExternalLinks.discord,
-    external: true
-  }
-] as const;
-
-const legalLinks = [
-  {
-    label: "TradingGoose",
-    href: "https://www.tradinggoose.ai/",
-    external: true
-  }
+const footerLinks = [
+  { label: "Hours", href: "/#market-hours", external: false },
+  { label: "Listings", href: "/#listing-identities", external: false },
+  { label: "Developers", href: "/#developers", external: false },
+  { label: "GitHub", href: landingExternalLinks.marketGitHub, external: true },
+  { label: "Community", href: landingExternalLinks.discord, external: true },
+  { label: "Studio", href: landingExternalLinks.studioSite, external: true }
 ] as const;
 
 export default function Footer() {
@@ -47,15 +30,17 @@ export default function Footer() {
             <Link
               href="/"
               aria-label="TradingGoose Market home"
-              className="flex items-center gap-3"
+              className="flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               prefetch={false}
             >
               <Image
-                src="/icon.png"
+                src="/icon.svg"
                 alt=""
                 width={28}
                 height={28}
                 className="h-7 w-7"
+                priority
+                quality={100}
               />
               <span className="font-semibold text-foreground text-xl">
                 {landingProduct.brand}
@@ -63,7 +48,7 @@ export default function Footer() {
             </Link>
 
             <p className="max-w-[28rem] text-balance text-sm leading-relaxed">
-              {landingProduct.description}
+              {landingProduct.footerDescription}
             </p>
 
             <div className="flex items-center gap-4 max-sm:justify-center">
@@ -72,7 +57,7 @@ export default function Footer() {
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="Discord (opens in new tab)"
-                className="transition-colors duration-300 hover:text-foreground"
+                className="rounded-md transition-colors duration-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <DiscordMark className="h-5 w-5" aria-hidden="true" />
               </a>
@@ -81,7 +66,7 @@ export default function Footer() {
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="GitHub (opens in new tab)"
-                className="transition-colors duration-300 hover:text-foreground"
+                className="rounded-md transition-colors duration-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <GitHubMark className="h-5 w-5" aria-hidden="true" />
               </a>
@@ -93,34 +78,41 @@ export default function Footer() {
           </div>
 
           <div className="order-first space-y-16 text-sm max-sm:text-center sm:max-w-[28rem] sm:self-start lg:order-none lg:items-end">
-            <div className="grid grid-cols-3 gap-x-8 gap-y-3 sm:grid-cols-3 sm:gap-x-12">
-              {productLinks.map((link) => (
-                <a
-                  key={link.label}
-                  href={link.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="transition-colors duration-300 hover:text-foreground"
-                >
-                  {link.label}
-                  <span className="sr-only"> (opens in new tab)</span>
-                </a>
+            <div className="grid grid-cols-3 gap-x-8 gap-y-3 sm:grid-cols-4 sm:gap-x-12">
+              {footerLinks.map((link) => (
+                link.external ? (
+                  <a
+                    key={link.label}
+                    href={link.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md transition-colors duration-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
+                    {link.label}
+                    <span className="sr-only"> (opens in new tab)</span>
+                  </a>
+                ) : (
+                  <Link
+                    key={link.label}
+                    href={link.href}
+                    prefetch={false}
+                    className="rounded-md transition-colors duration-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
+                    {link.label}
+                  </Link>
+                )
               ))}
             </div>
-
             <div className="flex flex-wrap gap-x-4 gap-y-2 py-3 text-xs max-sm:justify-center">
-              {legalLinks.map((link) => (
-                <a
-                  key={link.label}
-                  href={link.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="transition-colors duration-300 hover:text-foreground"
-                >
-                  {link.label}
-                  <span className="sr-only"> (opens in new tab)</span>
-                </a>
-              ))}
+              <a
+                href={`${landingExternalLinks.marketGitHub}/blob/main/LICENSE`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md transition-colors duration-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                Licenses
+                <span className="sr-only"> (opens in new tab)</span>
+              </a>
             </div>
           </div>
         </div>

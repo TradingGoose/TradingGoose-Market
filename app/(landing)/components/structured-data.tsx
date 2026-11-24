@@ -26,8 +26,7 @@ export function StructuredData() {
         sameAs: [
           landingExternalLinks.studioSite,
           landingExternalLinks.marketGitHub,
-          landingExternalLinks.discord,
-          landingExternalLinks.marketBlog
+          landingExternalLinks.discord
         ],
         description:
           "TradingGoose builds self-hostable trading software and canonical market reference data tools."
@@ -80,8 +79,6 @@ export function StructuredData() {
         name: "TradingGoose Market API",
         description:
           "Versioned API for canonical market reference data used by TradingGoose clients.",
-        documentation:
-          "https://github.com/TradingGoose/TradingGoose-Market#readme",
         entryPoint
       }
     ]

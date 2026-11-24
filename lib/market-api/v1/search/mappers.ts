@@ -1,6 +1,6 @@
-import type { CryptoPair, CurrencyPair, ListingResult } from "./types";
+import type { CryptoPair, CurrencyPair, Listing } from "./types";
 
-export function toCryptoListing(pair: CryptoPair): ListingResult {
+export function toCryptoListing(pair: CryptoPair): Listing {
   const base = pair.crypto_base;
   const quote = pair.crypto_quote;
   const baseName = base.name?.trim() || base.code;
@@ -25,7 +25,7 @@ export function toCryptoListing(pair: CryptoPair): ListingResult {
   };
 }
 
-export function toCurrencyListing(pair: CurrencyPair): ListingResult {
+export function toCurrencyListing(pair: CurrencyPair): Listing {
   const base = pair.currency_base;
   const quote = pair.currency_quote;
   const baseName = base.name?.trim() || base.code;

@@ -2,179 +2,84 @@
 
 import { useState } from "react";
 import { useTheme } from "next-themes";
-import {
-  ChevronsUpDown,
-  LogOut,
-  Moon,
-  Monitor,
-  Sun,
-  Users
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { Check, ChevronsUpDown, CreditCard, Loader2, LogOut, Monitor, Moon, ShieldCheck, Star, Sun, UserRound } from "lucide-react";
 
-import { authClient } from "@/lib/auth/client";
 import type { SettingsSection } from "@/components/settings-dialog/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
-import {
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem
-} from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import { useMarketResource, marketApiRequest } from "@/hooks/use-market-resource";
+import type { BillingSummary } from "@/lib/account/contracts";
+import { authClient } from "@/lib/auth/client";
 
 export type UserMenuUser = {
+  id: string;
   name: string;
   email: string;
   image?: string | null;
-  role?: string;
+  isAdmin: boolean;
 };
 
-function getInitials(name: string): string {
-  return name
-    .split(" ")
-    .map((part) => part[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
-type ThemeOption = {
-  value: "light" | "system" | "dark";
-  label: string;
-  Icon: LucideIcon;
-};
-
-const THEME_OPTIONS: ThemeOption[] = [
-  { value: "light", label: "Light", Icon: Sun },
-  { value: "system", label: "System", Icon: Monitor },
-  { value: "dark", label: "Dark", Icon: Moon }
-];
-
-const THEME_ITEM_BASE =
-  "relative flex h-9 flex-1 items-center justify-center gap-0 rounded-md border px-0 py-0 text-sm transition-colors focus:bg-accent focus:text-accent-foreground";
-const THEME_ITEM_ACTIVE = "border-border bg-accent text-accent-foreground shadow-sm";
-const THEME_ITEM_INACTIVE =
-  "border-transparent text-muted-foreground hover:bg-card hover:text-foreground";
-
-interface UserMenuProps {
-  user: UserMenuUser;
-  onOpenSettings?: (section: SettingsSection) => void;
-}
-
-export function UserMenu({ user, onOpenSettings }: UserMenuProps) {
+export function UserMenu({ user, mode, onOpenSettings }: { user: UserMenuUser; mode: "account" | "admin"; onOpenSettings: (section: SettingsSection) => void }) {
   const { theme, setTheme } = useTheme();
-  const [isSigningOut, setIsSigningOut] = useState(false);
+  const { data: billing, isLoading: isBillingLoading } = useMarketResource<BillingSummary>("/api/account/billing");
+  const [signingOut, setSigningOut] = useState(false);
+  const [openingPortal, setOpeningPortal] = useState(false);
+  const billingEnabled = billing?.billingEnabled !== false;
+  const portalUnavailable = billing?.portalAvailable === false;
 
-  const currentThemeLabel =
-    THEME_OPTIONS.find((o) => o.value === theme)?.label ?? "Theme";
-
-  const handleSignOut = async () => {
-    if (isSigningOut) return;
-    setIsSigningOut(true);
+  async function signOut() {
+    if (signingOut) return;
+    setSigningOut(true);
     try {
-      await authClient.signOut();
+      const result = await authClient.signOut();
+      if (!result.error && result.data.success) window.location.assign("/login");
+    } catch {
+      // Keep the current shell available when the sign-out request fails.
     } finally {
-      window.location.assign("/login");
+      setSigningOut(false);
     }
-  };
+  }
 
-  const isAdmin = user.role === "admin";
+  async function openPortal() {
+    if (openingPortal || isBillingLoading || !billingEnabled || portalUnavailable) return;
+    setOpeningPortal(true);
+    try {
+      const result = await marketApiRequest<{ url: string }>("/api/account/billing/portal", { method: "POST", body: "{}" });
+      window.location.assign(result.url);
+    } catch {
+      // Leave the menu usable so a transient portal failure can be retried.
+    } finally {
+      setOpeningPortal(false);
+    }
+  }
+
+  const themes = [{ value: "light", label: "Light", icon: Sun }, { value: "system", label: "System", icon: Monitor }, { value: "dark", label: "Dark", icon: Moon }];
 
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <SidebarMenuButton
-              size="lg"
-              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-            >
-              <Avatar className="h-8 w-8 rounded-md">
-                {user.image && <AvatarImage src={user.image} alt={user.name} />}
-                <AvatarFallback className="rounded-md text-xs">
-                  {getInitials(user.name)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">{user.name}</span>
-                <span className="truncate text-xs">{user.email}</span>
-              </div>
-              <ChevronsUpDown className="ml-auto size-4" />
-            </SidebarMenuButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
-            sideOffset={4}
-            align="start"
-          >
-            {/* Theme toggle row */}
+          <DropdownMenuTrigger asChild><SidebarMenuButton size="lg" aria-label={`${user.name} profile menu`} className="data-[state=open]:bg-sidebar-accent"><Avatar className="size-8 rounded-md">{user.image ? <AvatarImage src={user.image} alt={user.name} /> : null}<AvatarFallback className="rounded-md text-xs">{initials(user.name)}</AvatarFallback></Avatar><div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">{user.name}</span><span className="truncate text-xs">{user.email}</span></div><ChevronsUpDown className="ml-auto size-4" /></SidebarMenuButton></DropdownMenuTrigger>
+          <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[min(15rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] rounded-md" side="top" align="start" sideOffset={6}>
             <DropdownMenuGroup>
-              <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5">
-                <DropdownMenuItem className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                  {currentThemeLabel}
-                </DropdownMenuItem>
-                {THEME_OPTIONS.map(({ value, label, Icon }) => {
-                  const isActive = theme === value;
-                  return (
-                    <DropdownMenuItem
-                      key={value}
-                      aria-label={`${label} theme`}
-                      className={`${THEME_ITEM_BASE} ${isActive ? THEME_ITEM_ACTIVE : THEME_ITEM_INACTIVE}`}
-                      onSelect={(e) => {
-                        if (isActive) {
-                          e.preventDefault();
-                          return;
-                        }
-                        setTheme(value);
-                      }}
-                      title={label}
-                    >
-                      <Icon className="size-4" />
-                    </DropdownMenuItem>
-                  );
-                })}
+              <div className="grid grid-cols-3 gap-1 p-2">
+                {themes.map(({ value, label, icon: Icon }) => <Button key={value} type="button" variant={theme === value ? "secondary" : "ghost"} size="sm" className="h-8 px-2" onClick={() => setTheme(value)} aria-label={`${label} theme`}><Icon className="size-3.5" />{theme === value ? <Check className="size-3" /> : null}</Button>)}
               </div>
             </DropdownMenuGroup>
-
-            {/* Team management (admin only) */}
-            {isAdmin && onOpenSettings && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      e.preventDefault();
-                      onOpenSettings("team");
-                    }}
-                  >
-                    <Users />
-                    Team Management
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-              </>
-            )}
-
-            {/* Logout */}
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={isSigningOut}
-              onSelect={(e) => {
-                e.preventDefault();
-                handleSignOut();
-              }}
-              className="text-destructive focus:text-destructive"
-            >
-              <LogOut className="text-destructive" />
-              {isSigningOut ? "Logging out..." : "Log out"}
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem onSelect={(event) => { event.preventDefault(); onOpenSettings("profile"); }}><UserRound />Profile</DropdownMenuItem>
+            </DropdownMenuGroup>
+            {billingEnabled ? <><DropdownMenuSeparator /><DropdownMenuGroup><DropdownMenuItem onSelect={(event) => { event.preventDefault(); onOpenSettings("subscription"); }}><Star />Subscription</DropdownMenuItem><DropdownMenuItem disabled={openingPortal || isBillingLoading || portalUnavailable} onSelect={(event) => { event.preventDefault(); void openPortal(); }}>{openingPortal ? <Loader2 className="animate-spin" /> : <CreditCard />}{openingPortal ? "Opening Billing…" : "Manage Billing"}</DropdownMenuItem></DropdownMenuGroup></> : null}
+            {user.isAdmin ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => window.location.assign(mode === "admin" ? "/account/api-keys" : "/admin")}><ShieldCheck />{mode === "admin" ? "Customer account" : "Admin"}</DropdownMenuItem></> : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={signingOut} onSelect={(event) => { event.preventDefault(); void signOut(); }}>{signingOut ? <Loader2 className="animate-spin" /> : <LogOut />}{signingOut ? "Signing out…" : "Sign out"}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

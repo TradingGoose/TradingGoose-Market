@@ -4,7 +4,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from '@/components/ui/button'
 import { EllipsisVerticalIcon } from 'lucide-react'
 import { CryptoRow } from './types'
-import { useCanEdit } from '@/lib/auth/role-context'
 
 type CryptoRowActionsProps = {
   crypto: CryptoRow
@@ -13,9 +12,6 @@ type CryptoRowActionsProps = {
 }
 
 export function CryptoRowActions({ crypto, onEdit, onDelete }: CryptoRowActionsProps) {
-  const canEdit = useCanEdit()
-  if (!canEdit) return null
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

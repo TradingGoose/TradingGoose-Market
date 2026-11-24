@@ -1,29 +1,28 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
-import { db, schema } from "@tradinggoose/db";
-import { apiRequireEditor } from "@/lib/auth/session";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
+
+const routePolicy = createSystemAdminRoutePolicy("/api/market-hours/[id]");
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(_request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   const { id: marketHourId } = await params;
   if (!marketHourId) {
     return NextResponse.json({ error: "Market hour id is required." }, { status: 400 });
   }
 
-  const existing = (await db
+  const existing = (await requireDatabase()
     .select({ id: schema.marketHours.id })
     .from(schema.marketHours)
     .where(eq(schema.marketHours.id, marketHourId))
@@ -34,7 +33,7 @@ export async function DELETE(
   }
 
   try {
-    await db.delete(schema.marketHours).where(eq(schema.marketHours.id, marketHourId));
+    await requireDatabase().delete(schema.marketHours).where(eq(schema.marketHours.id, marketHourId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete market hour.";
     console.error("[market-hours:delete] API error:", message);
@@ -43,3 +42,10 @@ export async function DELETE(
 
   return NextResponse.json({ data: { id: marketHourId } });
 }
+
+export const OPTIONS = routePolicy.options;
+export const GET = routePolicy.get;
+export const HEAD = routePolicy.rejectHead;
+export const POST = routePolicy.post;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;

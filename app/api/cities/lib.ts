@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 export type CityRow = {
   id: string;
@@ -64,7 +65,7 @@ export async function fetchCitiesFromDb(query: CitiesQuery) {
   const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
   const offset = (query.page - 1) * query.pageSize;
 
-  const [{ total }] = (await db!.execute(sql`
+  const [{ total }] = (await requireDatabase().execute(sql`
     SELECT COUNT(*)::int AS total
     FROM cities ct
     LEFT JOIN countries c ON c.id = ct.country_id
@@ -72,7 +73,7 @@ export async function fetchCitiesFromDb(query: CitiesQuery) {
     ${whereClause}
   `)) as { total: number }[];
 
-  const rowsFromDb = (await db!.execute(sql`
+  const rowsFromDb = (await requireDatabase().execute(sql`
     SELECT
       ct.id,
       ct.name,
@@ -113,7 +114,7 @@ function buildCityId(countryCode: string | null, cityName: string) {
 }
 
 export async function fetchCitiesForExport() {
-  const rows = (await db!.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT
       ct.name,
       c.code AS "countryCode",

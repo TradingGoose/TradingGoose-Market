@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { db } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 
 /* ------------------------------------------------------------------ */
 /*  Shared PG-error and resolution helpers (used by route.ts & [id])  */
@@ -19,12 +20,11 @@ export function extractPgConstraint(error: unknown) {
 }
 
 export async function resolveCurrencyId(value: string | null) {
-  if (!db) return null;
   if (value === null) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const result = (await db.execute(sql`
+  const result = (await requireDatabase().execute(sql`
     SELECT id FROM currencies
     WHERE id = ${trimmed} OR code ILIKE ${trimmed}
     ORDER BY CASE WHEN id = ${trimmed} THEN 0 ELSE 1 END
@@ -35,12 +35,11 @@ export async function resolveCurrencyId(value: string | null) {
 }
 
 export async function resolveExchId(value: string | null) {
-  if (!db) return null;
   if (value === null) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id
     FROM exchanges
     WHERE id = ${trimmed}
@@ -51,12 +50,11 @@ export async function resolveExchId(value: string | null) {
 }
 
 export async function resolveMarketId(value: string | null) {
-  if (!db) return null;
   if (value === null) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id
     FROM markets
     WHERE id = ${trimmed} OR code ILIKE ${trimmed}
@@ -68,7 +66,6 @@ export async function resolveMarketId(value: string | null) {
 }
 
 export async function resolveExchIds(values: string[]) {
-  if (!db) return [] as string[];
   const tokens = Array.from(
     new Set(
       values
@@ -78,7 +75,7 @@ export async function resolveExchIds(values: string[]) {
   );
   if (!tokens.length) return [] as string[];
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id
     FROM exchanges
     WHERE id IN (${sql.join(tokens.map((token) => sql`${token}`), sql`, `)})
@@ -306,7 +303,7 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   if (!hasFilters && unfilteredListingCount && Date.now() - unfilteredListingCount.ts < UNFILTERED_COUNT_TTL) {
     totalPromise = Promise.resolve(unfilteredListingCount.total);
   } else {
-    totalPromise = (db!.execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
+    totalPromise = (requireDatabase().execute(buildCountQuery(query, filters)) as Promise<{ total: number }[]>)
       .then((rows) => {
         const total = rows[0]?.total ?? 0;
         if (!hasFilters) unfilteredListingCount = { total, ts: Date.now() };
@@ -317,7 +314,7 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
   const [total, rowsFromDb] = await Promise.all([
     totalPromise,
 
-    db!.execute(sql`
+    requireDatabase().execute(sql`
       SELECT
         l.id,
         l.base,
@@ -373,7 +370,7 @@ export async function fetchListingsFromDb(query: ListingsQuery) {
 }
 
 export async function fetchListingsForExport() {
-  const rowsFromDb = (await db!.execute(sql`
+  const rowsFromDb = (await requireDatabase().execute(sql`
     SELECT
       l.id,
       l.base,

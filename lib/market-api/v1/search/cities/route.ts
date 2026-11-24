@@ -1,9 +1,11 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
-import { db } from "@tradinggoose/db";
-import { parseListParam } from "../parsing";
+import { requireDatabase } from "@/lib/db/runtime";
+
+import { parseListParam, parsePositiveInt } from "../parsing";
 import { resolveSearchParams } from "../params";
+
 
 type CitySearchRow = {
   id: string;
@@ -18,19 +20,7 @@ export type CitySearchParams = {
   limit?: string | null;
 };
 
-function parsePositiveInt(value: string | null | undefined, fallback: number, max?: number) {
-  if (value == null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const normalized = Math.max(Math.floor(parsed), 1);
-  if (typeof max === "number") return Math.min(normalized, max);
-  return normalized;
-}
-
 export async function searchCitiesRows(params: CitySearchParams) {
-  if (!db) {
-    throw new Error("Database connection is not configured.");
-  }
 
   const cityId = params.cityId?.trim() ?? "";
   const cityName = params.cityName?.trim() ?? "";
@@ -58,7 +48,7 @@ export async function searchCitiesRows(params: CitySearchParams) {
 
   const whereClause = sql`WHERE ${sql.join(filters, sql` AND `)}`;
 
-  const rows = (await db.execute(sql`
+  const rows = (await requireDatabase().execute(sql`
     SELECT id, name, country_id AS "countryId"
     FROM cities
     ${whereClause}
@@ -71,9 +61,6 @@ export async function searchCitiesRows(params: CitySearchParams) {
 
 export async function getSearchCities(c: ApiContext) {
   try {
-    if (!db) {
-      return c.json({ data: [], error: "Database connection is not configured." }, 503);
-    }
 
     const request = c.req.raw;
     const searchParams = await resolveSearchParams(request);

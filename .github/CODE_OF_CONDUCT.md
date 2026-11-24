@@ -1,8 +1,8 @@
-# TradingGoose Studio Code of Conduct
+# TradingGoose Market Code of Conduct
 
 ## Our Commitment
 
-TradingGoose Studio is an open-source project for technical LLM trading workflows.
+TradingGoose Market is an open-source service for canonical market reference data.
 We want the project to be a professional, respectful, and useful place for
 developers, researchers, traders, designers, and contributors of all experience
 levels.

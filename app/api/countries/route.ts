@@ -2,16 +2,16 @@ import { NextResponse } from "next/server";
 import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
-import { db, schema } from "@tradinggoose/db";
+import { schema } from "@tradinggoose/db";
+import { requireDatabase } from "@/lib/db/runtime";
+
 import { fetchCountriesFromDb, type CountriesQuery } from "./lib";
-import { apiRequireEditor } from "@/lib/auth/session";
 import { parsePositiveInt } from "@/lib/api-utils";
-import {
-  runAppRouteAdminReadEnrichers,
-  runAppRouteAfterWriteEnricher
-} from "@/lib/market-api/plugins/app-routes";
+import { createSystemAdminRoutePolicy } from "@/lib/market-api/core/entity-route";
+
 
 export const runtime = "nodejs";
+const routePolicy = createSystemAdminRoutePolicy("/api/countries");
 
 type CountryOptionRow = {
   id: string;
@@ -21,13 +21,10 @@ type CountryOptionRow = {
 };
 
 export async function GET(request: Request) {
+  const auth = await routePolicy.authorize(request);
+  if (auth.error) return auth.error;
+
   try {
-    if (!db) {
-      return NextResponse.json(
-        { data: [], error: "Database connection is not configured." },
-        { status: 503 }
-      );
-    }
 
     const { searchParams } = new URL(request.url);
     const pageParam = searchParams.get("page");
@@ -46,7 +43,7 @@ export async function GET(request: Request) {
 
       const whereClause = filters.length ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
 
-      const rows = (await db.execute(sql`
+      const rows = (await requireDatabase().execute(sql`
         SELECT id, code, name, icon_url AS "iconUrl"
         FROM countries
         ${whereClause}
@@ -73,9 +70,7 @@ export async function GET(request: Request) {
     };
 
     const payload = await fetchCountriesFromDb(query);
-    const data = await runAppRouteAdminReadEnrichers(request, "country", payload.data);
-
-    return NextResponse.json({ ...payload, data });
+    return NextResponse.json(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[countries] API error:", message);
@@ -90,15 +85,9 @@ const createCountrySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const auth = await apiRequireEditor();
+  const auth = await routePolicy.authorize(request);
   if (auth.error) return auth.error;
 
-  if (!db) {
-    return NextResponse.json(
-      { error: "Database connection is not configured." },
-      { status: 503 }
-    );
-  }
 
   let payload: z.infer<typeof createCountrySchema>;
   try {
@@ -124,14 +113,19 @@ export async function POST(request: Request) {
 
   let newId: string | null = null;
   try {
-    const result = await db
+    const result = await requireDatabase()
       .insert(schema.countries)
       .values({ code, name, iconUrl })
       .returning({ id: schema.countries.id });
 
     newId = result[0]?.id ?? null;
-  } catch (error: any) {
-    if (error?.code === "23505") {
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "23505"
+    ) {
       return NextResponse.json({ error: "Country already exists." }, { status: 409 });
     }
     const message = error instanceof Error ? error.message : "Failed to create country.";
@@ -150,7 +144,11 @@ export async function POST(request: Request) {
   });
 
   const createdCountry = refreshed.data.find(row => row.id === newId) ?? null;
-  const data = await runAppRouteAfterWriteEnricher(request, "country", createdCountry, auth.user.id);
-
-  return NextResponse.json({ data }, { status: 201 });
+  return NextResponse.json({ data: createdCountry }, { status: 201 });
 }
+
+export const HEAD = (request: Request) => routePolicy.head(request, GET);
+export const OPTIONS = routePolicy.options;
+export const PUT = routePolicy.put;
+export const PATCH = routePolicy.patch;
+export const DELETE = routePolicy.delete;
