@@ -597,7 +597,7 @@ describe.sequential("fresh database migration", () => {
       const controlUrl = parseControlUrl(process.env.DATABASE_URL);
       const databaseName = `${GENERATED_DATABASE_PREFIX}${randomUUID().replaceAll("-", "")}`;
       const targetUrl = generatedDatabaseUrl(controlUrl, databaseName);
-      const controlSql = postgres(controlUrl.toString(), { max: 1 });
+      const controlSql = postgres(controlUrl.toString(), { max: 1, prepare: false });
       let databaseCreated = false;
       let targetSql: DirectSql | null = null;
       let applicationClient: DirectSql | null = null;
@@ -617,7 +617,7 @@ describe.sequential("fresh database migration", () => {
 
         await controlSql.unsafe(`create database "${databaseName}" owner market`);
         databaseCreated = true;
-        targetSql = postgres(targetUrl, { max: 2 });
+        targetSql = postgres(targetUrl, { max: 2, prepare: false });
 
         try {
           await assertInitiallyEmpty(targetSql);
@@ -629,6 +629,10 @@ describe.sequential("fresh database migration", () => {
           applicationClient = await assertRealSignupCreatesCanonicalCustomer(targetSql, databaseName);
           const { assertCustomerRowLockOrder } = await import("../helpers/customer-row-locks");
           await assertCustomerRowLockOrder(targetSql, applicationClient);
+          const { assertPrivateRankOrdering } = await import("../helpers/private-rank-order");
+          await assertPrivateRankOrdering(targetSql);
+          const { assertPooledKeyRecovery } = await import("../helpers/pooled-key-recovery");
+          await assertPooledKeyRecovery(targetSql);
           const { assertActivationSerialization } = await import("../helpers/activation-serialization");
           await assertActivationSerialization(targetSql);
           const { assertBillingPaymentBlock } = await import("../helpers/billing-payment-block");

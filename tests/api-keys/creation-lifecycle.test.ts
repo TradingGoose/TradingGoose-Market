@@ -8,8 +8,8 @@ import {
 } from "@tradinggoose/db/schema";
 
 const mocks = vi.hoisted(() => ({
-  withPublicCreationLocks: vi.fn(),
-  withPrivateCreationLocks: vi.fn(),
+  publicLock: vi.fn(),
+  privateLock: vi.fn(),
   getProvider: vi.fn(),
   deleteCandidates: vi.fn(),
   emailVerificationEnabled: true,
@@ -19,9 +19,17 @@ vi.mock("@/lib/environment", () => ({
   getMarketRuntimeConfig: () => ({ betterAuth: { emailVerificationEnabled: mocks.emailVerificationEnabled } }),
 }));
 
+vi.mock("@/lib/db/runtime", () => ({ requireDatabase: () => fixture.database }));
 vi.mock("@/lib/db/locks", () => ({
-  withBillingSubjectAndApiKeyCreationHandlerLocks: mocks.withPublicCreationLocks,
-  withAdminGrantAndApiKeyCreationHandlerLocks: mocks.withPrivateCreationLocks,
+  withBoundedLockAcquisition: (_tx: unknown, acquire: () => Promise<unknown>) => acquire(),
+  acquireBillingSubjectLock: mocks.publicLock,
+  acquireAdminGrantLock: mocks.privateLock,
+  acquireApiKeyLock: (_tx: unknown, id: string) => {
+    expect(fixture.database.outerLockHeld).toBe(true);
+    fixture.lockedKeyId = id;
+    fixture.database.keyLockHeld = true;
+    fixture.events.push(`key:acquired:${id}`);
+  },
 }));
 
 vi.mock("@/lib/unkey/runtime", () => ({
@@ -53,6 +61,8 @@ class FakeCreationDatabase {
   projectionReturnsEmpty = false;
   failMappingInsert = false;
   failFinalAttemptDelete = false;
+  loseCommitReply = false;
+  afterProjectionCommit?: () => void;
   keyLockHeld = false;
   outerLockHeld = false;
   transactionCount = 0;
@@ -61,20 +71,21 @@ class FakeCreationDatabase {
   private transactionLabel: string | null = null;
   private readonly dialect = new PgDialect();
 
-  select() {
+  select(selection?: Record<string, unknown>) {
     return {
-      from: (table: unknown) => new FakeSelect(this, table),
+      from: (table: unknown) => new FakeSelect(this, table, selection),
     };
   }
 
   insert(table: unknown) {
     return {
-      values: async (value: Record<string, unknown>) => {
+      values: (value: Record<string, unknown>) => {
         this.requireKeyLock();
         if (table === marketApiKeyCreationAttempts) {
-          this.events.push("attempt:reserved");
+          this.events.push("attempt:dispatched");
           const now = new Date();
           const attempt = {
+            id: crypto.randomUUID(),
             providerKeyId: null,
             providerDisplayValue: null,
             dispatchedAt: null,
@@ -84,7 +95,7 @@ class FakeCreationDatabase {
           } as Attempt;
           this.attempts.push(attempt);
           this.lastInsertedAttempt = attempt;
-          return;
+          return { returning: async () => [{ ...attempt }] };
         }
         if (table === marketApiKeys) {
           this.events.push("mapping:insert");
@@ -147,10 +158,11 @@ class FakeCreationDatabase {
   async transaction<T>(callback: (transaction: never) => Promise<T>): Promise<T> {
     const priorAttempts = this.attempts.map((attempt) => ({ ...attempt }));
     const priorMappings = this.mappings.map((mapping) => ({ ...mapping }));
-    const label = this.transactionCount++ === 0 ? "reservation" : "finalization";
+    const label = ["reservation", "projection", "finalization"][this.transactionCount++] ?? "recovery";
     const previousLabel = this.transactionLabel;
     this.transactionLabel = label;
     this.events.push(`${label}:begin`);
+    let committed = false;
     try {
       const result = await callback(this as never);
       if (label === "finalization" && this.finalizationCommitGate) {
@@ -159,23 +171,32 @@ class FakeCreationDatabase {
         await this.finalizationCommitGate;
       }
       this.events.push(`${label}:commit`);
+      committed = true;
+      if (label === "projection") this.afterProjectionCommit?.();
+      if (label === "finalization" && this.loseCommitReply) throw new Error("commit acknowledgement lost");
       return result;
     } catch (error) {
+      if (committed) throw error;
       this.attempts = priorAttempts;
       this.mappings = priorMappings;
       this.events.push(`${label}:rollback`);
       throw error;
     } finally {
       this.transactionLabel = previousLabel;
+      this.outerLockHeld = false;
+      this.keyLockHeld = false;
+      this.events.push(`locks:released:${label}`);
     }
   }
 
-  rowsFor(table: unknown) {
+  rowsFor(table: unknown, selection?: Record<string, unknown>) {
     if (table === marketApiKeyCreationAttempts) {
-      if (this.transactionLabel !== null) this.requireKeyLock();
+      if (selection?.attempt) return this.attempts.map((attempt) => ({ attempt: { ...attempt } }));
+      this.requireKeyLock();
       this.events.push("attempt:inspected");
       return this.attempts.map((attempt) => ({ ...attempt }));
     }
+    if (table === marketApiKeys) return this.mappings;
     if (table === marketUsageOwner) {
       this.events.push("owner:rechecked");
       this.requireOuterLock();
@@ -220,13 +241,13 @@ class FakeCreationDatabase {
 
   private requireKeyLock() {
     if (!this.keyLockHeld) {
-      throw new Error("Creation database/provider work escaped the local-key session lock");
+      throw new Error("Creation database/provider work escaped the local-key transaction lock");
     }
   }
 
   private requireOuterLock() {
     if (!this.outerLockHeld) {
-      throw new Error("Creation state was loaded outside its subject/grant session lock");
+      throw new Error("Creation state was loaded outside its subject/grant transaction lock");
     }
   }
 }
@@ -235,6 +256,7 @@ class FakeSelect {
   constructor(
     private readonly database: FakeCreationDatabase,
     private readonly table: unknown,
+    private readonly selection?: Record<string, unknown>,
   ) {}
 
   where() {
@@ -250,7 +272,7 @@ class FakeSelect {
   }
 
   async limit(count: number) {
-    return this.database.rowsFor(this.table).slice(0, count);
+    return this.database.rowsFor(this.table, this.selection).slice(0, count);
   }
 }
 
@@ -272,6 +294,11 @@ function createFixture() {
             : "tg_pub_raw-secret-once",
       };
     }),
+    enableKey: vi.fn(async (id: string) => {
+      if (!database.keyLockHeld) failUnlocked();
+      expect(database.attempts[0]?.providerKeyId).toBe(id);
+      events.push("provider:enabled");
+    }),
     deleteKey: vi.fn(async () => {
       if (!database.keyLockHeld) failUnlocked();
       events.push("provider:delete_known");
@@ -287,7 +314,7 @@ function createFixture() {
 }
 
 function failUnlocked(): never {
-  throw new Error("Provider work escaped the local-key session lock");
+  throw new Error("Provider work escaped the local-key transaction lock");
 }
 
 function deferred() {
@@ -298,52 +325,26 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function runCreationLocks(
-  outer: string,
-  callback: (
-    database: never,
-    acquireKey: (keyId: string) => Promise<void>,
-  ) => Promise<unknown>,
-) {
-  fixture.events.push(`outer:acquired:${outer}`);
-  fixture.database.outerLockHeld = true;
-  try {
-    return await callback(fixture.database as never, async (keyId) => {
-      fixture.lockedKeyId = keyId;
-      fixture.database.keyLockHeld = true;
-      fixture.events.push(`key:acquired:${keyId}`);
-    });
-  } finally {
-    if (fixture.lockedKeyId) {
-      fixture.events.push(`key:released:${fixture.lockedKeyId}`);
-    }
-    fixture.database.keyLockHeld = false;
-    fixture.database.outerLockHeld = false;
-    fixture.events.push(`outer:released:${outer}`);
-  }
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.emailVerificationEnabled = true;
   fixture = createFixture();
   mocks.getProvider.mockImplementation(() => fixture.provider);
-  mocks.withPublicCreationLocks.mockImplementation(
-    async (userId: string, callback: never) =>
-      runCreationLocks(userId, callback),
-  );
-  mocks.withPrivateCreationLocks.mockImplementation(
-    async (grantId: string, callback: never) =>
-      runCreationLocks(grantId, callback),
-  );
-  mocks.deleteCandidates.mockImplementation(async (_provider, correlationId: string) => {
+  function outerLock(_tx: unknown, id: string) {
+    fixture.database.outerLockHeld = true;
+    fixture.events.push(`outer:acquired:${id}`);
+  }
+  mocks.publicLock.mockImplementation(outerLock);
+  mocks.privateLock.mockImplementation(outerLock);
+  mocks.deleteCandidates.mockImplementation(async (_provider, correlationId: string, knownKeyId?: string) => {
+    if (knownKeyId) fixture.events.push("provider:delete_known");
     if (!fixture.database.keyLockHeld) failUnlocked();
     fixture.events.push(`provider:confirm_zero:${correlationId}`);
     if (fixture.cleanupUncertain) throw new Error("provider cleanup is uncertain");
   });
 });
 
-describe("API-key creation lifecycle under the locked reserved connection", () => {
+describe("API-key creation lifecycle across committed phases", () => {
   it("reserves before dispatch, holds the key through provider/final commit, and reveals once afterward", async () => {
     const created = await createCustomerApiKey({
       userId: "user_1",
@@ -356,16 +357,18 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
     const inserted = fixture.database.lastInsertedAttempt;
     expect(inserted).not.toBeNull();
     expect(fixture.lockedKeyId).toBe(inserted?.reservedKeyId);
-    expect(eventIndex("attempt:reserved")).toBeLessThan(eventIndex("attempt:dispatched"));
+    expect(eventIndex("attempt:dispatched")).toBeLessThan(eventIndex("reservation:commit"));
+    expect(eventIndex("reservation:commit")).toBeLessThan(eventIndex("provider:create"));
+    expect(eventIndex("projection:commit")).toBeLessThan(eventIndex("provider:enabled"));
     expect(eventIndex("attempt:dispatched")).toBeLessThan(eventIndex("provider:create"));
     expect(eventIndex("provider:create")).toBeLessThan(
       eventIndex("attempt:provider_projected"),
     );
     expect(eventIndex("mapping:insert")).toBeLessThan(eventIndex("finalization:commit"));
     expect(eventIndex("finalization:commit")).toBeLessThan(
-      eventIndex(`key:released:${fixture.lockedKeyId}`),
+      eventIndex("locks:released:finalization"),
     );
-    expect(eventIndex("outer:released:user_1")).toBeLessThan(
+    expect(eventIndex("locks:released:finalization")).toBeLessThan(
       eventIndex("caller:received_secret"),
     );
 
@@ -383,7 +386,7 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
       inserted?.reservedKeyId,
       inserted?.correlationId,
     ];
-    expect(fixture.database.attemptMutationParameters.length).toBeGreaterThanOrEqual(3);
+    expect(fixture.database.attemptMutationParameters.length).toBeGreaterThanOrEqual(2);
     for (const parameters of fixture.database.attemptMutationParameters) {
       expect(parameters).toEqual(expect.arrayContaining(identityValues));
     }
@@ -418,30 +421,34 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
     expect(fixture.events).toContain("finalization:commit");
   });
 
-  it("deletes a prior reserved attempt under its reserved-key lock without provider work", async () => {
-    fixture.database.attempts = [
-      priorAttempt({
-        state: "reserved",
-        reservedKeyId: "reserved_not_dispatched",
-        correlationId: "correlation_not_dispatched",
-        dispatchedAt: null,
-      }),
-    ];
-
-    await expect(
-      createCustomerApiKey({
-        userId: "user_1",
-        name: "Retry reserved",
-        allowance: { limitUsd: null, windowDays: null },
-      }),
-    ).rejects.toBeInstanceOf(ApiKeyCreationConflict);
-
-    expect(fixture.lockedKeyId).toBe("reserved_not_dispatched");
-    expect(fixture.events).toContain("attempt:deleted_cleanup");
-    expect(fixture.provider.createKey).not.toHaveBeenCalled();
-    expect(fixture.provider.deleteKey).not.toHaveBeenCalled();
+  it("keeps a committed mapping when its acknowledgement is lost", async () => {
+    fixture.database.loseCommitReply = true;
+    await expect(createCustomerApiKey({
+      userId: "user_1", name: "Recovered", allowance: { limitUsd: null, windowDays: null },
+    })).resolves.toMatchObject({ secret: "tg_pub_raw-secret-once" });
+    expect(fixture.database.mappings).toHaveLength(1);
+    expect(fixture.database.attempts).toEqual([]);
     expect(mocks.deleteCandidates).not.toHaveBeenCalled();
-    expect(mocks.getProvider).not.toHaveBeenCalled();
+    expect(fixture.provider.enableKey).toHaveBeenCalledOnce();
+  });
+
+  it("fences a creator whose attempt was retired after the provider ID was projected", async () => {
+    fixture.database.afterProjectionCommit = () => { fixture.database.attempts = []; };
+    await expect(createCustomerApiKey({
+      userId: "user_1", name: "Retired", allowance: { limitUsd: null, windowDays: null },
+    })).rejects.toBeInstanceOf(ApiKeyCreationConflict);
+    expect(fixture.provider.enableKey).not.toHaveBeenCalled();
+    expect(mocks.deleteCandidates).not.toHaveBeenCalled();
+    expect(fixture.database.mappings).toEqual([]);
+  });
+
+  it("reconciles the exact projected ID after an enable reply is lost", async () => {
+    fixture.provider.enableKey.mockRejectedValueOnce(new Error("enable reply lost"));
+    await expect(createCustomerApiKey({
+      userId: "user_1", name: "Lost", allowance: { limitUsd: null, windowDays: null },
+    })).rejects.toThrow("enable reply lost");
+    expect(mocks.deleteCandidates).toHaveBeenCalledWith(fixture.provider, expect.any(String), "provider_key_1");
+    expect(fixture.database.mappings).toEqual([]);
     expect(fixture.database.attempts).toEqual([]);
   });
 
@@ -559,11 +566,10 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
       }),
     ).rejects.toBeInstanceOf(ApiKeyCreationConflict);
 
-    expect(fixture.events[0]).toBe("outer:acquired:grant_1");
-    expect(fixture.events).not.toContainEqual(expect.stringMatching(/^key:acquired:/));
+    expect(fixture.events).toContain("outer:acquired:grant_1");
     expect(fixture.events).toContain("grant:rechecked");
     expect(fixture.provider.createKey).not.toHaveBeenCalled();
-    expect(mocks.withPublicCreationLocks).not.toHaveBeenCalled();
+    expect(mocks.publicLock).not.toHaveBeenCalled();
   });
 
   it("denies an unverified customer before reserving a key or calling the provider", async () => {
@@ -577,9 +583,9 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
       }),
     ).rejects.toThrow("Market customer state is missing or not authorized");
 
-    expect(fixture.events[0]).toBe("outer:acquired:user_1");
+    expect(fixture.events).toContain("outer:acquired:user_1");
     expect(fixture.events).toContain("owner:rechecked");
-    expect(fixture.lockedKeyId).toBeNull();
+    expect(fixture.database.lastInsertedAttempt).toBeNull();
     expect(fixture.provider.createKey).not.toHaveBeenCalled();
     expect(fixture.database.attempts).toEqual([]);
   });
@@ -609,7 +615,7 @@ describe("API-key creation lifecycle under the locked reserved connection", () =
     expect(acquiredGrant).toBeLessThan(acquiredKey);
     expect(acquiredKey).toBeLessThan(providerCreate);
     expect(providerCreate).toBeLessThan(finalCommit);
-    expect(mocks.withPrivateCreationLocks).toHaveBeenCalledOnce();
+    expect(mocks.privateLock).toHaveBeenCalledTimes(3);
     expect(fixture.provider.createKey).toHaveBeenCalledOnce();
     expect(fixture.provider.createKey).toHaveBeenCalledWith(
       expect.objectContaining({ permission: "market.private" }),

@@ -1,6 +1,8 @@
+import type { MarketTransaction } from "@tradinggoose/db";
 import { NextResponse } from "next/server";
 
 export type ApiContext = {
+  tx?: MarketTransaction;
   req: {
     raw: Request;
     path: string;
@@ -11,11 +13,12 @@ export type ApiContext = {
   body: (body: BodyInit, status?: number) => Response;
 };
 
-export function createApiContext(request: Request): ApiContext {
+export function createApiContext(request: Request, tx?: MarketTransaction): ApiContext {
   const headers = new Headers({ "x-market-api": "next" });
   const path = new URL(request.url).pathname;
 
   return {
+    tx,
     req: {
       raw: request,
       path,

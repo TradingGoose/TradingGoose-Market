@@ -59,13 +59,21 @@ export function createUnkeyAdapter(config: UnkeyClientConfig) {
           name: input.name,
           prefix: input.permission === MARKET_PUBLIC_PERMISSION ? "tg_pub" : "tg_priv",
           permissions: [input.permission],
-          enabled: true,
+          enabled: false,
           recoverable: false,
           meta: { marketCorrelationId: input.correlationId },
         });
         return response.data;
       } catch (error) {
         providerFailure("creation", error);
+      }
+    },
+
+    async enableKey(keyId: string): Promise<void> {
+      try {
+        await client.keys.updateKey({ keyId, enabled: true });
+      } catch (error) {
+        providerFailure("activation", error);
       }
     },
 

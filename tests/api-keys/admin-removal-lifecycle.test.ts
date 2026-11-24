@@ -29,17 +29,7 @@ vi.mock("@/lib/db/locks", () => ({
   acquireApiKeyLock: vi.fn(async (_tx, keyId: string) => {
     state.events.push(`key-xact:${keyId}`);
   }),
-  withAdminGrantHandlerLock: async (
-    grantId: string,
-    callback: (database: FakeAdminDatabase) => Promise<unknown>,
-  ) => {
-    state.events.push(`grant-session:acquired:${grantId}`);
-    try {
-      return await callback(state.database);
-    } finally {
-      state.events.push(`grant-session:released:${grantId}`);
-    }
-  },
+  withBoundedLockAcquisition: (_tx: unknown, acquire: () => Promise<unknown>) => acquire(),
   withAdminGrantLock: async (
     grantId: string,
     callback: (database: FakeAdminDatabase) => Promise<unknown>,
@@ -50,7 +40,14 @@ vi.mock("@/lib/db/locks", () => ({
 }));
 
 vi.mock("@/lib/api-keys/revocation", () => ({
-  confirmProviderKeyRevocation: (...args: unknown[]) => state.confirm(...args),
+  confirmMappedKeyRevocation: async (tx: FakeAdminDatabase, key: Record<string, unknown>) => {
+    expect(tx).toBe(state.database);
+    expect(state.events).toContain("transaction:commit");
+    expect(tx.keys.find(item => item.id === key.id)?.revocationRequestedAt).toBeInstanceOf(Date);
+    const outcome = await state.confirm(key.unkeyKeyId);
+    if (!outcome.retryable) await tx.update(marketApiKeys).set({ providerRevokedAt: new Date() }).where();
+    return outcome;
+  },
 }));
 
 vi.mock("@/lib/unkey/provisioning", () => ({
@@ -95,11 +92,10 @@ describe("admin membership lifecycle", () => {
     expect(state.database.emailVerified).toBe(false);
   });
 
-  it("reconciles mapped keys and every reserved/dispatched/cleanup attempt before deletion", async () => {
+  it("reconciles mapped keys and every dispatched/cleanup attempt before deletion", async () => {
     state.database.grant = { id: "grant_1", userId: "user_1", status: "active" };
     state.database.keys = [privateKey("key_1", "provider_mapping")];
     state.database.attempts = [
-      attempt("attempt_reserved", "reserved", null, "correlation_reserved"),
       attempt("attempt_dispatched", "dispatched", "provider_attempt", "correlation_dispatched"),
       attempt("attempt_cleanup", "cleanup_required", null, "correlation_cleanup"),
     ];
@@ -116,8 +112,8 @@ describe("admin membership lifecycle", () => {
     expect(state.database.attempts).toEqual([]);
     expect(state.confirm.mock.calls.map(([providerId]) => providerId)).toEqual([
       "provider_mapping",
-      "provider_attempt",
     ]);
+    expect(state.deleteCandidates).toHaveBeenCalledWith(expect.anything(), "correlation_dispatched", "provider_attempt");
     expect(state.deleteCandidates.mock.calls.map(([, correlationId]) => correlationId))
       .toEqual(["correlation_dispatched", "correlation_cleanup"]);
     expect(state.events.indexOf("grant-status:removing")).toBeLessThan(
@@ -126,7 +122,7 @@ describe("admin membership lifecycle", () => {
     expect(state.events.indexOf("attempt-deleted:attempt_cleanup")).toBeLessThan(
       state.events.indexOf("grant-deleted:grant_1"),
     );
-    expect(state.events.at(-1)).toBe("grant-session:released:grant_1");
+    expect(state.events.at(-1)).toBe("transaction:commit");
   });
 
   it("retains removing plus the uncertain attempt for a later retry", async () => {
@@ -144,7 +140,7 @@ describe("admin membership lifecycle", () => {
     );
     expect(state.database.attempts).toHaveLength(1);
     expect(state.events).not.toContain("grant-deleted:grant_1");
-    expect(state.events.at(-1)).toBe("grant-session:released:grant_1");
+    expect(state.events.at(-1)).toBe("transaction:commit");
   });
 });
 
@@ -163,9 +159,10 @@ class FakeAdminDatabase {
   update(table: unknown) {
     return {
       set: (values: Record<string, unknown>) => ({
-        where: () => ({
-          returning: async () => this.applyUpdate(table, values),
-        }),
+        where: () => {
+          const rows = this.applyUpdate(table, values);
+          return { returning: async () => rows };
+        },
       }),
     };
   }
@@ -188,14 +185,17 @@ class FakeAdminDatabase {
 
   delete(table: unknown) {
     return {
-      where: () => ({
-        returning: async () => this.applyDelete(table),
-      }),
+      where: () => {
+        const rows = this.applyDelete(table);
+        return { returning: async () => rows };
+      },
     };
   }
 
   async transaction<T>(callback: (tx: FakeAdminDatabase) => Promise<T>) {
-    return callback(this);
+    const result = await callback(this);
+    state.events.push("transaction:commit");
+    return result;
   }
 
   rows(table: unknown, selection?: Record<string, unknown>) {
@@ -235,6 +235,12 @@ class FakeAdminDatabase {
           ? `mapping-provider-revoked:${target.id}`
           : `mapping-revocation-requested:${target.id}`,
       );
+      return [{ id: target.id }];
+    }
+    if (table === marketApiKeyCreationAttempts) {
+      const target = this.attempts[0];
+      if (!target) return [];
+      Object.assign(target, values);
       return [{ id: target.id }];
     }
     throw new Error("Unexpected update table");
@@ -301,12 +307,14 @@ function privateKey(id: string, providerKeyId: string) {
 
 function attempt(
   id: string,
-  attemptState: "reserved" | "dispatched" | "cleanup_required",
+  attemptState: "dispatched" | "cleanup_required",
   providerKeyId: string | null,
   correlationId: string,
 ) {
   return {
     id,
+    userId: "user_1",
+    usageOwnerId: "owner_1",
     reservedKeyId: `reserved_${id}`,
     adminGrantId: "grant_1",
     keyClass: "private",

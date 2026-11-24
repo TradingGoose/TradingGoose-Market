@@ -5,15 +5,17 @@ import {
   systemAdmin,
   user,
 } from "@tradinggoose/db/schema";
-import { and, eq } from "drizzle-orm";
-import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
+import { and, eq, isNull } from "drizzle-orm";
+import type { MarketTransaction } from "@tradinggoose/db";
 import {
-  withAdminGrantAndApiKeyCreationHandlerLocks,
-  withBillingSubjectAndApiKeyCreationHandlerLocks,
+  acquireApiKeyLock,
+  acquireAdminGrantLock,
+  acquireBillingSubjectLock,
+  withBoundedLockAcquisition,
 } from "@/lib/db/locks";
-import {
-  deleteAndConfirmProvisioningCandidates,
-} from "@/lib/unkey/provisioning";
+import { requireDatabase } from "@/lib/db/runtime";
+import { deleteAndConfirmProvisioningCandidates } from "@/lib/unkey/provisioning";
+import type { CreatedProviderKey } from "@/lib/unkey/client";
 import { getMarketKeyProvider } from "@/lib/unkey/runtime";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import type { CustomerKeyAllowance } from "./validation";
@@ -24,319 +26,136 @@ export class ApiKeyCreationConflict extends Error {
   override readonly name = "ApiKeyCreationConflict";
 }
 
-type LockedCreationAttemptIdentity = {
-  attemptId: string;
-  reservedKeyId: string;
-  correlationId: string;
-};
+type Attempt = typeof marketApiKeyCreationAttempts.$inferSelect;
+type CreationInput = {
+  userId: string;
+  name: string;
+  allowance: CustomerKeyAllowance;
+} & ({ keyClass: "public"; adminGrantId: null } | { keyClass: "private"; adminGrantId: string });
 
-export async function createCustomerApiKey(input: {
+export function createCustomerApiKey(input: {
   userId: string;
   name: string;
   allowance: CustomerKeyAllowance;
 }) {
-  return withBillingSubjectAndApiKeyCreationHandlerLocks(
-    input.userId,
-    async (database, acquireApiKeySessionLock) => {
-      const usageOwnerId = await loadCanonicalCreationState(database, {
-        userId: input.userId,
-        keyClass: "public",
-        adminGrantId: null,
-      });
-      return createApiKey({
-        userId: input.userId,
-        usageOwnerId,
-        keyClass: "public",
-        adminGrantId: null,
-        name: input.name,
-        allowance: input.allowance,
-        database,
-        acquireApiKeySessionLock,
-      });
-    },
-  );
+  return createApiKey({ ...input, keyClass: "public", adminGrantId: null });
 }
 
-export async function createAdminApiKey(input: {
-  userId: string;
-  adminGrantId: string;
-  name: string;
-}) {
-  return withAdminGrantAndApiKeyCreationHandlerLocks(
-    input.adminGrantId,
-    async (database, acquireApiKeySessionLock) => {
-      const usageOwnerId = await loadCanonicalCreationState(database, {
-        userId: input.userId,
-        keyClass: "private",
-        adminGrantId: input.adminGrantId,
-      });
-      return createApiKey({
-        userId: input.userId,
-        usageOwnerId,
-        keyClass: "private",
-        adminGrantId: input.adminGrantId,
-        name: input.name,
-        allowance: { limitUsd: null, windowDays: null },
-        database,
-        acquireApiKeySessionLock,
-      });
-    },
-  );
+export function createAdminApiKey(input: { userId: string; adminGrantId: string; name: string }) {
+  return createApiKey({
+    ...input,
+    keyClass: "private",
+    allowance: { limitUsd: null, windowDays: null },
+  });
 }
 
-async function loadCanonicalCreationState(
-  database: MarketDatabase,
-  input: {
-    userId: string;
-    keyClass: ApiKeyClass;
-    adminGrantId: string | null;
-  },
-) {
-  if (input.keyClass === "private" && !input.adminGrantId) {
-    throw new Error("Admin grant is required");
-  }
-  const ownerRows = await database
-    .select({
-      ownerId: marketUsageOwner.id,
-      ownerUserId: marketUsageOwner.userId,
-      activeUserId: user.id,
-      emailVerified: user.emailVerified,
-    })
-    .from(marketUsageOwner)
-    .innerJoin(user, eq(user.id, marketUsageOwner.userId))
-    .where(
-      and(
-        eq(marketUsageOwner.userId, input.userId),
-        eq(user.id, input.userId),
-      ),
-    )
-    .limit(2);
-  const owner = ownerRows[0];
-  if (
-    ownerRows.length !== 1 ||
-    !owner ||
-    owner.ownerUserId !== input.userId ||
-    owner.activeUserId !== input.userId ||
-    (owner.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
-  ) {
-    throw new Error("Market customer state is missing or not authorized");
+async function createApiKey(input: CreationInput) {
+  const database = requireDatabase();
+  function locked<T>(keyId: string | null, work: (tx: MarketTransaction) => Promise<T>) {
+    return database.transaction(async (tx) => {
+      await withBoundedLockAcquisition(tx, async () => {
+        if (input.keyClass === "public") await acquireBillingSubjectLock(tx, input.userId);
+        else await acquireAdminGrantLock(tx, input.adminGrantId);
+        if (keyId) await acquireApiKeyLock(tx, keyId);
+      });
+      return work(tx);
+    });
   }
 
-  if (input.keyClass === "private") {
-    const grantRows = await database
-      .select({ id: systemAdmin.id })
-      .from(systemAdmin)
-      .where(
-        and(
-          eq(systemAdmin.id, input.adminGrantId!),
-          eq(systemAdmin.userId, input.userId),
-          eq(systemAdmin.status, "active"),
-        ),
-      )
-      .limit(2);
-    if (grantRows.length !== 1) {
-      throw new ApiKeyCreationConflict("Admin membership is not active");
-    }
-  }
-  return owner.ownerId;
-}
-
-async function createApiKey(input: {
-  userId: string;
-  usageOwnerId: string;
-  keyClass: ApiKeyClass;
-  adminGrantId: string | null;
-  name: string;
-  allowance: CustomerKeyAllowance;
-  database: MarketDatabase;
-  acquireApiKeySessionLock: (keyId: string) => Promise<void>;
-}) {
-  const database = input.database;
-  const priorRows = await database
-    .select()
-    .from(marketApiKeyCreationAttempts)
-    .where(
-      and(
-        eq(marketApiKeyCreationAttempts.usageOwnerId, input.usageOwnerId),
-        eq(marketApiKeyCreationAttempts.keyClass, input.keyClass),
-      ),
-    )
-    .limit(2);
-  if (priorRows.length > 1) {
-    throw new Error("Key creation attempt state is ambiguous");
-  }
-  const observedPrior = priorRows[0];
-  const reservedKeyId = observedPrior?.reservedKeyId ?? crypto.randomUUID();
-  await input.acquireApiKeySessionLock(reservedKeyId);
-
-  const correlationId = crypto.randomUUID();
-  const attemptId = crypto.randomUUID();
-
-  const attempt = await database.transaction(async (tx) => {
-    await assertCreationAdmission(tx, input);
-
-    const unresolved = await tx
-      .select()
+  const dispatch = await locked(null, async (tx) => {
+    const [prior, other] = await tx
+      .select({ attempt: marketApiKeyCreationAttempts })
       .from(marketApiKeyCreationAttempts)
+      .innerJoin(marketUsageOwner, eq(marketUsageOwner.id, marketApiKeyCreationAttempts.usageOwnerId))
       .where(
         and(
-          eq(marketApiKeyCreationAttempts.usageOwnerId, input.usageOwnerId),
+          eq(marketUsageOwner.userId, input.userId),
           eq(marketApiKeyCreationAttempts.keyClass, input.keyClass),
         ),
       )
-      .for("update")
       .limit(2);
-    if (unresolved.length > 1) {
-      throw new Error("Key creation attempt state is ambiguous");
-    }
-    const prior = unresolved[0];
-    if (observedPrior) {
-      if (
-        !prior ||
-        prior.id !== observedPrior.id ||
-        prior.reservedKeyId !== reservedKeyId ||
-        prior.correlationId !== observedPrior.correlationId ||
-        prior.usageOwnerId !== input.usageOwnerId ||
-        prior.userId !== input.userId ||
-        prior.keyClass !== input.keyClass
-      ) {
-        throw new Error("Key creation attempt changed before its local-key lock was acquired");
-      }
-      if (
-        input.keyClass === "private" &&
-        prior.adminGrantId !== input.adminGrantId
-      ) {
-        throw new ApiKeyCreationConflict(
-          "A prior key creation belongs to a different admin grant",
-        );
-      }
-      return { prior } as const;
-    }
+    if (other) throw new Error("Key creation attempt state is ambiguous");
+    const reservedKeyId = prior?.attempt.reservedKeyId ?? crypto.randomUUID();
+    await withBoundedLockAcquisition(tx, () => acquireApiKeyLock(tx, reservedKeyId));
+    const usageOwnerId = await assertCreationAdmission(tx, input);
+
     if (prior) {
-      throw new Error("A key creation attempt appeared before reservation");
+      const attempt = prior.attempt;
+      if (
+        attempt.userId !== input.userId ||
+        attempt.usageOwnerId !== usageOwnerId ||
+        attempt.adminGrantId !== input.adminGrantId ||
+        attempt.keyClass !== input.keyClass
+      ) {
+        throw new ApiKeyCreationConflict("A prior key creation belongs to a different owner or grant");
+      }
+      return { cleanup: await reconcileCreationAttempt(tx, attempt) } as const;
     }
 
-    await tx.insert(marketApiKeyCreationAttempts).values({
-      id: attemptId,
-      reservedKeyId,
-      usageOwnerId: input.usageOwnerId,
-      userId: input.userId,
-      adminGrantId: input.adminGrantId,
-      keyClass: input.keyClass,
-      name: input.name,
-      spendLimitUsd: input.allowance.limitUsd,
-      spendWindowDays: input.allowance.windowDays,
-      correlationId,
-      state: "reserved",
-    });
-    return { usageOwnerId: input.usageOwnerId } as const;
+    const [attempt] = await tx
+      .insert(marketApiKeyCreationAttempts)
+      .values({
+        userId: input.userId,
+        usageOwnerId,
+        reservedKeyId,
+        correlationId: crypto.randomUUID(),
+        adminGrantId: input.adminGrantId,
+        keyClass: input.keyClass,
+        name: input.name,
+        spendLimitUsd: input.allowance.limitUsd,
+        spendWindowDays: input.allowance.windowDays,
+        state: "dispatched",
+        dispatchedAt: new Date(),
+      })
+      .returning();
+    if (!attempt) throw new Error("Key creation attempt could not be recorded");
+    return { attempt } as const;
   });
-
-  if ("prior" in attempt && attempt.prior) {
-    await reconcilePriorCreationAttempt(database, attempt.prior, reservedKeyId);
-    throw new ApiKeyCreationConflict(
-      "A prior key creation was reconciled. Submit a fresh create request.",
-    );
+  if ("cleanup" in dispatch) {
+    if (dispatch.cleanup) throw dispatch.cleanup.error;
+    throw new ApiKeyCreationConflict("A prior key creation was reconciled. Submit a fresh create request.");
   }
 
-  const lockedAttempt = {
-    attemptId,
-    reservedKeyId,
-    correlationId,
-  };
-
-  const dispatched = await database
-    .update(marketApiKeyCreationAttempts)
-    .set({ state: "dispatched", dispatchedAt: new Date(), updatedAt: new Date() })
-    .where(
-      and(
-        lockedAttemptPredicate(lockedAttempt),
-        eq(marketApiKeyCreationAttempts.state, "reserved"),
-      ),
-    )
-    .returning({ id: marketApiKeyCreationAttempts.id });
-  if (!dispatched[0]) {
-    throw new Error("Key creation reservation could not be dispatched");
-  }
-
+  const { attempt } = dispatch;
   const provider = getMarketKeyProvider();
-  let created: { keyId: string; key: string };
+  const issued: { key?: CreatedProviderKey } = {};
   const finalizedAt = new Date();
   try {
-    created = await provider.createKey({
-      name: input.name,
-      permission: input.keyClass === "public" ? "market.public" : "market.private",
-      correlationId,
+    await locked(attempt.reservedKeyId, async (tx) => {
+      await assertDispatch(tx, input, attempt, null);
+      const created = await provider.createKey({
+        name: attempt.name,
+        permission: input.keyClass === "public" ? "market.public" : "market.private",
+        correlationId: attempt.correlationId,
+      });
+      issued.key = created;
+      const projected = await tx
+        .update(marketApiKeyCreationAttempts)
+        .set({
+          providerKeyId: created.keyId,
+          providerDisplayValue: maskRawKey(created.key),
+          updatedAt: new Date(),
+        })
+        .where(dispatchPredicate(attempt, null))
+        .returning({ id: marketApiKeyCreationAttempts.id });
+      if (!projected[0]) throw new Error("Key creation provider result could not be projected");
     });
-  } catch (error) {
-    await cleanupCreationAttempt(database, provider, lockedAttempt);
-    throw error;
-  }
 
-  const displayValue = maskRawKey(created.key);
-  try {
-    const projected = await database
-      .update(marketApiKeyCreationAttempts)
-      .set({
-        providerKeyId: created.keyId,
-        providerDisplayValue: displayValue,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          lockedAttemptPredicate(lockedAttempt),
-          eq(marketApiKeyCreationAttempts.state, "dispatched"),
-        ),
-      )
-      .returning({ id: marketApiKeyCreationAttempts.id });
-    if (!projected[0]) {
-      throw new Error("Key creation provider result could not be projected");
-    }
-  } catch (error) {
-    await cleanupKnownCreationResult(database, {
-      ...lockedAttempt,
-      providerKeyId: created.keyId,
-      providerDisplayValue: displayValue,
-    });
-    throw error;
-  }
-
-  try {
-    await database.transaction(async (tx) => {
-      await assertCreationAdmission(tx, input);
-      const attemptRows = await tx
-        .select()
-        .from(marketApiKeyCreationAttempts)
-        .where(lockedAttemptPredicate(lockedAttempt))
-        .for("update")
-        .limit(1);
-      const current = attemptRows[0];
-      if (
-        !current ||
-        current.usageOwnerId !== input.usageOwnerId ||
-        current.userId !== input.userId ||
-        current.adminGrantId !== input.adminGrantId ||
-        current.keyClass !== input.keyClass ||
-        current.name !== input.name ||
-        current.spendLimitUsd !== input.allowance.limitUsd ||
-        current.spendWindowDays !== input.allowance.windowDays ||
-        current.state !== "dispatched" ||
-        current.providerKeyId !== created.keyId ||
-        current.providerDisplayValue !== displayValue
-      ) {
-        throw new Error("Key creation reservation changed before finalization");
-      }
+    const created = issued.key!;
+    await locked(attempt.reservedKeyId, async (tx) => {
+      await assertDispatch(tx, input, attempt, created);
+      await provider.enableKey(created.keyId);
       await tx.insert(marketApiKeys).values({
-        id: reservedKeyId,
+        id: attempt.reservedKeyId,
         usageOwnerId: attempt.usageOwnerId,
         userId: input.userId,
         unkeyKeyId: created.keyId,
         adminGrantId: input.adminGrantId,
         keyClass: input.keyClass,
-        name: input.name,
-        displayValue,
-        spendLimitUsd: input.allowance.limitUsd,
-        spendWindowDays: input.allowance.windowDays,
+        name: attempt.name,
+        displayValue: maskRawKey(created.key),
+        spendLimitUsd: attempt.spendLimitUsd,
+        spendWindowDays: attempt.spendWindowDays,
         spendLimitRevision: input.keyClass === "public" ? 1 : null,
         spendLimitUpdatedAt: input.keyClass === "public" ? finalizedAt : null,
         createdAt: finalizedAt,
@@ -344,25 +163,48 @@ async function createApiKey(input: {
       });
       const deleted = await tx
         .delete(marketApiKeyCreationAttempts)
-        .where(lockedAttemptPredicate(lockedAttempt))
+        .where(dispatchPredicate(attempt, created))
         .returning({ id: marketApiKeyCreationAttempts.id });
-      if (!deleted[0]) {
-        throw new Error("Key creation attempt could not be deleted after finalization");
-      }
+      if (!deleted[0]) throw new Error("Key creation attempt could not be deleted after finalization");
     });
   } catch (error) {
-    await cleanupKnownCreationResult(database, {
-      ...lockedAttempt,
-      providerKeyId: created.keyId,
-      providerDisplayValue: displayValue,
+    // COMMIT can succeed before its reply is lost. Preserve any committed mapping.
+    const canReveal = await locked(attempt.reservedKeyId, async (tx) => {
+      const [mapping] = await tx
+        .select()
+        .from(marketApiKeys)
+        .where(eq(marketApiKeys.id, attempt.reservedKeyId))
+        .limit(1);
+      const [current] = await tx
+        .select()
+        .from(marketApiKeyCreationAttempts)
+        .where(attemptPredicate(attempt))
+        .for("update")
+        .limit(1);
+      if (mapping) {
+        return (
+          !current &&
+          mapping.unkeyKeyId === issued.key?.keyId &&
+          mapping.usageOwnerId === attempt.usageOwnerId &&
+          mapping.userId === input.userId &&
+          mapping.keyClass === input.keyClass &&
+          mapping.adminGrantId === input.adminGrantId &&
+          !mapping.revocationRequestedAt &&
+          !mapping.providerRevokedAt &&
+          (await assertCreationAdmission(tx, input)) === attempt.usageOwnerId
+        );
+      }
+      if (current) await reconcileCreationAttempt(tx, current, issued.key);
+      return false;
     });
-    throw error;
+    if (!canReveal) throw error;
   }
 
+  const created = issued.key!;
   const baseKey = {
-    id: reservedKeyId,
-    name: input.name,
-    displayValue,
+    id: attempt.reservedKeyId,
+    name: attempt.name,
+    displayValue: maskRawKey(created.key),
     status: "available" as const,
     createdAt: finalizedAt.toISOString(),
     lastUsedAt: null,
@@ -373,10 +215,9 @@ async function createApiKey(input: {
       input.keyClass === "public"
         ? {
             ...baseKey,
-            spendLimitUsd: input.allowance.limitUsd,
-            spendWindowDays: input.allowance.windowDays,
-            rollingBillableCostUsd:
-              input.allowance.limitUsd === null ? null : "0",
+            spendLimitUsd: attempt.spendLimitUsd,
+            spendWindowDays: attempt.spendWindowDays,
+            rollingBillableCostUsd: attempt.spendLimitUsd === null ? null : "0",
           }
         : baseKey,
     secret: created.key,
@@ -388,176 +229,120 @@ export function maskRawKey(rawKey: string) {
   return `${rawKey.slice(0, 8)}…${rawKey.slice(-4)}`;
 }
 
-async function reconcilePriorCreationAttempt(
-  database: MarketDatabase,
-  attempt: typeof marketApiKeyCreationAttempts.$inferSelect,
-  lockedReservedKeyId: string,
-) {
-  if (attempt.reservedKeyId !== lockedReservedKeyId) {
-    throw new Error("Prior key creation attempt does not match the locked local key");
-  }
-  const identity = {
-    attemptId: attempt.id,
-    reservedKeyId: lockedReservedKeyId,
-    correlationId: attempt.correlationId,
-  };
-  if (attempt.state === "reserved") {
-    const deleted = await database
-      .delete(marketApiKeyCreationAttempts)
-      .where(
-        and(
-          lockedAttemptPredicate(identity),
-          eq(marketApiKeyCreationAttempts.state, "reserved"),
-        ),
-      )
-      .returning({ id: marketApiKeyCreationAttempts.id });
-    if (!deleted[0]) {
-      throw new Error("Reserved key creation attempt changed before reconciliation");
-    }
-    return;
-  }
-
-  const provider = getMarketKeyProvider();
-  if (attempt.providerKeyId) {
-    try {
-      await provider.deleteKey(attempt.providerKeyId);
-    } catch {
-      // Exhaustive correlation cleanup below remains the non-usability proof.
-    }
-  }
-  await deleteAndConfirmProvisioningCandidates(provider, attempt.correlationId);
-  const deleted = await database
-    .delete(marketApiKeyCreationAttempts)
-    .where(lockedAttemptPredicate(identity))
-    .returning({ id: marketApiKeyCreationAttempts.id });
-  if (!deleted[0]) {
-    throw new Error("Reconciled key creation attempt could not be cleared");
-  }
+function attemptPredicate(attempt: Attempt) {
+  const t = marketApiKeyCreationAttempts;
+  return and(
+    eq(t.id, attempt.id),
+    eq(t.reservedKeyId, attempt.reservedKeyId),
+    eq(t.correlationId, attempt.correlationId),
+    eq(t.usageOwnerId, attempt.usageOwnerId),
+    attempt.userId === null ? isNull(t.userId) : eq(t.userId, attempt.userId),
+    attempt.adminGrantId === null ? isNull(t.adminGrantId) : eq(t.adminGrantId, attempt.adminGrantId),
+    eq(t.keyClass, attempt.keyClass),
+  );
 }
 
-async function cleanupKnownCreationResult(
-  database: MarketDatabase,
-  input: LockedCreationAttemptIdentity & {
-    providerKeyId: string;
-    providerDisplayValue: string;
-  },
-) {
-  const provider = getMarketKeyProvider();
-  await cleanupCreationAttempt(database, provider, input, {
-    providerKeyId: input.providerKeyId,
-    providerDisplayValue: input.providerDisplayValue,
-  });
+function dispatchPredicate(attempt: Attempt, created: CreatedProviderKey | null) {
+  const t = marketApiKeyCreationAttempts;
+  return and(
+    attemptPredicate(attempt),
+    eq(t.state, "dispatched"),
+    created ? eq(t.providerKeyId, created.keyId) : isNull(t.providerKeyId),
+    created ? eq(t.providerDisplayValue, maskRawKey(created.key)) : isNull(t.providerDisplayValue),
+  );
 }
 
-async function cleanupCreationAttempt(
-  database: MarketDatabase,
-  provider: ReturnType<typeof getMarketKeyProvider>,
-  identity: LockedCreationAttemptIdentity,
-  projection?: {
-    providerKeyId: string;
-    providerDisplayValue: string;
-  },
-) {
-  try {
-    await database
-      .update(marketApiKeyCreationAttempts)
-      .set({
-        state: "cleanup_required",
-        ...(projection ?? {}),
-        updatedAt: new Date(),
-      })
-      .where(lockedAttemptPredicate(identity));
-  } catch {
-    // Cleanup still proceeds; an unchanged dispatched attempt also blocks reminting.
-  }
-
-  if (projection) {
-    try {
-      await provider.deleteKey(projection.providerKeyId);
-    } catch {
-      // Exhaustive correlation cleanup below remains the non-usability proof.
-    }
-  }
-
-  try {
-    await deleteAndConfirmProvisioningCandidates(provider, identity.correlationId);
-  } catch {
-    // The retained attempt blocks a blind remint while provider state is uncertain.
-    return;
-  }
-
-  try {
-    await database
-      .delete(marketApiKeyCreationAttempts)
-      .where(lockedAttemptPredicate(identity));
-  } catch {
-    // Zero enabled candidates is proven; the retained attempt is safe to retry clearing.
-  }
-}
-
-async function assertCreationAdmission(
+async function assertDispatch(
   tx: MarketTransaction,
-  input: {
-    userId: string;
-    usageOwnerId: string;
-    keyClass: ApiKeyClass;
-    adminGrantId: string | null;
-  },
+  input: CreationInput,
+  attempt: Attempt,
+  created: CreatedProviderKey | null,
 ) {
-  // Keep the live identity stable through insertion without locking the joined
-  // usage owner. The surrounding advisory scope protects creation.
-  const ownerRows = await tx
-    .select({
-      id: marketUsageOwner.id,
-      ownerUserId: marketUsageOwner.userId,
-      activeUserId: user.id,
-      emailVerified: user.emailVerified,
+  const ownerId = await assertCreationAdmission(tx, input);
+  const [current] = await tx
+    .select()
+    .from(marketApiKeyCreationAttempts)
+    .where(dispatchPredicate(attempt, created))
+    .for("update")
+    .limit(1);
+  if (
+    !current ||
+    ownerId !== attempt.usageOwnerId ||
+    current.name !== attempt.name ||
+    current.spendWindowDays !== attempt.spendWindowDays ||
+    current.spendLimitUsd !== attempt.spendLimitUsd
+  ) {
+    throw new ApiKeyCreationConflict("Key creation attempt changed before dispatch or activation");
+  }
+}
+
+// Caller holds the owner/grant and reserved-key locks. Keep cleanup intent on provider uncertainty.
+export async function reconcileCreationAttempt(
+  tx: MarketTransaction,
+  attempt: Attempt,
+  created?: CreatedProviderKey,
+) {
+  const t = marketApiKeyCreationAttempts;
+  const [current] = await tx.select().from(t).where(attemptPredicate(attempt)).for("update").limit(1);
+  if (!current) return;
+  const providerKeyId = current.providerKeyId ?? created?.keyId;
+  const [marked] = await tx
+    .update(t)
+    .set({
+      state: "cleanup_required",
+      ...(created && !current.providerKeyId
+        ? { providerKeyId: created.keyId, providerDisplayValue: maskRawKey(created.key) }
+        : {}),
+      updatedAt: new Date(),
     })
+    .where(and(attemptPredicate(current), eq(t.state, current.state)))
+    .returning({ id: t.id });
+  if (!marked) throw new Error("Key creation attempt changed during reconciliation");
+  try {
+    await deleteAndConfirmProvisioningCandidates(
+      getMarketKeyProvider(),
+      current.correlationId,
+      providerKeyId,
+    );
+  } catch (error) {
+    return { error };
+  }
+  const deleted = await tx
+    .delete(t)
+    .where(and(attemptPredicate(current), eq(t.state, "cleanup_required")))
+    .returning({ id: t.id });
+  if (!deleted[0]) throw new Error("Reconciled key creation attempt could not be cleared");
+}
+
+async function assertCreationAdmission(tx: MarketTransaction, input: CreationInput) {
+  const [owner, other] = await tx
+    .select({ id: marketUsageOwner.id, emailVerified: user.emailVerified })
     .from(marketUsageOwner)
     .innerJoin(user, eq(user.id, marketUsageOwner.userId))
-    .where(
-      and(
-        eq(marketUsageOwner.id, input.usageOwnerId),
-        eq(marketUsageOwner.userId, input.userId),
-        eq(user.id, input.userId),
-      ),
-    )
+    .where(eq(user.id, input.userId))
     .for("update", { of: user })
     .limit(2);
-  const owner = ownerRows[0];
   if (
-    ownerRows.length !== 1 ||
     !owner ||
-    owner.ownerUserId !== input.userId ||
-    owner.activeUserId !== input.userId ||
-    (owner.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
+    other ||
+    (!owner.emailVerified && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
   ) {
     throw new Error("Market customer state is missing or not authorized");
   }
-
-  if (input.keyClass !== "private") return;
-  if (!input.adminGrantId) throw new Error("Admin grant is required");
-  const grantRows = await tx
-    .select({ id: systemAdmin.id })
-    .from(systemAdmin)
-    .where(
-      and(
-        eq(systemAdmin.id, input.adminGrantId),
-        eq(systemAdmin.userId, input.userId),
-        eq(systemAdmin.status, "active"),
-      ),
-    )
-    .for("update")
-    .limit(2);
-  if (grantRows.length !== 1) {
-    throw new ApiKeyCreationConflict("Admin membership is not active");
+  if (input.keyClass === "private") {
+    const [grant] = await tx
+      .select({ id: systemAdmin.id })
+      .from(systemAdmin)
+      .where(
+        and(
+          eq(systemAdmin.id, input.adminGrantId),
+          eq(systemAdmin.userId, input.userId),
+          eq(systemAdmin.status, "active"),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (!grant) throw new ApiKeyCreationConflict("Admin membership is not active");
   }
-}
-
-function lockedAttemptPredicate(identity: LockedCreationAttemptIdentity) {
-  return and(
-    eq(marketApiKeyCreationAttempts.id, identity.attemptId),
-    eq(marketApiKeyCreationAttempts.reservedKeyId, identity.reservedKeyId),
-    eq(marketApiKeyCreationAttempts.correlationId, identity.correlationId),
-  );
+  return owner.id;
 }

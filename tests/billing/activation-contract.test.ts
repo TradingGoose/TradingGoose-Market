@@ -9,6 +9,7 @@ import {
 import {
   getPaygActivationAttemptId,
   getPaygActivationPriceId,
+  getPaygActivationStartedAt,
   normalizeSubscriptionMetadata,
   withoutPaygActivationAttemptId,
   withPaygActivationAttemptId,
@@ -118,16 +119,19 @@ describe("PAYG activation contract", () => {
 
   it("preserves unrelated generic metadata while owning the attempt and immutable Price", () => {
     const original = { retained: "value", nested: { safe: true } };
-    const withAttempt = withPaygActivationAttemptId(original, "attempt_1", "price_payg");
+    const start = new Date("2026-01-01T00:00:00.000Z");
+    const withAttempt = withPaygActivationAttemptId(original, "attempt_1", "price_payg", start);
 
     expect(withAttempt).toEqual({
       retained: "value",
       nested: { safe: true },
       paygActivationAttemptId: "attempt_1",
       paygActivationPriceId: "price_payg",
+      paygActivationStartedAt: start.toISOString(),
     });
     expect(getPaygActivationAttemptId(withAttempt)).toBe("attempt_1");
     expect(getPaygActivationPriceId(withAttempt)).toBe("price_payg");
+    expect(getPaygActivationStartedAt(withAttempt)).toBe(start.toISOString());
     expect(withoutPaygActivationAttemptId(withAttempt)).toEqual(original);
     expect(
       withoutPaygActivationAttemptId({ paygActivationAttemptId: "attempt_1", paygActivationPriceId: "price_payg" }),

@@ -52,7 +52,7 @@ async function databaseFixture(input: { usage?: boolean; admin?: boolean } = {})
     updatedAt: DATABASE_TIMESTAMP,
   };
   const fixture = await createPostgresProtocolFixture(({ sql: query }) => {
-    if (/select now\(\)/i.test(query)) {
+    if (/select statement_timestamp\(\)/i.test(query)) {
       return {
         columns: [{ name: "now", oid: 1184 }],
         rows: [[DATABASE_TIMESTAMP]],
@@ -112,7 +112,7 @@ describe("usage timestamps through installed Postgres.js and Drizzle", () => {
   it("decodes the database clock before serializing it into a timestamp column", async () => {
     const { database, fixture } = await databaseFixture();
     await database.transaction(async (tx) => {
-      const raw = await tx.execute(sql`select now()`);
+      const raw = await tx.execute(sql`select statement_timestamp() as now`);
       expect(raw[0].now).toBe(DATABASE_TIMESTAMP);
       const now = await databaseNow(tx);
       expect(now).toBeInstanceOf(Date);

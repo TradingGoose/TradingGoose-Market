@@ -29,7 +29,7 @@ opening `/admin`.
 
 Required for a normal local setup:
 
-- `DATABASE_URL`
+- `DATABASE_URL` for the target database, using its transaction-pooler endpoint when available. Handler lock acquisition has a five-second transaction-local timeout.
 - `BETTER_AUTH_SECRET`; production requires exactly 64 lowercase hexadecimal
   characters generated with `openssl rand -hex 32`
 - `BETTER_AUTH_URL`
@@ -60,7 +60,9 @@ bun run test:release
 ```
 
 The ordinary test suite expects `DATABASE_URL` to target the dedicated
-`market_quality` control database. Its database tests create, migrate, inspect,
+`market_quality` control database through the quality workflow’s transaction-mode
+PgBouncer on port 26432. Enable wildcard database routing so the same listener
+serves the generated child databases. The database tests create, migrate, inspect,
 and drop only uniquely named child databases. The release workflow separately
 applies `bun run db:migrate` once to `market_release`, then runs the sole
 production build/start smoke owner through `bun run test:release`.

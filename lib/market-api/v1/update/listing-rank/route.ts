@@ -3,10 +3,8 @@ import type { MarketApiActor } from "@/lib/market-api/core/access";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
 import { schema } from "@tradinggoose/db";
-import { requireDatabase } from "@/lib/db/runtime";
 
-import { requirePrivateRankActor } from "../rank-access";
-
+import { privateRankTransaction } from "../rank-access";
 
 async function resolveListingId(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -31,8 +29,8 @@ async function resolveListingId(request: Request) {
 export async function postUpdateListingRank(c: ApiContext, actor: MarketApiActor | null) {
   try {
 
-    const accessError = requirePrivateRankActor(c, actor);
-    if (accessError) return accessError;
+    const tx = privateRankTransaction(c, actor);
+    if (tx instanceof Response) return tx;
 
     const request = c.req.raw;
     const listingId = await resolveListingId(request);
@@ -40,7 +38,7 @@ export async function postUpdateListingRank(c: ApiContext, actor: MarketApiActor
       return c.json({ error: "listing_id is required." }, 400);
     }
 
-    const updated = await requireDatabase()
+    const updated = await tx
       .update(schema.listings)
       .set({
         rank: sql<number>`${schema.listings.rank} + 1`,

@@ -20,8 +20,7 @@ const accessState = vi.hoisted(() => ({
   thresholdBilling: vi.fn(),
   recordPaymentFailure: vi.fn(),
   stripe: {},
-  billingLocks: vi.fn(),
-  adminLocks: vi.fn(),
+  acquireGrantLock: vi.fn(),
 }));
 
 vi.mock("@/lib/environment", () => ({
@@ -41,14 +40,13 @@ vi.mock("@/lib/billing/threshold-billing", async importOriginal => ({
     accessState.thresholdBilling(...args),
 }));
 vi.mock("@/lib/billing/webhooks/invoices", () => ({
-  handleMarketUsageInvoicePayment: (...args: unknown[]) => accessState.recordPaymentFailure(...args),
+  projectMarketUsageInvoicePayment: (...args: unknown[]) => accessState.recordPaymentFailure(...args),
 }));
 vi.mock("@/lib/db/locks", () => ({
-  acquireAdminGrantLock: vi.fn(async () => undefined),
-  acquireApiKeyLock: vi.fn(async () => undefined),
-  withAdminGrantHandlerLock: (...args: unknown[]) => accessState.adminLocks(...args),
-  withBillingSubjectAndApiKeyHandlerLocks: (...args: unknown[]) =>
-    accessState.billingLocks(...args),
+  acquireAdminGrantLock: (...args: unknown[]) => accessState.acquireGrantLock(...args),
+  acquireBillingSubjectLock: vi.fn(),
+  acquireApiKeyLock: vi.fn(),
+  withBoundedLockAcquisition: (_tx: unknown, acquire: () => Promise<void>) => acquire(),
 }));
 
 import { handleKeyedMarketRoute } from "../../lib/market-api/core/access";
@@ -65,14 +63,7 @@ beforeEach(() => {
   accessState.anonymousFactory.mockReset();
   accessState.thresholdBilling.mockReset().mockResolvedValue(undefined);
   accessState.recordPaymentFailure.mockReset().mockResolvedValue(undefined);
-  accessState.billingLocks.mockReset().mockImplementation(
-    async (_userId: string, _keyId: string, callback: (database: unknown) => unknown) =>
-      callback(accessState.database),
-  );
-  accessState.adminLocks.mockReset().mockImplementation(
-    async (_grantId: string, callback: (database: unknown) => unknown) =>
-      callback(accessState.database),
-  );
+  accessState.acquireGrantLock.mockReset();
 });
 
 describe("exclusive Market API actors", () => {
@@ -352,9 +343,8 @@ describe("exclusive Market API actors", () => {
           else { finished = true; controller.close(); }
         },
       });
-      accessState.adminLocks.mockImplementation(async (_grantId, callback) => {
+      accessState.acquireGrantLock.mockImplementation(async () => {
         expect(finished).toBe(true);
-        return callback(database);
       });
       const response = await handleKeyedMarketRoute(request(body, {
         headers: { "HTTP-Referer": "https://studio.example/", "X-Title": "Studio" },
@@ -366,8 +356,8 @@ describe("exclusive Market API actors", () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ listing_id: "listing_1" });
-      expect(accessState.adminLocks).toHaveBeenCalledOnce();
-      expect(database.transaction).toHaveBeenCalledOnce();
+      expect(accessState.acquireGrantLock).toHaveBeenCalledTimes(2);
+      expect(database.transaction).toHaveBeenCalledTimes(2);
     });
 
     it("does not hold a grant lock while uploading and rechecks membership after the upload", async () => {
@@ -382,7 +372,7 @@ describe("exclusive Market API actors", () => {
       const pending = handleKeyedMarketRoute(input, route, handler);
       try {
         await vi.waitFor(() => expect(input.body?.locked).toBe(true));
-        expect(accessState.adminLocks).not.toHaveBeenCalled();
+        expect(accessState.acquireGrantLock).not.toHaveBeenCalled();
         expect(database.transaction).not.toHaveBeenCalled();
         grantStatus = "removing";
         controller.enqueue(new TextEncoder().encode("}"));
@@ -413,7 +403,7 @@ describe("exclusive Market API actors", () => {
 
       expect(response.status).toBe(413);
       expect(await response.json()).toMatchObject({ code: "REQUEST_BODY_TOO_LARGE" });
-      expect(accessState.adminLocks).not.toHaveBeenCalled();
+      expect(accessState.acquireGrantLock).not.toHaveBeenCalled();
       expect(database.transaction).not.toHaveBeenCalled();
       expect(admission).not.toHaveBeenCalled();
       expect(handler).not.toHaveBeenCalled();
@@ -432,7 +422,7 @@ describe("exclusive Market API actors", () => {
       const pending = handleKeyedMarketRoute(request(body), route, handler);
       try {
         await vi.advanceTimersByTimeAsync(10_000);
-        expect(accessState.adminLocks).not.toHaveBeenCalled();
+        expect(accessState.acquireGrantLock).not.toHaveBeenCalled();
         const response = await pending;
         expect(response.status).toBe(408);
         expect(await response.json()).toMatchObject({ code: "REQUEST_BODY_TIMEOUT" });
@@ -462,7 +452,7 @@ describe("exclusive Market API actors", () => {
           if (when === "stream") controller.error(new Error("Upload interrupted"));
           else abort.abort();
         }
-        expect(accessState.adminLocks).not.toHaveBeenCalled();
+        expect(accessState.acquireGrantLock).not.toHaveBeenCalled();
         const response = await pending;
         expect(response.status).toBe(400);
         expect(await response.json()).toMatchObject({ code: "INVALID_REQUEST_BODY" });
@@ -599,7 +589,7 @@ describe("exclusive Market API actors", () => {
     });
     const route = resolveKeyedMarketRoute("/api/search/cities")!;
     expect((await handleKeyedMarketRoute(request(), route, handler)).status).toBe(200);
-    expect(accessState.recordPaymentFailure).toHaveBeenCalledWith(accessState.stripe, failure.invoice, accessState.database);
+    expect(accessState.recordPaymentFailure).toHaveBeenCalledWith(expect.anything(), accessState.stripe, failure.invoice, "user_1");
     const second = await handleKeyedMarketRoute(request(), route, handler);
     expect(second.status).toBe(402);
     expect(await second.json()).toMatchObject({ code: "BILLING_REQUIRED" });
@@ -656,7 +646,7 @@ describe("exclusive Market API actors", () => {
     expect(response.status).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
     const dialect = new PgDialect();
-    expect(usageConditions).toHaveLength(2);
+    expect(usageConditions).toHaveLength(1);
     for (const condition of usageConditions) {
       const query = dialect.sqlToQuery(condition);
       expect(query.params).toEqual(["local_public", cutoff]);
@@ -923,9 +913,12 @@ function publicAdmissionDatabase(input: {
       return [{ now: input.now ?? new Date("2026-07-19T00:00:00.000Z") }];
     },
   };
+  const tx = {
+    ...operations,
+    transaction: async <T>(callback: (settlement: typeof operations) => Promise<T>) => callback(operations),
+  };
   return {
     ...operations,
-    transaction: async <T>(callback: (tx: typeof operations) => Promise<T>) =>
-      callback(operations),
+    transaction: async <T>(callback: (value: typeof tx) => Promise<T>) => callback(tx),
   };
 }

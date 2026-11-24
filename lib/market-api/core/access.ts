@@ -15,12 +15,12 @@ import {
   UsageInvoicePaymentFailedError,
 } from "@/lib/billing/threshold-billing";
 import { requireEnabledStripeClient } from "@/lib/billing/stripe-client";
-import { handleMarketUsageInvoicePayment } from "@/lib/billing/webhooks/invoices";
+import { projectMarketUsageInvoicePayment } from "@/lib/billing/webhooks/invoices";
 import {
   acquireAdminGrantLock,
   acquireApiKeyLock,
-  withAdminGrantHandlerLock,
-  withBillingSubjectAndApiKeyHandlerLocks,
+  acquireBillingSubjectLock,
+  withBoundedLockAcquisition,
 } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
 import { databaseNow } from "@/lib/db/clock";
@@ -136,11 +136,7 @@ export async function handleKeyedMarketRoute(
       .where(eq(marketApiKeys.unkeyKeyId, verification.keyId))
       .limit(2);
   } catch {
-    return jsonError(
-      "API request admission is temporarily unavailable",
-      503,
-      "ADMISSION_UNAVAILABLE",
-    );
+    return admissionUnavailable();
   }
   const mapping = mappings[0];
   const requiredClass = descriptor.access === "public-read" ? "public" : "private";
@@ -162,75 +158,95 @@ export async function handleKeyedMarketRoute(
         descriptor,
         rawKey,
         keyId: mapping.id,
+        userId: mapping.userId,
         attribution,
       });
-      if ("response" in admitted) return admitted.response;
-      return invokeKeyedHandler(request, handler, admitted.actor, admitted.eventId);
+      if (admitted.response) return admitted.response;
+      return completeAdmittedRequest(admitted.eventId, () =>
+        handler(createApiContext(sanitizeHandlerRequest(request)), admitted.actor),
+      );
     }
     if (!mapping.adminGrantId) {
       return jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN");
     }
     const bufferedRequest = await bufferPrivateRequestBody(request);
-    return await withAdminGrantHandlerLock(mapping.adminGrantId, async (reservedDatabase) => {
-      const admitted = await reservedDatabase.transaction(async (tx) => {
-        await acquireAdminGrantLock(tx, mapping.adminGrantId!);
+    const grantId = mapping.adminGrantId;
+    const authorize = async (tx: MarketTransaction) => {
+      await withBoundedLockAcquisition(tx, async () => {
+        await acquireAdminGrantLock(tx, grantId);
         await acquireApiKeyLock(tx, mapping.id);
-        const rows = await tx
-          .select({
-            key: marketApiKeys,
-            grant: systemAdmin,
-            owner: marketUsageOwner,
-            activeUserId: user.id,
-            emailVerified: user.emailVerified,
-          })
-          .from(marketApiKeys)
-          .innerJoin(marketUsageOwner, eq(marketUsageOwner.id, marketApiKeys.usageOwnerId))
-          .innerJoin(systemAdmin, eq(systemAdmin.id, marketApiKeys.adminGrantId))
-          .innerJoin(user, eq(user.id, systemAdmin.userId))
-          .where(eq(marketApiKeys.id, mapping.id))
-          .for("update", { of: user })
-          .limit(1);
-        const row = rows[0];
-        if (
-          !row ||
-          row.key.keyClass !== "private" ||
-          row.key.revocationRequestedAt ||
-          row.key.providerRevokedAt ||
-          row.grant.status !== "active" ||
-          row.key.adminGrantId !== row.grant.id ||
-          row.key.userId !== row.activeUserId ||
-          row.owner.userId !== row.activeUserId ||
-          (row.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
-        ) {
-          throw new AccessResponseError(
-            jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN"),
-          );
-        }
-        const actor = actorFromKey(row.key);
-        const admittedAt = await databaseNow(tx);
-        const eventId = await insertMarketUsageAdmission({
-          tx,
-          actor,
-          descriptor,
-          method: request.method as "POST",
-          billingMode: "disabled",
-          rateUsdPer1000Reads: null,
-          billableCostUsd: null,
-          attribution,
-          admittedAt,
-        });
-        return { actor, eventId };
       });
-      return invokeKeyedHandler(bufferedRequest, handler, admitted.actor, admitted.eventId);
+      return reloadAuthorizedPrivateKey(tx, mapping, grantId);
+    };
+    const eventId = await database.transaction(async (tx) => {
+      const actor = await authorize(tx);
+      return insertMarketUsageAdmission({
+        tx,
+        actor,
+        descriptor,
+        method: "POST",
+        billingMode: "disabled",
+        rateUsdPer1000Reads: null,
+        billableCostUsd: null,
+        attribution,
+        admittedAt: await databaseNow(tx),
+      });
     });
+    return completeAdmittedRequest(eventId, () => database.transaction(async (tx) => {
+      const actor = await authorize(tx).catch((error: unknown) => {
+        if (error instanceof AccessResponseError) throw error;
+        throw new AccessResponseError(admissionUnavailable());
+      });
+      return handler(createApiContext(sanitizeHandlerRequest(bufferedRequest), tx), actor);
+    }));
   } catch (error) {
     if (error instanceof AccessResponseError) return error.response;
     console.error("Market API admission failed", {
       routeId: descriptor.id,
       errorClass: error instanceof Error ? error.name : "UnknownError",
     });
-    return jsonError("API request admission is temporarily unavailable", 503, "ADMISSION_UNAVAILABLE");
+    return admissionUnavailable();
   }
+}
+
+async function reloadAuthorizedPrivateKey(
+  tx: MarketTransaction,
+  mapping: typeof marketApiKeys.$inferSelect,
+  grantId: string,
+) {
+  const rows = await tx
+    .select({
+      key: marketApiKeys,
+      grant: systemAdmin,
+      owner: marketUsageOwner,
+      activeUserId: user.id,
+      emailVerified: user.emailVerified,
+    })
+    .from(marketApiKeys)
+    .innerJoin(marketUsageOwner, eq(marketUsageOwner.id, marketApiKeys.usageOwnerId))
+    .innerJoin(systemAdmin, eq(systemAdmin.id, marketApiKeys.adminGrantId))
+    .innerJoin(user, eq(user.id, systemAdmin.userId))
+    .where(eq(marketApiKeys.id, mapping.id))
+    .for("update", { of: user })
+    .limit(1);
+  const row = rows[0];
+  if (
+    !row ||
+    row.key.keyClass !== "private" ||
+    row.key.revocationRequestedAt ||
+    row.key.providerRevokedAt ||
+    row.grant.status !== "active" ||
+    row.grant.id !== grantId ||
+    row.key.unkeyKeyId !== mapping.unkeyKeyId ||
+    row.key.userId !== row.activeUserId ||
+    row.owner.userId !== row.activeUserId ||
+    (row.emailVerified !== true && getMarketRuntimeConfig().betterAuth.emailVerificationEnabled)
+  ) {
+    throw new AccessResponseError(
+      jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN"),
+    );
+  }
+  return actorFromKey(row.key);
 }
 
 async function admitPublicRequest(input: {
@@ -238,98 +254,67 @@ async function admitPublicRequest(input: {
   descriptor: KeyedMarketRouteDescriptor;
   rawKey: string;
   keyId: string;
+  userId: string | null;
   attribution: ReturnType<typeof parseMarketAppAttribution>;
 }) {
   const database = requireDatabase();
   const config = getMarketRuntimeConfig();
-  const initial = await database
-    .select({ userId: marketApiKeys.userId })
-    .from(marketApiKeys)
-    .where(eq(marketApiKeys.id, input.keyId))
-    .limit(1);
-  const userId = initial[0]?.userId;
+  const { userId } = input;
   if (!userId) {
     throw new AccessResponseError(
       jsonError("API key is not authorized", 403, "API_KEY_FORBIDDEN"),
     );
   }
 
-  if (!config.billing.enabled) {
-    return database.transaction(async (tx) => {
+  const billed = config.billing.enabled;
+  const admitted = await database.transaction(async (tx) => {
+    if (billed) {
+      await withBoundedLockAcquisition(tx, async () => {
+        await acquireBillingSubjectLock(tx, userId);
+        await acquireApiKeyLock(tx, input.keyId);
+      });
+    } else {
       await acquireApiKeyLock(tx, input.keyId);
-      const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId, false);
-      const actor = actorFromKey(row.key);
-      const admittedAt = await databaseNow(tx);
-      const eventId = await insertMarketUsageAdmission({
-        tx,
-        actor,
-        descriptor: input.descriptor,
-        method: input.request.method as "GET" | "HEAD",
-        billingMode: "disabled",
-        rateUsdPer1000Reads: null,
-        billableCostUsd: null,
-        attribution: input.attribution,
-        admittedAt,
-      });
-      return { actor, eventId };
+    }
+    const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId, billed);
+    const admittedAt = await databaseNow(tx);
+    if (billed && row.key.spendLimitUsd && row.key.spendWindowDays) {
+      const denial = await enforceProviderSpendWindow(tx, row.key, input.rawKey, admittedAt);
+      if (denial) return { response: denial };
+    }
+    const actor = actorFromKey(row.key);
+    const eventId = await insertMarketUsageAdmission({
+      tx,
+      actor,
+      descriptor: input.descriptor,
+      method: input.request.method as "GET" | "HEAD",
+      billingMode: billed ? "enabled" : "disabled",
+      rateUsdPer1000Reads: billed ? config.billing.usdPer1000Reads : null,
+      billableCostUsd: billed ? nanoUsdToDecimalUsd(config.billing.requestNanoUsd) : null,
+      attribution: input.attribution,
+      admittedAt,
     });
+    return { actor, eventId };
+  });
+
+  if (billed && !admitted.response) {
+    try {
+      await database.transaction(async (tx) => {
+        await withBoundedLockAcquisition(tx, () => acquireBillingSubjectLock(tx, userId));
+        try {
+          await tx.transaction((settlement) => checkAndBillMarketThreshold(settlement, userId));
+        } catch (error) {
+          if (!(error instanceof UsageInvoicePaymentFailedError)) throw error;
+          await projectMarketUsageInvoicePayment(tx, requireEnabledStripeClient(), error.invoice, userId);
+        }
+      });
+    } catch (error) {
+      console.error("Market threshold billing deferred after committed admission", {
+        errorClass: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
   }
-
-  return withBillingSubjectAndApiKeyHandlerLocks(
-    userId,
-    input.keyId,
-    async (lockedDatabase) => {
-      const spendDenial = await lockedDatabase.transaction(async (tx) => {
-        const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId, true);
-        if (!row.key.spendLimitUsd || !row.key.spendWindowDays) return null;
-        return enforceProviderSpendWindow(tx, row.key, input.rawKey);
-      });
-      if (spendDenial) return { response: spendDenial };
-
-      const admitted = await lockedDatabase.transaction(async (tx) => {
-        const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId, true);
-        const admittedAt = await databaseNow(tx);
-        if (row.key.spendLimitUsd && row.key.spendWindowDays) {
-          await requireExactSpendCapacity(tx, row.key, admittedAt);
-        }
-        const actor = actorFromKey(row.key);
-        const eventId = await insertMarketUsageAdmission({
-          tx,
-          actor,
-          descriptor: input.descriptor,
-          method: input.request.method as "GET" | "HEAD",
-          billingMode: "enabled",
-          rateUsdPer1000Reads: config.billing.usdPer1000Reads,
-          billableCostUsd: nanoUsdToDecimalUsd(config.billing.requestNanoUsd),
-          attribution: input.attribution,
-          admittedAt,
-        });
-        return { actor, eventId };
-      });
-
-      try {
-        await lockedDatabase.transaction((tx) =>
-          checkAndBillMarketThreshold(tx, userId),
-        );
-      } catch (error) {
-        if (error instanceof UsageInvoicePaymentFailedError) {
-          // Admission is already committed. Save the authoritative failure in a
-          // separate transaction while the same subject lock is still held.
-          try {
-            await handleMarketUsageInvoicePayment(requireEnabledStripeClient(), error.invoice, lockedDatabase);
-          } catch (persistenceError) {
-            console.error("Market payment failure projection deferred to its webhook", {
-              errorClass: persistenceError instanceof Error ? persistenceError.name : "UnknownError",
-            });
-          }
-        }
-        console.error("Market threshold billing deferred after committed admission", {
-          errorClass: error instanceof Error ? error.name : "UnknownError",
-        });
-      }
-      return admitted;
-    },
-  );
+  return admitted;
 }
 
 async function reloadAuthorizedPublicKey(
@@ -405,10 +390,11 @@ async function enforceProviderSpendWindow(
   tx: MarketTransaction,
   key: typeof marketApiKeys.$inferSelect,
   rawKey: string,
+  admittedAt: Date,
 ): Promise<Response | null> {
   const config = getMarketRuntimeConfig();
   const codec = createSpendLimitCodec(key.spendLimitUsd!, key.spendWindowDays!);
-  const cutoff = new Date((await databaseNow(tx)).getTime() - codec.duration);
+  const cutoff = new Date(admittedAt.getTime() - codec.duration);
   const totals = await tx
     .select({
       cost: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)`,
@@ -440,7 +426,6 @@ async function enforceProviderSpendWindow(
       await persistSpendObservation(tx, key, observation);
     }
     if (observation.decision === "rate_limited") {
-      await persistSpendObservation(tx, key, observation);
       return jsonError(
         "API key spend limit exceeded",
         429,
@@ -474,38 +459,10 @@ async function enforceProviderSpendWindow(
     );
   }
 
-  return null;
-}
-
-async function requireExactSpendCapacity(
-  tx: MarketTransaction,
-  key: typeof marketApiKeys.$inferSelect,
-  admittedAt: Date,
-) {
-  const config = getMarketRuntimeConfig();
-  const codec = createSpendLimitCodec(key.spendLimitUsd!, key.spendWindowDays!);
-  const cutoff = new Date(admittedAt.getTime() - codec.duration);
-  const totals = await tx
-    .select({
-      cost: sql<string>`coalesce(sum(${marketApiUsageEvent.billableCostUsd}), 0)`,
-    })
-    .from(marketApiUsageEvent)
-    .where(
-      and(
-        eq(marketApiUsageEvent.marketApiKeyId, key.id),
-        gte(marketApiUsageEvent.admittedAt, cutoff),
-      ),
-    );
-  const exactRollingNanoUsd = decimalUsdToNanoUsd(totals[0]?.cost ?? "0");
   if (exactRollingNanoUsd + config.billing.requestNanoUsd > codec.limitNanoUsd) {
-    throw new AccessResponseError(
-      jsonError(
-        "API key spend limit exceeded",
-        429,
-        "API_KEY_SPEND_LIMIT_EXCEEDED",
-      ),
-    );
+    return jsonError("API key spend limit exceeded", 429, "API_KEY_SPEND_LIMIT_EXCEEDED");
   }
+  return null;
 }
 
 async function persistSpendObservation(
@@ -588,17 +545,14 @@ async function invokeAnonymousHandler(request: Request, handler: MarketHandler) 
   }
 }
 
-async function invokeKeyedHandler(
-  request: Request,
-  handler: MarketHandler,
-  actor: MarketApiActor,
-  eventId: string,
-) {
+async function completeAdmittedRequest(eventId: string, run: () => Promise<Response>) {
   let response: Response;
   try {
-    response = await handler(createApiContext(sanitizeHandlerRequest(request)), actor);
-  } catch {
-    response = jsonError("Internal server error", 500, "INTERNAL_ERROR");
+    response = await run();
+  } catch (error) {
+    response = error instanceof AccessResponseError
+      ? error.response
+      : jsonError("Internal server error", 500, "INTERNAL_ERROR");
   }
   return completeUsageWithoutChangingResponse(eventId, response);
 }
@@ -664,6 +618,10 @@ function actorFromKey(key: typeof marketApiKeys.$inferSelect): MarketApiActor {
     userId: key.userId,
     adminGrantId: key.adminGrantId,
   };
+}
+
+function admissionUnavailable() {
+  return jsonError("API request admission is temporarily unavailable", 503, "ADMISSION_UNAVAILABLE");
 }
 
 function jsonError(message: string, status: number, code: string) {

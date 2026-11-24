@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   validatePrice: vi.fn(),
   ensureCustomerState: vi.fn(),
   ensureStripeCustomer: vi.fn(),
+  liveCustomer: vi.fn(),
   transaction: vi.fn(),
   lockTail: Promise.resolve(),
   transactionCount: 0,
@@ -22,13 +23,13 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db/locks", () => ({
-  withBillingSubjectHandlerLock: async (_userId: string, callback: (database: unknown) => Promise<unknown>) => {
+  withBillingSubjectLock: async (_userId: string, callback: (database: unknown) => Promise<unknown>) => {
     const prior = state.lockTail;
     let release!: () => void;
     state.lockTail = new Promise<void>((resolve) => { release = resolve; });
     await prior;
     try {
-      return await callback({ transaction: state.transaction });
+      return await state.transaction(callback);
     } finally {
       release();
     }
@@ -75,9 +76,10 @@ beforeEach(() => {
   });
   state.create.mockReset();
   state.validatePrice.mockReset().mockResolvedValue({ id: "price_market_payg" });
-  state.ensureCustomerState.mockReset().mockResolvedValue(undefined);
-  state.ensureStripeCustomer.mockReset().mockImplementation(async () => ({
-    id: "cus_market",
+  state.ensureCustomerState.mockReset().mockImplementation(async () => ({ subscription: { ...state.local } }));
+  state.ensureStripeCustomer.mockReset().mockResolvedValue(undefined);
+  state.liveCustomer.mockReset().mockImplementation(async (id: string) => ({
+    id,
     invoice_settings: { default_payment_method: state.paymentMethodId },
   }));
   state.transaction.mockReset().mockImplementation(async (callback) => {
@@ -95,7 +97,7 @@ describe("PAYG activation lifecycle", () => {
     await expect(activateMarketPayg("user_1")).rejects.toBe(incompatible);
 
     expect(state.validatePrice).toHaveBeenCalledWith(expect.anything());
-    expect(state.ensureCustomerState).not.toHaveBeenCalled();
+    expect(state.ensureStripeCustomer).not.toHaveBeenCalled();
     expect(state.transaction).not.toHaveBeenCalled();
     expect(state.create).not.toHaveBeenCalled();
   });
@@ -126,6 +128,7 @@ describe("PAYG activation lifecycle", () => {
         customer: "cus_market",
         items: [{ price: "price_market_payg", quantity: 1 }],
         metadata: {
+          paygActivationAttemptId: expect.any(String),
           userId: "user_1",
           subscriptionId: "sub_default_user_1",
           referenceId: "user_1",
@@ -208,6 +211,20 @@ describe("PAYG activation lifecycle", () => {
       .toHaveLength(1);
   });
 
+  it("recovers an inventoried subscription after its binding transaction rolls back", async () => {
+    const existing = providerSubscription();
+    installInventory([existing]);
+    state.beforeTransaction = (number) => {
+      if (number === 2) throw new Error("binding transaction failed");
+    };
+    await expect(activateMarketPayg("user_1")).rejects.toThrow("binding transaction failed");
+    expect(state.local?.metadata).toMatchObject({ paygActivationCandidateId: existing.id });
+    state.beforeTransaction = null;
+    await expect(activateMarketPayg("user_1")).resolves.toMatchObject({ stripeSubscriptionId: existing.id });
+    expect(state.local?.metadata).toEqual({ retained: "value" });
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
   it("does not retire an uncertain create when its Customer card is removed", async () => {
     state.create.mockRejectedValueOnce(new Error("create response lost"));
     await expect(activateMarketPayg("user_1")).rejects.toThrow("create response lost");
@@ -242,6 +259,9 @@ describe("PAYG activation lifecycle", () => {
   });
 
   it("retains the attempt when an active provider object has malformed shape", async () => {
+    state.create.mockRejectedValueOnce(new Error("reply lost"));
+    await expect(activateMarketPayg("user_1")).rejects.toThrow("reply lost");
+    state.create.mockClear();
     const malformed = providerSubscription({ omitQuantity: true });
     installInventory([malformed]);
 
@@ -279,14 +299,14 @@ describe("PAYG activation lifecycle", () => {
       status: 402,
     } satisfies Partial<PaygActivationError>);
 
-    expect(state.list).toHaveBeenCalledTimes(2);
+    expect(state.list).toHaveBeenCalledTimes(3);
     expect(state.local?.metadata).toEqual({ retained: "value" });
   });
 
   it("serializes a stale missing-card snapshot with later provider creation", async () => {
     const readingMissingCard = deferred();
     const finishMissingCard = deferred();
-    state.ensureStripeCustomer.mockImplementationOnce(async () => {
+    state.liveCustomer.mockImplementationOnce(async () => {
       readingMissingCard.resolve();
       await finishMissingCard.promise;
       return { id: "cus_market", invoice_settings: { default_payment_method: null } };
@@ -298,7 +318,7 @@ describe("PAYG activation lifecycle", () => {
     await readingMissingCard.promise;
     const second = activateMarketPayg("user_1");
     await vi.waitFor(() => expect(state.validatePrice).toHaveBeenCalledTimes(2));
-    expect(state.ensureStripeCustomer).toHaveBeenCalledTimes(1);
+    expect(state.liveCustomer).toHaveBeenCalledTimes(1);
     expect(state.create).not.toHaveBeenCalled();
 
     finishMissingCard.resolve();
@@ -326,8 +346,6 @@ describe("PAYG activation lifecycle", () => {
     await vi.waitFor(() => expect(state.validatePrice).toHaveBeenCalledTimes(2));
     expect(getPaygActivationAttemptId(state.local?.metadata)).toBe(rejectedAttempt);
     expect(state.create).toHaveBeenCalledTimes(1);
-    expect(state.ensureStripeCustomer).toHaveBeenCalledTimes(1);
-
     rejectCreate.resolve();
     expect(await first).toMatchObject({ code: "PAYG_PROVIDER_REJECTED" });
     await expect(second).resolves.toMatchObject({ stripeSubscriptionId: provider.id });
@@ -337,7 +355,8 @@ describe("PAYG activation lifecycle", () => {
 
   it("recovers a remotely created subscription after an uncertain create without retiring its attempt", async () => {
     const provider = providerSubscription();
-    state.create.mockImplementationOnce(async () => {
+    state.create.mockImplementationOnce(async (params) => {
+      Object.assign(provider.metadata, params.metadata);
       state.providers.set(provider.id, provider);
       throw new Error("provider response lost");
     });
@@ -352,7 +371,7 @@ describe("PAYG activation lifecycle", () => {
 
   it("retains the attempt when provider rejection is followed by active ambiguity", async () => {
     const malformed = providerSubscription({ customer: "cus_other" });
-    state.listResults.push([], [{ id: malformed.id }]);
+    state.listResults.push([], [], [{ id: malformed.id }]);
     state.providers.set(malformed.id, malformed);
     state.create.mockRejectedValue({ type: "StripeCardError", statusCode: 402 });
 
@@ -396,8 +415,8 @@ describe("PAYG activation lifecycle", () => {
     const retainedAttempt = getPaygActivationAttemptId(state.local?.metadata);
     expect(retainedAttempt).toEqual(expect.any(String));
     // A second empty inventory is not authoritative while create is in flight.
-    expect(state.list).toHaveBeenCalledTimes(1);
-    expect(state.transaction).toHaveBeenCalledTimes(1);
+    expect(state.list).toHaveBeenCalledTimes(2);
+    expect(state.transaction).toHaveBeenCalledTimes(2);
 
     await expect(activateMarketPayg("user_1")).resolves.toMatchObject({
       stripeSubscriptionId: provider.id,
@@ -459,7 +478,6 @@ describe("PAYG activation lifecycle", () => {
 
   it("never clears a different concurrent attempt", async () => {
     state.listResults.push([]);
-    state.paymentMethodId = null;
     state.beforeTransaction = (transactionNumber) => {
       if (transactionNumber !== 2 || !state.local) return;
       state.local.metadata = {
@@ -478,15 +496,13 @@ describe("PAYG activation lifecycle", () => {
     const cached = providerSubscription();
     state.providers.set(String(cached.id), cached);
     state.create.mockResolvedValue(cached);
-    state.beforeTransaction = (number) => {
-      if (number === 2) throw new Error("local binding failed");
-    };
+    state.retrieve.mockRejectedValueOnce(new Error("local binding failed"));
     await expect(activateMarketPayg("user_1")).rejects.toThrow("local binding failed");
     const firstAttempt = getPaygActivationAttemptId(state.local?.metadata);
     expect(firstAttempt).toEqual(expect.any(String));
 
     state.beforeTransaction = null;
-    state.providers.set(String(cached.id), providerSubscription({ status: "canceled" }));
+    cached.status = "canceled";
     await expect(activateMarketPayg("user_1")).rejects.toMatchObject({
       code: "PAYG_ACTIVATION_RETRY_REQUIRED",
     });
@@ -519,7 +535,7 @@ describe("PAYG activation lifecycle", () => {
     state.providers.set(String(cached.id), cached);
     state.beforeTransaction = (number) => {
       if (number === 2) {
-        state.providers.set(String(cached.id), providerSubscription({ status: "canceled" }));
+        cached.status = "canceled";
       }
     };
     await expect(activateMarketPayg("user_1")).rejects.toMatchObject({
@@ -550,6 +566,7 @@ function transactionFixture() {
   });
 
   return {
+    execute: async () => [{ now: new Date().toISOString(), replayable: true }],
     select: () => ({
       from: () => ({
         where: selectionChain(false).where,
@@ -572,16 +589,24 @@ function transactionFixture() {
 
 function stripeFixture() {
   return {
+    customers: { retrieve: state.liveCustomer },
     subscriptions: {
       list: state.list,
       retrieve: state.retrieve,
-      create: state.create,
+      create: async (params: Stripe.SubscriptionCreateParams, options: Stripe.RequestOptions) => {
+        const created = await state.create(params, options);
+        // Stripe returns and persists the metadata from the original POST.
+        Object.assign(created.metadata, params.metadata);
+        const stored = state.providers.get(created.id);
+        if (stored?.metadata) Object.assign(stored.metadata, params.metadata);
+        return created;
+      },
     },
   } as unknown as Stripe;
 }
 
 function installInventory(providers: Array<Record<string, unknown>>) {
-  state.listResults.push(providers.map((provider) => ({ id: String(provider.id) })));
+  state.list.mockImplementation(() => providers.map((provider) => ({ id: String(provider.id) })));
   for (const provider of providers) state.providers.set(String(provider.id), provider);
 }
 

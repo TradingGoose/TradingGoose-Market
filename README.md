@@ -65,7 +65,7 @@ Adding admin membership preserves the user’s customer billing, public keys, an
 
 Core runtime:
 
-- `DATABASE_URL`
+- `DATABASE_URL` — the PostgreSQL endpoint, including a Neon pooled URL or PgBouncer in transaction mode. Billing and key workflows acquire their handler locks within five seconds and release them at transaction end.
 - `NEXT_PUBLIC_APP_URL` and the same-origin `BETTER_AUTH_URL`
 - `BETTER_AUTH_SECRET`; production requires exactly 64 lowercase hexadecimal
   characters generated with `openssl rand -hex 32`
@@ -160,7 +160,7 @@ Private `POST` routes require a database-admin-minted private key:
 
 There are no short-path aliases, wildcard endpoint families, logo-update API aliases, static service secrets, customer-key throughput limits, or private-key request/spend limits.
 
-Private request bodies are buffered before acquiring an admin-grant lock: at most 64 KiB, with a 10-second total read deadline (`413` for oversized bodies, `408` for slow bodies, `400` for aborted/failed reads). Authorization is rechecked under the lock afterward. Session advisory-lock acquisition has a 5-second wait bound; contention fails closed with the endpoint's existing unavailable response. These are transport/concurrency safeguards, not API rate limits.
+Private requests buffer up to 64 KiB before taking a grant lock. A 10-second read deadline returns `408` for slow bodies, `413` for oversized bodies and `400` for aborted or failed reads. Admission and mutation each recheck authorization under transaction-scoped grant and key locks. Lock acquisition waits up to five seconds and returns `503 ADMISSION_UNAVAILABLE` on contention. A revocation committed between the two transactions returns `403` before the mutation runs.
 
 Public-key use requires literal active PAYG only while billing is enabled. Key creation, listing, limit editing, and revocation remain billing-independent. Each admitted keyed request is recorded before its data handler runs; completion is stored separately as success, client error, server error, or visibly pending after a crash.
 
@@ -175,7 +175,7 @@ Clients may identify the calling application with `HTTP-Referer` and optional `X
 | `bun run start` | Start the production application |
 | `bun run lint` | Run ESLint |
 | `bun run type-check` | Build database types and check TypeScript |
-| `DATABASE_URL=postgres://market:market@127.0.0.1:5432/market_quality bun run test` | Build database types and run the unfiltered Vitest suite, including isolated fresh-database and retention lifecycles |
+| `DATABASE_URL=postgres://market:market@127.0.0.1:26432/market_quality bun run test` | Build database types and run the unfiltered Vitest suite, including isolated fresh-database and retention lifecycles |
 | `bun run test:watch` | Run Vitest in watch mode |
 | `bun run db:generate` | Generate the structural Drizzle migration |
 | `bun run db:migrate` | Apply the checked-in Drizzle chain to the configured empty database |
@@ -185,7 +185,7 @@ Clients may identify the calling application with `HTTP-Referer` and optional `X
 ## Release validation
 
 The release workflow runs two independent PostgreSQL 17 gates. `quality` owns
-the unfiltered test suite using a `market_quality` control database. The
+the unfiltered test suite through a transaction-mode PgBouncer serving `market_quality` and its disposable child databases. The
 `release-validation` job applies `db:migrate` exactly once to its separate
 `market_release` database, then invokes `test:release` exactly once. The harness
 owns all four `REGISTRATION_MODE=open|close` ×

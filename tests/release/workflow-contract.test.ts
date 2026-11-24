@@ -47,7 +47,12 @@ describe("release workflow contract", () => {
     expect(quality).toContain("POSTGRES_DB: market_quality");
     expect(quality).toContain("- 5432:5432");
     expect(quality).toContain('pg_isready -U market -d market_quality');
-    expect(occurrences(quality, "postgres://market:market@127.0.0.1:5432/market_quality")).toBe(1);
+    expect(occurrences(quality, "postgres://market:market@127.0.0.1:26432/market_quality")).toBe(1);
+    for (const setting of [
+      "* = host=127.0.0.1 port=5432", "pool_mode = transaction", "default_pool_size = 5",
+      "server_round_robin = 1", "server_reset_query = DISCARD ALL", "server_reset_query_always = 1",
+      "max_prepared_statements = 0", "show config", "select pg_backend_pid()",
+    ]) expect(quality).toContain(setting);
     expect(runSteps(quality)).toEqual([
       "bun install --frozen-lockfile",
       "bun run db:build",
@@ -56,7 +61,7 @@ describe("release workflow contract", () => {
       "bun run test",
     ]);
     expect(quality).toMatch(
-      /- run: bun run test\n\s+env:\n\s+DATABASE_URL: postgres:\/\/market:market@127\.0\.0\.1:5432\/market_quality/u,
+      /- run: bun run test\n\s+env:\n\s+DATABASE_URL: postgres:\/\/market:market@127\.0\.0\.1:26432\/market_quality/u,
     );
 
     expect(validation).toContain("image: postgres:17");
