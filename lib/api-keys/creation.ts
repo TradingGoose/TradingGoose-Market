@@ -292,6 +292,13 @@ export async function reconcileCreationAttempt(
   const t = marketApiKeyCreationAttempts;
   const [current] = await tx.select().from(t).where(attemptPredicate(attempt)).for("update").limit(1);
   if (!current) return;
+  if (current.state === "reserved") {
+    const [deleted] = await tx.delete(t)
+      .where(and(attemptPredicate(current), eq(t.state, "reserved"), isNull(t.dispatchedAt)))
+      .returning({ id: t.id });
+    if (!deleted) throw new Error("Reserved key creation attempt could not be cleared");
+    return;
+  }
   const providerKeyId = current.providerKeyId ?? created?.keyId;
   const [marked] = await tx
     .update(t)

@@ -10,6 +10,12 @@ export function gate() {
   return { promise, release };
 }
 
+export function beforeCompletion<T>(ready: Promise<T>, operation: Promise<unknown>, phase: string) {
+  return Promise.race([ready, operation.then(() => {
+    throw new Error(`Operation completed before ${phase}`);
+  })]);
+}
+
 export async function assertPrivateRankOrdering(monitor: Observer) {
   const [runtime, manifest, unkey, { POST }, admin, revoke] = await Promise.all([
     import("../../lib/db/runtime"),
@@ -75,7 +81,10 @@ export async function assertPrivateRankOrdering(monitor: Observer) {
   try {
     // Filling all five backends makes a lookup on a second connection deadlock.
     try {
-      await vi.waitFor(() => expect(waiting).toBe(5), { timeout: 5_000 });
+      await beforeCompletion(
+        vi.waitFor(() => expect(waiting).toBe(5), { timeout: 5_000 }),
+        Promise.race(requests), "five rank handlers entered",
+      );
     } finally {
       firstFive.release();
     }
@@ -95,22 +104,25 @@ export async function assertPrivateRankOrdering(monitor: Observer) {
       },
     });
     const writing = post(1);
-    await held.promise;
-    const removing = admin.removeAdmin("rank_user_1");
+    let removing: ReturnType<typeof admin.removeAdmin> | undefined;
     try {
-      await vi.waitFor(async () => {
-        const blocked = await monitor`
+      await beforeCompletion(held.promise, writing, "the rank handler acquired the grant");
+      const removal = admin.removeAdmin("rank_user_1");
+      removing = removal;
+      await vi.waitUntil(async () => {
+        const blocked = await beforeCompletion(monitor`
           select pid from pg_stat_activity where datname = current_database()
             and wait_event_type = 'Lock' and query like '%pg_advisory_xact_lock%'
-        `;
-        expect(blocked).toHaveLength(1);
+        `, removal, "admin removal waited for the rank handler");
+        return blocked.length === 1;
       });
       expect(await history(1)).toEqual([{ http_status: 200 }, { http_status: null }]);
       expect(provider.deleteKey).not.toHaveBeenCalled();
     } finally {
       resume.release();
-      await removing;
+      await Promise.allSettled([writing, removing]);
     }
+    await removing;
     expect((await writing).status).toBe(200);
     expect((await ranks()).find(row => row.code === "RANK1")?.rank).toBe(2);
     expect((await post(1, true)).status).toBe(403);
@@ -121,19 +133,20 @@ export async function assertPrivateRankOrdering(monitor: Observer) {
     const transaction = db.transaction.bind(db);
     const admitted = gate();
     const continueRequest = gate();
+    const before = await ranks();
     const txnSpy = vi.spyOn(db, "transaction").mockImplementationOnce(async (callback, options) => {
       const result = await transaction(callback, options);
       admitted.release();
       await continueRequest.promise;
       return result;
     });
-    const before = await ranks();
     const decay = post(2, true);
     try {
-      await admitted.promise;
+      await beforeCompletion(admitted.promise, decay, "decay admission committed");
       await revoke.revokeAdminApiKey("rank_key_2", "rank_grant_3");
     } finally {
       continueRequest.release();
+      await Promise.allSettled([decay]);
       txnSpy.mockRestore();
     }
     expect((await decay).status).toBe(403);
@@ -157,10 +170,11 @@ export async function assertPrivateRankOrdering(monitor: Observer) {
       await finishDelete.promise;
     });
     const queued = post(4);
-    await afterAdmission.promise;
-    const revoking = revoke.revokeAdminApiKey("rank_key_4", "rank_grant_3");
+    let revoking: ReturnType<typeof revoke.revokeAdminApiKey> | undefined;
     try {
-      await deleting.promise;
+      await beforeCompletion(afterAdmission.promise, queued, "private admission committed");
+      revoking = revoke.revokeAdminApiKey("rank_key_4", "rank_grant_3");
+      await beforeCompletion(deleting.promise, revoking, "revocation reached Unkey");
       beginMutation.release();
       const response = await queued;
       expect(response.status).toBe(503);
@@ -170,9 +184,10 @@ export async function assertPrivateRankOrdering(monitor: Observer) {
     } finally {
       beginMutation.release();
       finishDelete.release();
+      await Promise.allSettled([queued, revoking]);
       pausedAdmission.mockRestore();
-      await revoking;
     }
+    await revoking;
 
     // Roll back a successful handler before its transaction can commit.
     const failing = vi.spyOn(db, "transaction")

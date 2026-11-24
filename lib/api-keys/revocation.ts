@@ -40,18 +40,18 @@ type Revoker = { userId: string } | { callerGrantId: string; targetGrantId: stri
 
 async function revokeApiKey(keyId: string, caller: Revoker) {
   const database = requireDatabase();
-  function locked<T>(work: (tx: MarketTransaction) => Promise<T>) {
+  function locked<T>(phase: "deny" | "confirm", work: (tx: MarketTransaction) => Promise<T>) {
     return database.transaction(async (tx) => {
       await withBoundedLockAcquisition(tx, async () => {
-        if ("userId" in caller) await acquireBillingSubjectLock(tx, caller.userId);
-        else await acquireAdminGrantLocks(tx, [caller.callerGrantId, caller.targetGrantId]);
+        if ("callerGrantId" in caller) await acquireAdminGrantLocks(tx, [caller.callerGrantId, caller.targetGrantId]);
+        else if (phase === "deny") await acquireBillingSubjectLock(tx, caller.userId);
         await acquireApiKeyLock(tx, keyId);
       });
       return work(tx);
     });
   }
 
-  const local = await locked(async (tx) => {
+  const local = await locked("deny", async (tx) => {
     const key = await loadAuthorizedKey(tx, keyId, caller);
     if (!key.revocationRequestedAt) {
       const [requested] = await tx
@@ -66,7 +66,7 @@ async function revokeApiKey(keyId: string, caller: Revoker) {
 
   if (local.providerRevokedAt) return REVOKED_OUTCOME;
   try {
-    return await locked((tx) => confirmMappedKeyRevocation(tx, local));
+    return await locked("confirm", (tx) => confirmMappedKeyRevocation(tx, local));
   } catch (error) {
     console.error("API key provider revocation confirmation could not be saved", {
       errorClass: error instanceof Error ? error.name : "UnknownError",
@@ -126,12 +126,14 @@ async function loadAuthorizedKey(tx: MarketTransaction, keyId: string, caller: R
 
 export async function confirmMappedKeyRevocation(
   tx: MarketTransaction,
-  key: Pick<typeof marketApiKeys.$inferSelect, "id" | "unkeyKeyId" | "adminGrantId" | "keyClass">,
+  key: Pick<typeof marketApiKeys.$inferSelect, "id" | "unkeyKeyId" | "adminGrantId" | "keyClass" | "userId" | "usageOwnerId">,
 ): Promise<ApiKeyRevocationOutcome> {
   const t = marketApiKeys;
   const deniedBinding = and(
     eq(t.id, key.id),
     eq(t.unkeyKeyId, key.unkeyKeyId),
+    eq(t.usageOwnerId, key.usageOwnerId),
+    key.userId === null ? isNull(t.userId) : eq(t.userId, key.userId),
     eq(t.keyClass, key.keyClass),
     key.adminGrantId === null ? isNull(t.adminGrantId) : eq(t.adminGrantId, key.adminGrantId),
     isNotNull(t.revocationRequestedAt),

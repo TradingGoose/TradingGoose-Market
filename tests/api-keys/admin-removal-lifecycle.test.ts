@@ -92,10 +92,11 @@ describe("admin membership lifecycle", () => {
     expect(state.database.emailVerified).toBe(false);
   });
 
-  it("reconciles mapped keys and every dispatched/cleanup attempt before deletion", async () => {
+  it("reconciles mapped keys and every reserved/dispatched/cleanup attempt before deletion", async () => {
     state.database.grant = { id: "grant_1", userId: "user_1", status: "active" };
     state.database.keys = [privateKey("key_1", "provider_mapping")];
     state.database.attempts = [
+      attempt("attempt_reserved", "reserved", null, "correlation_reserved"),
       attempt("attempt_dispatched", "dispatched", "provider_attempt", "correlation_dispatched"),
       attempt("attempt_cleanup", "cleanup_required", null, "correlation_cleanup"),
     ];
@@ -144,6 +145,14 @@ describe("admin membership lifecycle", () => {
   });
 });
 
+function mutation<T>(execute: () => T) {
+  const returning = async () => execute();
+  return {
+    returning,
+    then: (...callbacks: Parameters<Promise<T>["then"]>) => returning().then(...callbacks),
+  };
+}
+
 class FakeAdminDatabase {
   emailVerified = true;
   grant: { id: string; userId: string; status: string } | null = null;
@@ -159,10 +168,7 @@ class FakeAdminDatabase {
   update(table: unknown) {
     return {
       set: (values: Record<string, unknown>) => ({
-        where: () => {
-          const rows = this.applyUpdate(table, values);
-          return { returning: async () => rows };
-        },
+        where: () => mutation(() => this.applyUpdate(table, values)),
       }),
     };
   }
@@ -185,10 +191,7 @@ class FakeAdminDatabase {
 
   delete(table: unknown) {
     return {
-      where: () => {
-        const rows = this.applyDelete(table);
-        return { returning: async () => rows };
-      },
+      where: () => mutation(() => this.applyDelete(table)),
     };
   }
 
@@ -307,7 +310,7 @@ function privateKey(id: string, providerKeyId: string) {
 
 function attempt(
   id: string,
-  attemptState: "dispatched" | "cleanup_required",
+  attemptState: "reserved" | "dispatched" | "cleanup_required",
   providerKeyId: string | null,
   correlationId: string,
 ) {
@@ -320,6 +323,7 @@ function attempt(
     keyClass: "private",
     correlationId,
     state: attemptState,
+    dispatchedAt: attemptState === "reserved" ? null : new Date(),
     providerKeyId,
   };
 }

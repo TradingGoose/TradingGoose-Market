@@ -102,6 +102,20 @@ export async function assertPooledKeyRecovery(observer: ReturnType<typeof postgr
     }), manifest.resolveKeyedMarketRoute(path)!, async () => new Response(null, { status: 204 }));
   }
   try {
+    const [reserved] = await observer`
+      insert into market_api_key_creation_attempts (reserved_key_id, usage_owner_id, user_id, key_class, name, correlation_id)
+      select gen_random_uuid(), id, user_id, 'public', 'Reserved', gen_random_uuid() from market_usage_owner where user_id = ${userId}
+      returning state, dispatched_at
+    `;
+    expect(reserved).toMatchObject({ state: "reserved", dispatched_at: null });
+    await expect(publicKey()).rejects.toThrow("A prior key creation was reconciled");
+    expect(await attempts()).toHaveLength(0);
+    expect(provider.createKey).not.toHaveBeenCalled();
+    expect(provider.listKeys).not.toHaveBeenCalled();
+    expect(provider.deleteKey).not.toHaveBeenCalled();
+    expect(provider.getKey).not.toHaveBeenCalled();
+    expect(provider.enableKey).not.toHaveBeenCalled();
+
     // A delayed create becomes visible only after the failed caller's empty
     // cleanup scan. The immutable provider ID is safe to reclaim once unowned.
     let delayedCorrelation = "";
@@ -273,7 +287,7 @@ export async function assertPooledKeyRecovery(observer: ReturnType<typeof postgr
         : revoke.revokeCustomerApiKey(userId, issued.key.id);
       const pending = revokeKey();
       try {
-        await denied.promise;
+        await Promise.race([denied.promise, pending.then(() => { throw Error("Revocation finished before provider deletion"); })]);
         expect(keys.get(id)?.enabled).toBe(true);
         const [row] = await observer`
           select revocation_requested_at, provider_revoked_at from market_api_keys where id = ${issued.key.id}
@@ -281,8 +295,12 @@ export async function assertPooledKeyRecovery(observer: ReturnType<typeof postgr
         expect(row.revocation_requested_at).not.toBeNull();
         expect(row.provider_revoked_at).toBeNull();
         expect((await requestKey(issued.secret, isPrivate)).status).toBe(403);
+        if (!isPrivate) {
+          expect(await revoke.revokeCustomerApiKey(userId, replacement.key.id)).toMatchObject({ status: "revoked" });
+        }
       } finally {
         release.release();
+        await Promise.allSettled([pending]);
       }
       expect(await pending).toMatchObject({ status: "revocation_pending" });
       // Roll back a provider confirmation after its remote delete succeeded.
@@ -304,39 +322,56 @@ export async function assertPooledKeyRecovery(observer: ReturnType<typeof postgr
 
     // Both removers initially see the same grant. A creator waiting to enable
     // must recheck that grant, regardless of which remover finishes first.
-    const projected = gate();
+    const providerCreated = gate();
     const release = gate();
+    const choseGrant = gate();
+    const retryRemoval = gate();
+    let createdId: string | undefined;
+    let projectedId: string | undefined;
     provider.createKey.mockImplementationOnce(async input => {
       const key = await createNormally(input);
-      projected.release();
+      createdId = key.keyId;
+      providerCreated.release();
       await release.promise;
       return key;
     });
-    const creating = privateKey().then(() => "issued", () => "reconciled");
-    await projected.promise;
-    const choseGrant = gate();
-    const retryRemoval = gate();
-    const paused = vi.spyOn(db, "transaction").mockImplementationOnce(async (callback, options) => {
-      choseGrant.release();
-      await retryRemoval.promise;
-      return transaction(callback, options);
+    provider.listKeys.mockImplementationOnce(async () => {
+      // The independent observer can only see the committed projection.
+      const [attempt] = await attempts();
+      projectedId = attempt?.provider_key_id;
+      return [...keys.values()];
     });
-    const slowRemoval = admin.removeAdmin(userId);
-    await choseGrant.promise;
-    const removing = admin.removeAdmin(userId);
+    const paused = vi.spyOn(db, "transaction");
+    const started: Promise<unknown>[] = [];
     try {
-      await waitForContender();
+      const creating = privateKey();
+      started.push(creating);
+      await Promise.race([providerCreated.promise, creating.then(() => { throw Error("Private key created before provider gate"); })]);
+      paused.mockImplementationOnce(async (callback, options) => {
+        choseGrant.release();
+        await retryRemoval.promise;
+        return transaction(callback, options);
+      });
+      const slowRemoval = admin.removeAdmin(userId);
+      started.push(slowRemoval);
+      await Promise.race([choseGrant.promise, slowRemoval.then(() => { throw Error("Removal finished before grant selection"); })]);
+      const removing = admin.removeAdmin(userId);
+      started.push(removing);
+      await Promise.race([waitForContender(), removing.then(() => { throw Error("Removal finished before waiting for grant"); })]);
+      release.release();
+      await expect(creating).rejects.toThrow("Admin membership is not active");
+      await removing;
+      expect(createdId).toEqual(expect.any(String));
+      expect(projectedId).toBe(createdId);
+      expect(provider.enableKey).not.toHaveBeenCalledWith(createdId);
+      await admin.addAdmin(userId);
+      retryRemoval.release();
+      await slowRemoval;
     } finally {
       release.release();
-    }
-    expect(await creating).toBe("reconciled");
-    try {
-      await removing;
-      await admin.addAdmin(userId);
-    } finally {
       retryRemoval.release();
+      await Promise.allSettled(started);
       paused.mockRestore();
-      await slowRemoval;
     }
     expect(await attempts()).toHaveLength(0);
     expect(await observer`select id from system_admin where id = ${grantId}`).toHaveLength(0);

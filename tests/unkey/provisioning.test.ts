@@ -64,6 +64,7 @@ describe("one-time key provisioning cleanup", () => {
     await expect(deleteAndConfirmProvisioningCandidates(adapter as unknown as UnkeyAdapter, "attempt", "known"))
       .rejects.toThrow(/not confirmed/);
     expect(adapter.deleteKey).toHaveBeenCalledWith("known");
+    expect(adapter.getKey).toHaveBeenCalledWith("known");
   });
 
   it("keeps creation blocked when provider non-usability cannot be proven", async () => {
