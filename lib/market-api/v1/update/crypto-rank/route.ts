@@ -1,12 +1,11 @@
+import type { MarketTransaction } from "@tradinggoose/db";
 import { sql } from "drizzle-orm";
 import type { MarketApiActor } from "@/lib/market-api/core/access";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
 import { schema } from "@tradinggoose/db";
-import { requireDatabase } from "@/lib/db/runtime";
 
-import { requirePrivateRankActor } from "../rank-access";
-
+import { privateRankTransaction } from "../rank-access";
 
 type CryptoLookup = {
   id?: string | null;
@@ -20,7 +19,7 @@ function normalizeLookup(value?: string | null) {
   return trimmed ? trimmed : null;
 }
 
-async function resolveCryptoId(request: Request): Promise<string | null> {
+async function resolveCryptoId(request: Request, tx: MarketTransaction): Promise<string | null> {
   const { searchParams } = new URL(request.url);
   const fromQuery = normalizeLookup(searchParams.get("crypto_id") ?? searchParams.get("cryptoId"));
   if (fromQuery) return fromQuery;
@@ -53,7 +52,7 @@ async function resolveCryptoId(request: Request): Promise<string | null> {
 
   if (!lookup.code || !lookup.chainCode) return null;
 
-  const rows = (await requireDatabase().execute(sql`
+  const rows = (await tx.execute(sql`
     SELECT cr.id
     FROM cryptos cr
     WHERE cr.code ILIKE ${lookup.code}
@@ -74,16 +73,16 @@ async function resolveCryptoId(request: Request): Promise<string | null> {
 export async function postUpdateCryptoRank(c: ApiContext, actor: MarketApiActor | null) {
   try {
 
-    const accessError = requirePrivateRankActor(c, actor);
-    if (accessError) return accessError;
+    const tx = privateRankTransaction(c, actor);
+    if (tx instanceof Response) return tx;
 
     const request = c.req.raw;
-    const cryptoId = await resolveCryptoId(request);
+    const cryptoId = await resolveCryptoId(request, tx);
     if (!cryptoId) {
       return c.json({ error: "crypto_id or code+chainCode is required." }, 400);
     }
 
-    const updated = await requireDatabase()
+    const updated = await tx
       .update(schema.cryptos)
       .set({
         rank: sql<number>`${schema.cryptos.rank} + 1`,

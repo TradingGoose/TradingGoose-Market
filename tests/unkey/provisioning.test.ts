@@ -55,6 +55,18 @@ describe("one-time key provisioning cleanup", () => {
     expect(state.get("key_other")?.enabled).toBe(true);
   });
 
+  it("deletes and checks a projected ID even when a fresh list omits it", async () => {
+    const adapter = {
+      listKeys: vi.fn(async () => []),
+      deleteKey: vi.fn(),
+      getKey: vi.fn(async () => ({ enabled: true })),
+    };
+    await expect(deleteAndConfirmProvisioningCandidates(adapter as unknown as UnkeyAdapter, "attempt", "known"))
+      .rejects.toThrow(/not confirmed/);
+    expect(adapter.deleteKey).toHaveBeenCalledWith("known");
+    expect(adapter.getKey).toHaveBeenCalledWith("known");
+  });
+
   it("keeps creation blocked when provider non-usability cannot be proven", async () => {
     const candidate = {
       keyId: "key_unknown",

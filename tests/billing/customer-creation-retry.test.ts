@@ -1,11 +1,11 @@
-import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
+import { schema, type MarketDatabase, type MarketTransaction } from "@tradinggoose/db";
 import Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   record: null as null | {
     user: { id: string; name: string; email: string; stripeCustomerId: string | null };
-    subscription: { stripeCustomerId: string | null; stripeSubscriptionId: string | null };
+    subscription: { id: string; stripeCustomerId: string | null; stripeSubscriptionId: string | null; metadata: Record<string, unknown> | null };
     usageOwner: { id: string };
   },
   create: vi.fn(),
@@ -31,23 +31,28 @@ import {
   ensureStripeUserCustomer,
   getStripeCustomerCreateIdempotencyKey,
   getStripeCustomerReplacementIdempotencyKey,
+  StripeCustomerSettlementPendingError,
 } from "../../lib/billing/customer-state";
+import { withPaygActivationAttemptId } from "../../lib/billing/subscription";
+
+const unrelatedMetadata = { keep: "subscription note" };
+const pendingMetadata = withPaygActivationAttemptId(unrelatedMetadata, "attempt_old", "price_payg", new Date(0), "sub_old");
 
 beforeEach(() => {
   state.record = {
     user: { id: "user_1", name: "Original name", email: "original@example.com", stripeCustomerId: null },
-    subscription: { stripeCustomerId: null, stripeSubscriptionId: null },
+    subscription: { id: "sub_default_user_1", stripeCustomerId: null, stripeSubscriptionId: null, metadata: { ...pendingMetadata } },
     usageOwner: { id: "owner_1" },
   };
   state.create.mockReset();
   state.retrieve.mockReset();
   state.update.mockReset().mockImplementation(async (id, parameters) => ({ id, ...parameters }));
   state.transaction.mockReset().mockImplementation(async (callback) => {
-    const priorCustomerId = state.record!.user.stripeCustomerId;
+    const prior = structuredClone(state.record);
     try {
       return await callback(transaction());
     } catch (error) {
-      state.record!.user.stripeCustomerId = priorCustomerId;
+      state.record = prior;
       throw error;
     }
   });
@@ -83,12 +88,15 @@ describe("immutable Stripe Customer creation retries", () => {
       });
       state.update.mockImplementation(async (id, parameters) => {
         expect(state.record!.user.stripeCustomerId).toBe(id);
+        expect(state.record!.subscription.metadata).toEqual(replacement ? unrelatedMetadata : pendingMetadata);
         const customer = { ...customers.get(id)!, ...parameters };
         customers.set(id, customer);
         return customer;
       });
 
       await expect(ensureStripeUserCustomer("user_1")).rejects.toThrow("Customer create response lost");
+      expect(state.record!.user.stripeCustomerId).toBe(replacement ? "cus_deleted" : null);
+      expect(state.record!.subscription.metadata).toEqual(pendingMetadata);
       Object.assign(state.record!.user, { name: "New name", email: "new@example.com" });
       await expect(ensureStripeUserCustomer("user_1")).resolves.toMatchObject({
         id: "cus_recovered", name: "New name", email: "new@example.com",
@@ -109,14 +117,16 @@ describe("immutable Stripe Customer creation retries", () => {
     },
   );
 
-  it("commits the recovered mapping before a failed profile projection and retries only update", async () => {
+  it("commits replacement and attempt retirement before a failed profile projection and retries only update", async () => {
     const customer = { id: "cus_created", email: null, name: null };
+    state.record!.user.stripeCustomerId = "cus_deleted";
     state.create.mockResolvedValue(customer);
-    state.retrieve.mockResolvedValue(customer);
+    state.retrieve.mockResolvedValueOnce({ id: "cus_deleted", deleted: true }).mockResolvedValue(customer);
     state.update.mockRejectedValueOnce(new Error("Customer profile update failed"));
 
     await expect(ensureStripeUserCustomer("user_1")).rejects.toThrow("Customer profile update failed");
     expect(state.record!.user.stripeCustomerId).toBe("cus_created");
+    expect(state.record!.subscription.metadata).toEqual(unrelatedMetadata);
     Object.assign(state.record!.user, { name: "Edited name", email: "edited@example.com" });
     await expect(ensureStripeUserCustomer("user_1")).resolves.toMatchObject({
       id: "cus_created", name: "Edited name", email: "edited@example.com",
@@ -126,6 +136,29 @@ describe("immutable Stripe Customer creation retries", () => {
     expect(state.update).toHaveBeenLastCalledWith("cus_created", {
       name: "Edited name", email: "edited@example.com",
     });
+  });
+
+  it("retains the mapping and attempt when Customer retrieval is inconclusive", async () => {
+    state.record!.user.stripeCustomerId = "cus_1";
+    state.retrieve.mockRejectedValue(new Error("Customer lookup failed"));
+
+    await expect(ensureStripeUserCustomer("user_1")).rejects.toThrow("Customer lookup failed");
+    expect(state.record!.user.stripeCustomerId).toBe("cus_1");
+    expect(state.record!.subscription.metadata).toEqual(pendingMetadata);
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it("retains a bound Customer and its settlement state after confirmed deletion", async () => {
+    state.record!.user.stripeCustomerId = "cus_deleted";
+    Object.assign(state.record!.subscription, { stripeCustomerId: "cus_deleted", stripeSubscriptionId: "sub_bound" });
+    state.retrieve.mockResolvedValue({ id: "cus_deleted", deleted: true });
+
+    await expect(ensureStripeUserCustomer("user_1")).rejects.toBeInstanceOf(StripeCustomerSettlementPendingError);
+    expect(state.record!.user.stripeCustomerId).toBe("cus_deleted");
+    expect(state.record!.subscription).toMatchObject({
+      stripeCustomerId: "cus_deleted", stripeSubscriptionId: "sub_bound", metadata: pendingMetadata,
+    });
+    expect(state.create).not.toHaveBeenCalled();
   });
 });
 
@@ -142,9 +175,9 @@ function transaction() {
   };
   return {
     select: () => ({ from: () => selection }),
-    update: () => ({
+    update: (table: typeof schema.user | typeof schema.subscription) => ({
       set: (values: Record<string, unknown>) => ({
-        where: async () => Object.assign(state.record!.user, values),
+        where: async () => Object.assign(table === schema.user ? state.record!.user : state.record!.subscription, values),
       }),
     }),
   } as unknown as MarketTransaction;

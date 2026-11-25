@@ -1,14 +1,13 @@
+import type { MarketTransaction } from "@tradinggoose/db";
 import { sql } from "drizzle-orm";
 import type { MarketApiActor } from "@/lib/market-api/core/access";
 import type { ApiContext } from "@/lib/market-api/core/context";
 
 import { schema } from "@tradinggoose/db";
-import { requireDatabase } from "@/lib/db/runtime";
 
-import { requirePrivateRankActor } from "../rank-access";
+import { privateRankTransaction } from "../rank-access";
 
-
-async function resolveCurrencyId(request: Request) {
+async function resolveCurrencyId(request: Request, tx: MarketTransaction) {
   const { searchParams } = new URL(request.url);
   const fromQuery = searchParams.get("currency_id")?.trim() ?? searchParams.get("currencyId")?.trim();
   if (fromQuery) return fromQuery;
@@ -33,7 +32,7 @@ async function resolveCurrencyId(request: Request) {
   }
 
   if (code) {
-    const result = (await requireDatabase().execute(sql`
+    const result = (await tx.execute(sql`
       SELECT id FROM currencies
       WHERE code ILIKE ${code}
       ORDER BY code ASC
@@ -48,16 +47,16 @@ async function resolveCurrencyId(request: Request) {
 export async function postUpdateCurrencyRank(c: ApiContext, actor: MarketApiActor | null) {
   try {
 
-    const accessError = requirePrivateRankActor(c, actor);
-    if (accessError) return accessError;
+    const tx = privateRankTransaction(c, actor);
+    if (tx instanceof Response) return tx;
 
     const request = c.req.raw;
-    const currencyId = await resolveCurrencyId(request);
+    const currencyId = await resolveCurrencyId(request, tx);
     if (!currencyId) {
       return c.json({ error: "currency_id is required." }, 400);
     }
 
-    const updated = await requireDatabase()
+    const updated = await tx
       .update(schema.currencies)
       .set({
         rank: sql<number>`${schema.currencies.rank} + 1`,

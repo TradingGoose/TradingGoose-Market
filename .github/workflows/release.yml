@@ -35,9 +35,54 @@ jobs:
       - run: bun run db:build
       - run: bun run type-check
       - run: bun run lint
+      - name: Start and verify transaction pooling
+        env:
+          PGPASSWORD: market
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y pgbouncer
+          cd "$RUNNER_TEMP"
+          umask 077
+          echo '"market" "market"' > pool-users.txt
+          cat > quality-pool.ini <<EOF
+          [databases]
+          * = host=127.0.0.1 port=5432
+          [pgbouncer]
+          listen_addr = 127.0.0.1
+          listen_port = 26432
+          unix_socket_dir = $RUNNER_TEMP
+          auth_file = $RUNNER_TEMP/pool-users.txt
+          auth_type = scram-sha-256
+          admin_users = market
+          pool_mode = transaction
+          default_pool_size = 5
+          server_round_robin = 1
+          server_reset_query = DISCARD ALL
+          server_reset_query_always = 1
+          max_prepared_statements = 0
+          logfile = $RUNNER_TEMP/quality-pool.log
+          pidfile = $RUNNER_TEMP/quality-pool.pid
+          EOF
+          pgbouncer -d quality-pool.ini
+          export PGHOST=127.0.0.1 PGPORT=26432 PGUSER=market
+          deadline=$((SECONDS + 30))
+          until config=$(timeout 2s psql -XAtw -v ON_ERROR_STOP=1 -d pgbouncer -c 'show config'); do
+            if (( SECONDS >= deadline )); then
+              cat "$RUNNER_TEMP/quality-pool.log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q '^pool_mode|transaction|' <<< "$config" || { echo "PgBouncer must use transaction pooling" >&2; exit 1; }
+          export PGDATABASE=market_quality
+          for i in {1..5}; do psql -XAt -c 'select pg_sleep(0.2)' & done
+          wait
+          # One client executes successive transactions on the warmed backends.
+          pids=$(for i in {1..8}; do echo 'select pg_backend_pid();'; done | psql -XAt -v ON_ERROR_STOP=1)
+          test "$(sort -u <<< "$pids" | wc -l)" -ge 2
       - run: bun run test
         env:
-          DATABASE_URL: postgres://market:market@127.0.0.1:5432/market_quality
+          DATABASE_URL: postgres://market:market@127.0.0.1:26432/market_quality
 
   release-validation:
     runs-on: ubuntu-latest

@@ -132,7 +132,7 @@ describe.sequential("v1 retained customer usage", () => {
       const controlUrl = parseControlUrl(process.env.DATABASE_URL);
       const databaseName = `${GENERATED_DATABASE_PREFIX}${randomUUID().replaceAll("-", "")}`;
       const targetUrl = generatedDatabaseUrl(controlUrl, databaseName);
-      const controlSql = postgres(controlUrl.toString(), { max: 1 });
+      const controlSql = postgres(controlUrl.toString(), { max: 1, prepare: false });
       let targetSql: DirectSql | null = null;
       let applicationClient: DirectSql | null = null;
       let environmentSnapshot: EnvironmentSnapshot | null = null;
@@ -152,7 +152,7 @@ describe.sequential("v1 retained customer usage", () => {
 
         await controlSql.unsafe(`create database "${databaseName}" owner market`);
         databaseCreated = true;
-        targetSql = postgres(targetUrl, { max: 2 });
+        targetSql = postgres(targetUrl, { max: 2, prepare: false });
 
         try {
           await runStandardMigration(targetUrl);

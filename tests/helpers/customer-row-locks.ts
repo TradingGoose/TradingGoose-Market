@@ -1,7 +1,6 @@
 import type postgres from "postgres";
-import type { MarketDatabase } from "@tradinggoose/db";
 import type Stripe from "stripe";
-import { sql } from "drizzle-orm";
+import { beforeCompletion, gate } from "./private-rank-order";
 import { expect, vi } from "vitest";
 
 type DirectSql = ReturnType<typeof postgres>;
@@ -11,10 +10,9 @@ export async function assertCustomerRowLockOrder(
   monitor: DirectSql,
   applicationClient: DirectSql,
 ) {
-  const [{ requireDatabase }, locks, customerState, creation, revocation, access, manifest, stripeClient, unkey] =
+  const [{ requireDatabase }, customerState, creation, revocation, access, manifest, stripeClient, unkey] =
     await Promise.all([
       import("../../lib/db/runtime"),
-      import("../../lib/db/locks"),
       import("../../lib/billing/customer-state"),
       import("../../lib/api-keys/creation"),
       import("../../lib/api-keys/revocation"),
@@ -50,9 +48,15 @@ export async function assertCustomerRowLockOrder(
     createKey: vi.fn(async () => {
       const keyId = `provider_row_lock_${++nextKey}`;
       const key = `row_lock_secret_${nextKey}`;
-      providerKeys.set(key, { keyId, enabled: true });
+      providerKeys.set(key, { keyId, enabled: false });
       return { keyId, key };
     }),
+    enableKey: vi.fn(async (keyId: string) => {
+      const key = [...providerKeys.values()].find(entry => entry.keyId === keyId);
+      if (!key) throw new Error("Unknown provider key");
+      key.enabled = true;
+    }),
+    listKeys: vi.fn(async () => [...providerKeys.values()]),
     verifyKey: vi.fn(async ({ key }: { key: string }) => {
       const known = providerKeys.get(key);
       return { valid: Boolean(known?.enabled), code: known?.enabled ? "VALID" : "NOT_FOUND", keyId: known?.keyId ?? null };
@@ -66,62 +70,48 @@ export async function assertCustomerRowLockOrder(
   };
   const providerSpy = vi.spyOn(unkey, "getMarketKeyProvider")
     .mockReturnValue(provider as unknown as ReturnType<typeof unkey.getMarketKeyProvider>);
+  const retrieve = vi.fn(async () => ({
+    id: "cus_row_lock", email: customer.email, name: customer.name,
+  }));
   const stripeSpy = vi.spyOn(stripeClient, "getOptionalStripeClient")
-    .mockReturnValue({
-      customers: {
-        retrieve: vi.fn(async () => {
-          // The synchronizer has already selected its identity bridge. Its
-          // joined owner must remain independently lockable while it is open.
-          await monitor`
-            select id from market_usage_owner
-            where id = ${customer.owner_id} for update nowait
-          `;
-          return { id: "cus_row_lock", email: customer.email, name: customer.name };
-        }),
-      },
-    } as unknown as Stripe);
+    .mockReturnValue({ customers: { retrieve } } as unknown as Stripe);
 
   async function alongsideBilling<T>(operation: () => Promise<T>) {
-    let pending: Promise<{ value: T } | { error: unknown }> | undefined;
+    const reading = gate();
+    const resume = gate();
+    retrieve.mockImplementationOnce(async () => {
+      reading.release();
+      await resume.promise;
+      return { id: "cus_row_lock", email: customer.email, name: customer.name };
+    });
+    const syncing = customerState.ensureStripeUserCustomer(customer.id);
+    let result: Promise<T> | undefined;
+    let previous: number;
     try {
-      await database.transaction(async (tx) => {
-        await locks.acquireBillingSubjectLock(tx, customer.id);
-        await tx.execute(sql`
-          select id from "user" where id = ${customer.id} for update
-        `);
-        const operationQueryStart = emittedQueries.length;
-        pending = operation().then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        await vi.waitFor(async () => {
-          const waiting = await monitor<{ pid: number }[]>`
-            select pid from pg_stat_activity
-            where datname = current_database()
-              and pid <> pg_backend_pid()
-              and wait_event_type = 'Lock'
-          `;
-          expect(waiting).toHaveLength(1);
-          // Check SQL emitted by the installed driver for the actual key path.
-          const lockedJoin = emittedQueries.slice(operationQueryStart)
-            .find((query) => /inner join/i.test(query) && /for update/i.test(query));
-          expect(lockedJoin).toMatch(/for update of "user"(?:\s|$)/i);
-        }, { timeout: 5_000 });
-        await expect(customerState.ensureStripeUserCustomer(
-          customer.id,
-          tx as unknown as MarketDatabase,
-        )).resolves.toMatchObject({ id: "cus_row_lock" });
-      });
-    } catch (error) {
-      // Release the blocking identity row before awaiting the key operation,
-      // including assertion-failure cleanup, so failures cannot strand clients.
-      if (pending) await pending;
-      throw error;
+      await beforeCompletion(reading.promise, syncing, "Customer retrieval");
+      previous = emittedQueries.length;
+      const pending = operation();
+      result = pending;
+      await vi.waitUntil(async () => {
+        const blocked = await beforeCompletion(monitor`
+          select pid from pg_stat_activity where datname = current_database()
+            and wait_event_type = 'Lock'
+        `, pending, "the operation waited for Customer synchronization");
+        return blocked.length === 1;
+      }, { timeout: 3_000 });
+      await monitor`
+        select id from market_usage_owner where id = ${customer.owner_id} for update nowait
+      `;
+    } finally {
+      resume.release();
+      await Promise.allSettled([syncing, result]);
     }
-    if (!pending) throw new Error("The concurrent key operation did not start");
-    const result = await pending;
-    if ("error" in result) throw result.error;
-    return result.value;
+    await syncing;
+    const value = await result;
+    expect(emittedQueries.slice(previous).some(query =>
+      /inner join/i.test(query) && /for update of "user"/i.test(query)
+    )).toBe(true);
+    return value;
   }
 
   try {

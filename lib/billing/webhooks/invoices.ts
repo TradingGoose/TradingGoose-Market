@@ -1,5 +1,5 @@
 import { subscription, userStats } from "@tradinggoose/db/schema";
-import type { MarketDatabase } from "@tradinggoose/db";
+import type { MarketTransaction } from "@tradinggoose/db";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 import { acquireBillingSubjectLock } from "@/lib/db/locks";
@@ -24,12 +24,11 @@ import {
 export async function handleMarketUsageInvoicePayment(
   stripe: Stripe,
   invoice: Stripe.Invoice,
-  database: MarketDatabase = requireDatabase(),
 ) {
   if (!isUsageInvoiceType(invoice.metadata?.type)) return;
   const stripeSubscriptionId = invoice.metadata?.subscriptionId;
   if (!stripeSubscriptionId) return;
-  const current = await getPaygSubscriptionByStripeId(stripeSubscriptionId, database);
+  const current = await getPaygSubscriptionByStripeId(stripeSubscriptionId);
   // An old provider binding never changes a later activation's payment block.
   if (!current) return;
   const invoiceCustomerId = typeof invoice.customer === "string"
@@ -37,44 +36,55 @@ export async function handleMarketUsageInvoicePayment(
   if (!invoiceCustomerId || invoiceCustomerId !== current.stripeCustomerId) {
     throw new Error("Current PAYG usage invoice Customer does not match its binding");
   }
-  const canceled = await database.transaction(async tx => {
+  const canceled = await requireDatabase().transaction(async tx => {
     await acquireBillingSubjectLock(tx, current.referenceId);
-    const [local] = await tx.select().from(subscription)
-      .where(eq(subscription.id, current.id)).for("update").limit(1);
-    if (!local || local.stripeSubscriptionId !== invoice.metadata?.subscriptionId) return;
-    // Delivery order is not payment truth. In particular a delayed failure
-    // must not reinstate a block after Portal payment has already succeeded.
-    const fresh = await stripe.invoices.retrieve(invoice.id);
-    const customerId = typeof fresh.customer === "string" ? fresh.customer : fresh.customer?.id;
-    if (fresh.id !== invoice.id || customerId !== local.stripeCustomerId ||
-      fresh.metadata?.subscriptionId !== local.stripeSubscriptionId ||
-      !isUsageInvoiceType(fresh.metadata?.type)) {
-      throw new Error("Current PAYG usage invoice does not match its billing binding");
-    }
-    usageInvoiceSnapshot(fresh);
-    await requireRetainedSubscriptionCustomerBridge(tx, local, customerId);
-    // Portal payment can outlive retries of the original deletion event. The
-    // existing final-settlement owner rechecks and clears that retained binding.
-    if (fresh.status === "paid" && local.status === "canceled") {
-      return stripe.subscriptions.retrieve(stripeSubscriptionId);
-    }
-    let blocked = fresh.status !== "paid";
-    if (!blocked) {
-      // Paying one invoice cannot forgive another failed (or in-flight) usage
-      // settlement. Only this current subscription's complete paid inventory
-      // can clear Studio's existing account-level payment block.
-      const invoices = await listUsageInvoices(stripe, {
-        customerId: customerId!,
-        stripeSubscriptionId: local.stripeSubscriptionId!,
-        types: usageInvoiceTypes,
-      });
-      blocked = invoices.some(candidate => candidate.status !== "paid");
-    }
-    const stats = await resolveRetainedUserStatsForSubscription(local, tx);
-    await tx.update(userStats).set({ billingBlocked: blocked, updatedAt: new Date() })
-      .where(eq(userStats.id, stats.id));
+    return projectMarketUsageInvoicePayment(tx, stripe, invoice, current.referenceId);
   });
   if (canceled) await handleMarketSubscriptionDeleted(stripe, canceled);
+}
+
+export async function projectMarketUsageInvoicePayment(
+  tx: MarketTransaction,
+  stripe: Stripe,
+  invoice: Stripe.Invoice,
+  userId: string,
+) {
+  const stripeSubscriptionId = invoice.metadata?.subscriptionId;
+  if (!stripeSubscriptionId) return;
+  const [local] = await tx.select().from(subscription)
+    .where(eq(subscription.stripeSubscriptionId, stripeSubscriptionId)).for("update").limit(1);
+  if (!local || local.referenceId !== userId || local.stripeSubscriptionId !== stripeSubscriptionId) return;
+  // Delivery order is not payment truth. In particular a delayed failure
+  // must not reinstate a block after Portal payment has already succeeded.
+  const fresh = await stripe.invoices.retrieve(invoice.id);
+  const customerId = typeof fresh.customer === "string" ? fresh.customer : fresh.customer?.id;
+  if (fresh.id !== invoice.id || customerId !== local.stripeCustomerId ||
+    fresh.metadata?.subscriptionId !== local.stripeSubscriptionId ||
+    !isUsageInvoiceType(fresh.metadata?.type)) {
+    throw new Error("Current PAYG usage invoice does not match its billing binding");
+  }
+  usageInvoiceSnapshot(fresh);
+  await requireRetainedSubscriptionCustomerBridge(tx, local, customerId);
+  // Portal payment can outlive retries of the original deletion event. The
+  // existing final-settlement owner rechecks and clears that retained binding.
+  if (fresh.status === "paid" && local.status === "canceled") {
+    return stripe.subscriptions.retrieve(stripeSubscriptionId);
+  }
+  let blocked = fresh.status !== "paid";
+  if (!blocked) {
+    // Paying one invoice cannot forgive another failed (or in-flight) usage
+    // settlement. Only this current subscription's complete paid inventory
+    // can clear Studio's existing account-level payment block.
+    const invoices = await listUsageInvoices(stripe, {
+      customerId: customerId!,
+      stripeSubscriptionId: local.stripeSubscriptionId!,
+      types: usageInvoiceTypes,
+    });
+    blocked = invoices.some(candidate => candidate.status !== "paid");
+  }
+  const stats = await resolveRetainedUserStatsForSubscription(local, tx);
+  await tx.update(userStats).set({ billingBlocked: blocked, updatedAt: new Date() })
+    .where(eq(userStats.id, stats.id));
 }
 
 export async function handleMarketCycleInvoiceFinalized(

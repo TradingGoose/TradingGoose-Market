@@ -4,11 +4,12 @@ import { expect, vi } from "vitest";
 
 /** Exercises the real activation owner and advisory locks in the migrated fixture. */
 export async function assertActivationSerialization(monitor: ReturnType<typeof postgres>) {
-  const [activation, environment, stripeClient, customerState] = await Promise.all([
+  const [activation, environment, stripeClient, customerState, webhooks] = await Promise.all([
     import("../../lib/billing/activation"),
     import("../../lib/environment"),
     import("../../lib/billing/stripe-client"),
     import("../../lib/billing/customer-state"),
+    import("../../lib/billing/webhooks/subscription"),
   ]);
   const userId = "activation_serialization_customer";
   const localSubscriptionId = `sub_default_${userId}`;
@@ -32,31 +33,41 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     name: "Activation serialization",
     invoice_settings: { default_payment_method: paymentMethod },
   });
-  const retrieveCustomer = vi.fn(async () => customer());
-  const list = vi.fn(() => [...providers.values()].filter((entry) => entry.status === "active"));
+  const deletedCustomers = new Set<string>();
+  const currentCustomer = async (id: string) => deletedCustomers.has(id)
+    ? { id, deleted: true as const } : { ...customer(), id };
+  const retrieveCustomer = vi.fn(currentCustomer);
+  const createCustomer = vi.fn();
+  const list = vi.fn(({ status, customer }: Stripe.SubscriptionListParams) =>
+    [...providers.values()].filter((entry) =>
+      entry.customer === customer && (status === "all" || entry.status === status)));
   const retrieve = vi.fn(async (id: string) => {
     const provider = providers.get(id);
     if (!provider) throw new Error("Missing activation provider fixture");
     return provider;
   });
-  const create = vi.fn(async (_parameters: unknown, options: { idempotencyKey: string }) => {
-    const [{ attempt }] = await monitor<{ attempt: string | null }[]>`
-      select metadata ->> 'paygActivationAttemptId' as attempt
+  const create = vi.fn(async (parameters: Stripe.SubscriptionCreateParams, options: { idempotencyKey: string }) => {
+    const [{ attempt, possible }] = await monitor<{ attempt: string | null; possible: boolean }[]>`
+      select metadata ->> 'paygActivationAttemptId' as attempt,
+        (metadata ->> 'paygActivationPostPossible')::boolean as possible
       from subscription where id = ${localSubscriptionId}
     `;
     // A provider call cannot happen before its recovery identity has committed.
     expect(attempt).toEqual(expect.any(String));
-    expect(options.idempotencyKey).toBe(`payg-activate:${localSubscriptionId}:${attempt}:${customerId}`);
+    expect(possible).toBe(true);
+    expect(parameters.metadata).toMatchObject({ paygActivationAttemptId: attempt });
+    expect(deletedCustomers.has(parameters.customer)).toBe(false);
+    expect(options.idempotencyKey).toBe(`payg-activate:${localSubscriptionId}:${attempt}:${parameters.customer}`);
     const existing = idempotentCreates.get(options.idempotencyKey);
     if (existing) return existing;
     const provider = {
       id: `sub_serialization_${++nextSubscription}`,
-      customer: customerId,
+      customer: parameters.customer,
       status: "active",
       cancel_at_period_end: false,
       trial_start: null,
       trial_end: null,
-      metadata: { userId, subscriptionId: localSubscriptionId, referenceId: userId },
+      metadata: parameters.metadata,
       items: { data: [{
         price: { id: priceId }, quantity: 1,
         current_period_start: 1_787_875_200, current_period_end: 1_790_553_600,
@@ -67,21 +78,22 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     return provider;
   });
   const provider = {
-    customers: { retrieve: retrieveCustomer },
+    customers: { retrieve: retrieveCustomer, create: createCustomer },
     subscriptions: { list, retrieve, create },
   } as unknown as Stripe;
   const enabledSpy = vi.spyOn(stripeClient, "requireEnabledStripeClient").mockReturnValue(provider);
   const optionalSpy = vi.spyOn(stripeClient, "getOptionalStripeClient").mockReturnValue(provider);
   const priceSpy = vi.spyOn(stripeClient, "validateMarketStripePrice").mockResolvedValue(null);
 
-  async function expectWaitingActivation() {
-    await vi.waitFor(async () => {
-      const [{ waiting }] = await monitor<{ waiting: number }[]>`
+  async function expectWaitingActivation(count = 1, earlyCompletion?: Promise<never>) {
+    await vi.waitUntil(async () => {
+      const observation = monitor<{ waiting: number }[]>`
         select count(*)::integer as waiting from pg_stat_activity
         where datname = current_database() and pid <> pg_backend_pid()
-          and wait_event_type = 'Lock' and query like '%pg_advisory_lock(%'
+          and wait_event_type = 'Lock' and cardinality(pg_blocking_pids(pid)) > 0
       `;
-      expect(waiting).toBe(1);
+      const [{ waiting }] = await (earlyCompletion ? Promise.race([earlyCompletion, observation]) : observation);
+      return waiting === count;
     }, { timeout: 5_000 });
   }
   const outstanding: Promise<unknown>[] = [];
@@ -109,11 +121,18 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
       where id = ${localSubscriptionId}
     `;
   }
+  function deleteCustomer(id: string, replacement: string) {
+    deletedCustomers.add(id);
+    for (const entry of providers.values()) {
+      if (entry.customer === id) entry.status = "canceled";
+    }
+    createCustomer.mockResolvedValueOnce({ ...customer(), id: replacement });
+  }
 
   try {
     const reading = gate();
     const finishRead = gate();
-    retrieveCustomer.mockImplementationOnce(async () => {
+    retrieveCustomer.mockResolvedValueOnce(customer()).mockImplementationOnce(async () => {
       const staleMissingCard = customer(null);
       reading.release();
       await finishRead.promise;
@@ -123,7 +142,7 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     await reading.promise;
     const withCard = startActivation();
     await expectWaitingActivation();
-    expect(retrieveCustomer).toHaveBeenCalledTimes(1);
+    expect(retrieveCustomer).toHaveBeenCalledTimes(2);
     expect(create).not.toHaveBeenCalled();
     finishRead.release();
     expect(await missingCard).toMatchObject({ error: { code: "PAYMENT_METHOD_REQUIRED" } });
@@ -139,19 +158,29 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     const finishCreate = gate();
     const createNormally = create.getMockImplementation()!;
     create.mockImplementationOnce(async (parameters, options) => {
+      const created = await createNormally(parameters, options);
       creating.release();
       await finishCreate.promise;
-      return createNormally(parameters, options);
+      return created;
     });
     const creator = startActivation();
-    await creating.promise;
+    await Promise.race([creating.promise, creator.then((result) => {
+      if ("error" in result) throw result.error;
+      throw new Error("Activation completed before Stripe subscription creation");
+    })]);
     const customerReads = retrieveCustomer.mock.calls.length;
     retrieveCustomer.mockImplementation(async () => customer(null));
     const staleContender = startActivation();
-    await expectWaitingActivation();
+    const racingProviderId = [...providers.values()].find((entry) => entry.status === "active")!.id;
+    const delivery = webhooks.handleMarketSubscriptionProjection(provider, racingProviderId)
+      .then(() => undefined, (error: unknown) => error);
+    outstanding.push(delivery);
+    await expectWaitingActivation(2);
     expect(retrieveCustomer).toHaveBeenCalledTimes(customerReads);
     finishCreate.release();
     expect(await creator).toMatchObject({ value: { status: "activated" } });
+    expect(await delivery).toMatchObject({ message: expect.stringContaining("binding changed") });
+    await webhooks.handleMarketSubscriptionProjection(provider, racingProviderId);
     expect(await staleContender).toMatchObject({ error: { code: "SUBSCRIPTION_ALREADY_BOUND" } });
     expect(retrieveCustomer).toHaveBeenCalledTimes(customerReads);
     expect(create).toHaveBeenCalledTimes(2);
@@ -160,8 +189,12 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     // A rollback after remote creation must retain the already committed
     // attempt so the same owner recovers it instead of creating another one.
     await resetBinding();
-    retrieveCustomer.mockImplementation(async () => customer());
-    retrieve.mockRejectedValueOnce(new Error("fresh provider retrieval failed"));
+    retrieveCustomer.mockImplementation(currentCustomer);
+    create.mockImplementationOnce(async (params, options) => {
+      const result = await createNormally(params, options);
+      retrieve.mockRejectedValueOnce(new Error("fresh provider retrieval failed"));
+      return result;
+    });
     expect(await startActivation()).toMatchObject({ error: { message: "fresh provider retrieval failed" } });
     const [{ attempt, binding }] = await monitor<{ attempt: string | null; binding: string | null }[]>`
       select metadata ->> 'paygActivationAttemptId' as attempt,
@@ -173,6 +206,122 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     expect(await startActivation()).toMatchObject({ value: { status: "activated" } });
     expect(create).toHaveBeenCalledTimes(createdBeforeRecovery);
     expect([...providers.values()].filter((entry) => entry.status === "active")).toHaveLength(1);
+
+    // An interrupted inventory prevented dispatch. After expiry a new generation can safely create.
+    await resetBinding();
+    list.mockReturnValueOnce([]).mockImplementationOnce(() => { throw new Error("inventory unavailable"); });
+    const postsBeforeExpiry = create.mock.calls.length;
+    expect(await startActivation()).toMatchObject({ error: { message: "inventory unavailable" } });
+    const [unsent] = await monitor`
+      update subscription set metadata = jsonb_set(metadata::jsonb, '{paygActivationStartedAt}',
+        to_jsonb((now() - interval '25 hours')::text)) where id = ${localSubscriptionId}
+      returning metadata
+    `;
+    expect(unsent.metadata).toMatchObject({ paygActivationAttemptId: expect.any(String), paygActivationPostPossible: false });
+    expect(create).toHaveBeenCalledTimes(postsBeforeExpiry);
+    expect(await startActivation()).toMatchObject({ value: { status: "activated" } });
+    expect(create).toHaveBeenCalledTimes(postsBeforeExpiry + 1);
+    expect(create.mock.lastCall![0].metadata).not.toMatchObject({
+      paygActivationAttemptId: unsent.metadata.paygActivationAttemptId,
+    });
+
+    // Stripe may have pruned its 24h create cache while the durable attempt is unresolved.
+    await resetBinding();
+    const loseCreateReply: typeof createNormally = async (params, options) => {
+      await createNormally(params, options);
+      throw new Error("subscription create reply lost");
+    };
+    create.mockImplementationOnce(loseCreateReply);
+    expect(await startActivation()).toMatchObject({ error: { message: "subscription create reply lost" } });
+    const unresolved = [...providers.values()].find((entry) => entry.status === "active")!;
+    const posts = create.mock.calls.length;
+    idempotentCreates.clear();
+    await monitor`
+      update subscription set metadata = jsonb_set(metadata::jsonb, '{paygActivationStartedAt}',
+        to_jsonb((now() - interval '25 hours')::text)) where id = ${localSubscriptionId}
+    `;
+    providers.delete(unresolved.id);
+    expect(await startActivation()).toMatchObject({ error: { code: "PAYG_ACTIVATION_RETRY_REQUIRED" } });
+    unresolved.status = "past_due";
+    providers.set(unresolved.id, unresolved);
+    expect(await startActivation()).toMatchObject({ error: { code: "PAYG_ACTIVATION_RETRY_REQUIRED" } });
+    expect(create).toHaveBeenCalledTimes(posts);
+    unresolved.status = "canceled";
+    expect(await startActivation()).toMatchObject({ error: { code: "PAYG_ACTIVATION_RETRY_REQUIRED" } });
+    const [retired] = await monitor`
+      select metadata ->> 'paygActivationAttemptId' as attempt from subscription where id = ${localSubscriptionId}
+    `;
+    expect(retired.attempt).toBeNull();
+    expect(create).toHaveBeenCalledTimes(posts);
+    create.mockRejectedValueOnce({ type: "StripeCardError", statusCode: 402 });
+    expect(await startActivation()).toMatchObject({ error: { code: "PAYG_PROVIDER_REJECTED" } });
+    expect(await startActivation()).toMatchObject({ value: { status: "activated" } });
+    expect(create).toHaveBeenCalledTimes(posts + 2);
+    expect([...providers.values()].filter((entry) => entry.status === "active")).toHaveLength(1);
+
+    await resetBinding();
+    create.mockImplementationOnce(loseCreateReply);
+    expect(await startActivation()).toMatchObject({ error: { message: "subscription create reply lost" } });
+    const oldSubscription = [...providers.values()].find((entry) => entry.status === "active")!;
+    await monitor`
+      update subscription set metadata = metadata::jsonb || jsonb_build_object(
+        'retained', true, 'paygActivationStartedAt', now() - interval '25 hours'
+      ) where id = ${localSubscriptionId}
+    `;
+    idempotentCreates.clear();
+    const replacement = "cus_after_aged_attempt";
+    deleteCustomer(customerId, replacement);
+    const postsBeforeReplacement = create.mock.calls.length;
+    create.mockImplementationOnce(loseCreateReply);
+    expect(await startActivation()).toMatchObject({ error: { message: "subscription create reply lost" } });
+    const replacementSubscriptions = [...providers.values()].filter((entry) => entry.status === "active");
+    expect(replacementSubscriptions).toHaveLength(1);
+    const [recovered] = replacementSubscriptions;
+    expect(recovered.customer).toBe(replacement);
+    expect(recovered.metadata.paygActivationAttemptId).not.toBe(oldSubscription.metadata.paygActivationAttemptId);
+    expect(await startActivation()).toMatchObject({ value: { stripeSubscriptionId: recovered.id } });
+    expect(create).toHaveBeenCalledTimes(postsBeforeReplacement + 1);
+
+    // Leave a provider object for preparation to pin, then queue replacement
+    // ahead of execution while that preparation still owns the subject lock.
+    await monitor`
+      update subscription set stripe_subscription_id = null, stripe_customer_id = null,
+        status = null, seats = null, period_start = null, period_end = null, cancel_at_period_end = null
+      where id = ${localSubscriptionId}
+    `;
+    const pinning = gate();
+    const finishPinning = gate();
+    retrieve.mockImplementationOnce(async (id) => {
+      expect(id).toBe(recovered.id);
+      const snapshot = { ...recovered };
+      pinning.release();
+      await finishPinning.promise;
+      return snapshot;
+    });
+    const oldContender = startActivation();
+    expect(await Promise.race([pinning.promise, oldContender])).toBeUndefined();
+    const nextCustomer = "cus_after_pinned_attempt";
+    deleteCustomer(replacement, nextCustomer);
+    const replacing = customerState.ensureStripeUserCustomer(userId);
+    outstanding.push(replacing);
+    await expectWaitingActivation(1, replacing.then(() => {
+      throw new Error("Customer replacement completed before waiting for the billing-subject lock");
+    }));
+    finishPinning.release();
+    expect((await replacing).id).toBe(nextCustomer);
+    expect(await oldContender).toMatchObject({ error: { code: "PAYG_ACTIVATION_RETRY_REQUIRED" } });
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ customer: nextCustomer }));
+    expect(create).toHaveBeenCalledTimes(postsBeforeReplacement + 1);
+    const [unbound] = await monitor`
+      select stripe_subscription_id, metadata from subscription where id = ${localSubscriptionId}
+    `;
+    expect(unbound).toEqual({ stripe_subscription_id: null, metadata: { retained: true } });
+    const final = await startActivation();
+    const active = [...providers.values()].filter((entry) => entry.status === "active");
+    expect(active).toHaveLength(1);
+    expect(active[0].customer).toBe(nextCustomer);
+    expect(final).toMatchObject({ value: { stripeSubscriptionId: active[0].id } });
+    expect(create).toHaveBeenCalledTimes(postsBeforeReplacement + 2);
 
     // A lost Customer creation response and profile edits must reuse exactly
     // the original create request, for initial and deleted-Customer recovery.

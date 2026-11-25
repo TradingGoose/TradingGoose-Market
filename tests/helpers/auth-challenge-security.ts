@@ -103,52 +103,60 @@ export async function assertAuthChallengeSecurity(database: ReturnType<typeof po
 
     // Only the latest link survives; successful verification keeps Alice's ID.
     const supersededEmail = `superseded-${randomUUID()}@example.com`;
-    const currentEmail = `current-${randomUUID()}@example.com`;
+    let currentEmail = `current-${randomUUID()}@example.com`;
     const supersededLink = await changeEmail(supersededEmail, cookie, true);
-    const currentLink = await changeEmail(currentEmail, cookie);
+    let currentLink = await changeEmail(currentEmail, cookie);
     const staleCallback = await verify(supersededLink);
     expect(staleCallback.status).toBe(302);
     expect(staleCallback.headers.get("location")).toBe("/account/api-keys?settings=profile&error=invalid_token");
-    // Queue verification first behind a real identity row lock, then queue
-    // issuance and redemption which have already read the old identity/token.
-    // They must recheck after the change wins, not recreate or use old proofs.
-    const racing: Promise<Response>[] = [];
-    try {
-      await database.begin(async (tx) => {
-        await tx.unsafe('select id from "user" where id = $1 for update', [aliceId]);
-        racing.push(verify(currentLink));
-        async function waitForIdentityWaiters(count: number) {
-          await vi.waitFor(async () => {
-            const waiting = await database`
-              select pid from pg_stat_activity
-              where datname = current_database() and wait_event_type = 'Lock'
-                and query like 'update "user"%'
-            `;
-            expect(waiting).toHaveLength(count);
-          }, { timeout: 5_000 });
-        }
-        await waitForIdentityWaiters(1);
-        racing.push(
-          post("/request-password-reset", { email: originalEmail, redirectTo: "/reset-password" }),
-          post("/email-otp/send-verification-otp", { email: originalEmail, type: "sign-in" }),
-          post("/sign-in/email-otp", { email: originalEmail, otp: retiringOtp }),
-          post("/reset-password", { token: retiringReset, newPassword: "Racing-password-must-not-win-123!" }),
-        );
-        await waitForIdentityWaiters(5);
-      });
-    } catch (error) {
-      await Promise.allSettled(racing);
-      throw error;
+    // One contender per change leaves pool capacity for the holder and observer.
+    // Both waiters have read the old identity/token before verification wins.
+    for (let round = 0; round < 4; round++) {
+      const oldEmail = round === 0 ? originalEmail : currentEmail;
+      const otp = round === 0 ? retiringOtp : await sendOtp(oldEmail);
+      const reset = round === 0 ? retiringReset : await requestReset(oldEmail);
+      if (round > 0) {
+        currentEmail = `current-${randomUUID()}@example.com`;
+        currentLink = await changeEmail(currentEmail, cookie);
+      }
+      const deliveriesBeforeRace = sent.length;
+      const contenders = [
+        () => post("/request-password-reset", { email: oldEmail, redirectTo: "/reset-password" }),
+        () => post("/email-otp/send-verification-otp", { email: oldEmail, type: "sign-in" }),
+        () => post("/sign-in/email-otp", { email: oldEmail, otp }),
+        () => post("/reset-password", { token: reset, newPassword: "Racing-password-must-not-win-123!" }),
+      ];
+      const racing: Promise<Response>[] = [];
+      try {
+        await database.begin(async (tx) => {
+          await tx.unsafe('select id from "user" where id = $1 for update', [aliceId]);
+          racing.push(verify(currentLink));
+          async function waitForIdentityWaiters(count: number) {
+            await vi.waitFor(async () => {
+              const waiting = await database`
+                select pid from pg_stat_activity
+                where datname = current_database() and wait_event_type = 'Lock'
+                  and query like 'update "user"%'
+              `;
+              expect(waiting).toHaveLength(count);
+            }, { timeout: 5_000 });
+          }
+          await waitForIdentityWaiters(1);
+          racing.push(contenders[round]());
+          await waitForIdentityWaiters(2);
+        });
+      } catch (error) {
+        await Promise.allSettled(racing);
+        throw error;
+      }
+      const [changed, contender] = await Promise.all(racing);
+      expect(changed.status, await changed.clone().text()).toBe(200);
+      expect((await changed.json() as { user: { id: string } }).user.id).toBe(aliceId);
+      expect(contender.status, await contender.clone().text()).toBe(round < 2 ? 200 : 400);
+      expect(sent).toHaveLength(deliveriesBeforeRace);
+      expect(await database`select id from verification where identifier = ${`sign-in-otp-${oldEmail}`}`).toHaveLength(0);
+      expect(await database`select id from verification where identifier = ${`reset-password:${reset}`}`).toHaveLength(0);
     }
-    const [changed, resetIssuance, otpIssuance, otpRedemption, resetRedemption] = await Promise.all(racing);
-    expect(changed.status, await changed.clone().text()).toBe(200);
-    expect((await changed.json() as { user: { id: string } }).user.id).toBe(aliceId);
-    expect(resetIssuance.status).toBe(200);
-    expect(otpIssuance.status).toBe(200);
-    expect(otpRedemption.status).toBe(400);
-    expect(resetRedemption.status).toBe(400);
-    expect(await database`select id from verification where identifier = ${`sign-in-otp-${originalEmail}`}`).toHaveLength(0);
-    expect(await database`select id from verification where identifier = ${`reset-password:${retiringReset}`}`).toHaveLength(0);
 
     // Bob claims the freed email. Neither Alice's older link nor the consumed
     // successful link may change Bob's address or create a session for Bob.

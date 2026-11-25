@@ -1,14 +1,12 @@
 import {
   marketApiKeys,
-  marketUsageOwner,
   systemAdmin,
-  user,
 } from "@tradinggoose/db/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   database: null as unknown as FakeRevocationDatabase,
-  sessionHeld: false,
+  transactionHeld: false,
   events: [] as string[],
   emailVerificationEnabled: true,
   provider: {
@@ -32,20 +30,7 @@ vi.mock("@/lib/db/locks", () => ({
   acquireApiKeyLock: vi.fn(async (_tx, keyId: string) => {
     state.events.push(`xact-key:${keyId}`);
   }),
-  withAdminGrantAndApiKeyHandlerLocks: async (
-    grantIds: string[],
-    keyId: string,
-    callback: (database: FakeRevocationDatabase) => Promise<unknown>,
-  ) => {
-    state.events.push(`session:acquired:${[...grantIds].sort().join(",")}:${keyId}`);
-    state.sessionHeld = true;
-    try {
-      return await callback(state.database);
-    } finally {
-      state.sessionHeld = false;
-      state.events.push("session:released");
-    }
-  },
+  withBoundedLockAcquisition: (_tx: unknown, acquire: () => Promise<void>) => acquire(),
 }));
 
 vi.mock("@/lib/unkey/runtime", () => ({
@@ -57,15 +42,17 @@ import { revokeAdminApiKey } from "../../lib/api-keys/revocation";
 beforeEach(() => {
   vi.clearAllMocks();
   state.events.length = 0;
-  state.sessionHeld = false;
+  state.transactionHeld = false;
   state.emailVerificationEnabled = true;
   state.database = new FakeRevocationDatabase();
   state.provider.deleteKey.mockImplementation(async () => {
-    expect(state.sessionHeld).toBe(true);
+    expect(state.transactionHeld).toBe(true);
+    expect(state.events).toContain("transaction:commit");
+    expect(state.database.revocationRequestedAt).toBeInstanceOf(Date);
     state.events.push("provider:delete");
   });
   state.provider.getKey.mockImplementation(async () => {
-    expect(state.sessionHeld).toBe(true);
+    expect(state.transactionHeld).toBe(true);
     state.events.push("provider:confirmed");
     return null;
   });
@@ -102,19 +89,12 @@ describe("system-wide private-key revocation", () => {
         revokeAdminApiKey("key_target", "grant_caller"),
       ).resolves.toEqual({ status: "revoked", retryable: false });
 
-      expect(state.events[0]).toBe(
-        "session:acquired:grant_caller,grant_target:key_target",
-      );
-      expect(state.events).toEqual(
-        expect.arrayContaining([
-          "provider:delete",
-          "provider:confirmed",
-          "mapping:provider-revoked",
-        ]),
-      );
-      expect(state.events.indexOf("mapping:provider-revoked")).toBeLessThan(
-        state.events.indexOf("session:released"),
-      );
+      expect(state.events).toEqual([
+        "xact-grants:grant_caller,grant_target", "xact-key:key_target",
+        "mapping:revocation-requested", "transaction:commit",
+        "xact-grants:grant_caller,grant_target", "xact-key:key_target",
+        "provider:delete", "provider:confirmed", "mapping:provider-revoked", "transaction:commit",
+      ]);
       expect(state.database.transactionCount).toBe(2);
     },
   );
@@ -145,7 +125,7 @@ describe("system-wide private-key revocation", () => {
 
     expect(state.provider.deleteKey).not.toHaveBeenCalled();
     expect(state.provider.getKey).not.toHaveBeenCalled();
-    expect(state.events.at(-1)).toBe("session:released");
+    expect(state.transactionHeld).toBe(false);
   });
 
   it("returns an already-confirmed tombstone without repeating provider work", async () => {
@@ -160,7 +140,7 @@ describe("system-wide private-key revocation", () => {
     expect(state.provider.getKey).not.toHaveBeenCalled();
     expect(state.database.transactionCount).toBe(1);
     expect(state.events).not.toContain("mapping:revocation-requested");
-    expect(state.events.at(-1)).toBe("session:released");
+    expect(state.transactionHeld).toBe(false);
   });
 
   it("allows an unverified admin caller to revoke when verification is disabled", async () => {
@@ -172,10 +152,24 @@ describe("system-wide private-key revocation", () => {
     expect(state.database.callerEmailVerified).toBe(false);
   });
 
+  it.each(["lost delete reply", "failed local confirmation"])("resumes the same denial after %s", async (failure) => {
+    if (failure === "lost delete reply") state.provider.deleteKey.mockRejectedValueOnce(new Error(failure));
+    else state.database.failConfirmationWrite = true;
+    const revoke = () => revokeAdminApiKey("key_target", "grant_caller");
+    await expect(revoke()).resolves.toEqual({ status: "revocation_pending", retryable: true });
+    const tombstone = state.database.revocationRequestedAt;
+    expect(tombstone).toBeInstanceOf(Date);
+    expect(state.database.providerRevokedAt).toBeNull();
+    state.database.failConfirmationWrite = false;
+    await expect(revoke()).resolves.toEqual({ status: "revoked", retryable: false });
+    expect(state.provider.deleteKey.mock.calls).toEqual([["provider_target"], ["provider_target"]]);
+    expect(state.database.revocationRequestedAt).toBe(tombstone);
+  });
+
   it("preserves a pending tombstone when provider non-usability is not confirmed", async () => {
     state.database.revocationRequestedAt = new Date("2026-07-19T00:00:00.000Z");
     state.provider.getKey.mockImplementationOnce(async () => {
-      expect(state.sessionHeld).toBe(true);
+      expect(state.transactionHeld).toBe(true);
       state.events.push("provider:still-enabled");
       return { enabled: true };
     });
@@ -184,10 +178,10 @@ describe("system-wide private-key revocation", () => {
       revokeAdminApiKey("key_target", "grant_caller"),
     ).resolves.toEqual({ status: "revocation_pending", retryable: true });
 
-    expect(state.database.transactionCount).toBe(1);
+    expect(state.database.transactionCount).toBe(2);
     expect(state.events).not.toContain("mapping:revocation-requested");
     expect(state.events).not.toContain("mapping:provider-revoked");
-    expect(state.events.at(-1)).toBe("session:released");
+    expect(state.transactionHeld).toBe(false);
   });
 });
 
@@ -200,6 +194,7 @@ class FakeRevocationDatabase {
   revocationRequestedAt: Date | null = null;
   providerRevokedAt: Date | null = null;
   transactionCount = 0;
+  failConfirmationWrite = false;
 
   select(selection?: Record<string, unknown>) {
     return {
@@ -214,7 +209,8 @@ class FakeRevocationDatabase {
           returning: async () => {
             if (table !== marketApiKeys) return [];
             if (values.providerRevokedAt) {
-              expect(state.sessionHeld).toBe(true);
+              if (this.failConfirmationWrite) throw new Error("confirmation write failed");
+              expect(state.transactionHeld).toBe(true);
               this.providerRevokedAt = values.providerRevokedAt as Date;
               state.events.push("mapping:provider-revoked");
             } else {
@@ -230,13 +226,19 @@ class FakeRevocationDatabase {
 
   async transaction<T>(callback: (tx: FakeRevocationDatabase) => Promise<T>) {
     this.transactionCount += 1;
-    return callback(this);
+    state.transactionHeld = true;
+    try {
+      const result = await callback(this);
+      state.events.push("transaction:commit");
+      return result;
+    } finally {
+      state.transactionHeld = false;
+    }
   }
 
   rows(
     table: unknown,
     selection?: Record<string, unknown>,
-    joins: readonly unknown[] = [],
   ) {
     if (table === systemAdmin) {
       if (this.callerGrantStatus !== "active") return [];
@@ -250,15 +252,11 @@ class FakeRevocationDatabase {
       if (selection && "adminGrantId" in selection && !("providerId" in selection)) {
         return [{ adminGrantId: "grant_target" }];
       }
-      if (!joins.includes(marketUsageOwner)) return [];
-      if (joins.includes(systemAdmin) && this.targetGrantStatus === "absent") {
-        return [];
-      }
-      if (joins.includes(user) && (!this.keyUserId || !this.ownerUserId)) {
-        return [];
-      }
       return [{
-        providerId: "provider_target",
+        id: "key_target",
+        unkeyKeyId: "provider_target",
+        keyClass: "private",
+        adminGrantId: "grant_target",
         providerRevokedAt: this.providerRevokedAt,
         revocationRequestedAt: this.revocationRequestedAt,
         usageOwnerId: "owner_target",
@@ -272,23 +270,20 @@ class FakeRevocationDatabase {
 }
 
 class FakeRevocationQuery {
-  private readonly joins: unknown[] = [];
-
   constructor(
     private readonly database: FakeRevocationDatabase,
     private readonly table: unknown,
     private readonly selection?: Record<string, unknown>,
   ) {}
 
-  innerJoin(table: unknown) {
-    this.joins.push(table);
+  innerJoin() {
     return this;
   }
   where() { return this; }
   for() { return this; }
   async limit(count: number) {
     return this.database
-      .rows(this.table, this.selection, this.joins)
+      .rows(this.table, this.selection)
       .slice(0, count);
   }
 }

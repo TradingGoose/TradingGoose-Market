@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type RecordedSdk = {
   options: Record<string, unknown>;
   createKeyInputs: unknown[];
+  enableKeyInputs: unknown[];
   getKeyInputs: unknown[];
   deleteKeyInputs: unknown[];
   verifyKeyInputs: unknown[];
@@ -18,6 +19,7 @@ vi.mock("@unkey/api", () => ({
   Unkey: class {
     readonly keys: {
       createKey: (input: unknown) => Promise<{ data: { keyId: string; key: string } }>;
+      updateKey: (input: unknown) => Promise<void>;
       getKey: (input: unknown) => Promise<{ data: Record<string, unknown> }>;
       deleteKey: (input: unknown) => Promise<{ data: Record<string, never> }>;
       verifyKey: (input: unknown) => Promise<{
@@ -40,6 +42,7 @@ vi.mock("@unkey/api", () => ({
       const recorded: RecordedSdk = {
         options,
         createKeyInputs: [],
+        enableKeyInputs: [],
         getKeyInputs: [],
         deleteKeyInputs: [],
         verifyKeyInputs: [],
@@ -53,6 +56,7 @@ vi.mock("@unkey/api", () => ({
           recorded.createKeyInputs.push(input);
           return { data: { keyId: "key_provider", key: "tg_secret_once" } };
         },
+        updateKey: async (input) => { recorded.enableKeyInputs.push(input); },
         getKey: async (input) => {
           recorded.getKeyInputs.push(input);
           return { data: { keyId: "key_provider", enabled: true } };
@@ -123,13 +127,15 @@ describe("Market Unkey adapter contract", () => {
       correlationId: "attempt_private",
     });
 
+    await adapter.enableKey("key_provider");
+    expect(management.enableKeyInputs).toEqual([{ keyId: "key_provider", enabled: true }]);
     expect(management.createKeyInputs).toEqual([
       {
         apiId: "api_market",
         name: "Customer key",
         prefix: "tg_pub",
         permissions: ["market.public"],
-        enabled: true,
+        enabled: false,
         recoverable: false,
         meta: { marketCorrelationId: "attempt_public" },
       },
@@ -138,7 +144,7 @@ describe("Market Unkey adapter contract", () => {
         name: "Admin key",
         prefix: "tg_priv",
         permissions: ["market.private"],
-        enabled: true,
+        enabled: false,
         recoverable: false,
         meta: { marketCorrelationId: "attempt_private" },
       },
