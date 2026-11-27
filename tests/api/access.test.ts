@@ -6,6 +6,7 @@ import {
   marketApiUsageCompletion,
   marketApiUsageEvent,
   subscription,
+  user,
   userStats,
 } from "@tradinggoose/db/schema";
 
@@ -21,8 +22,15 @@ const accessState = vi.hoisted(() => ({
   recordPaymentFailure: vi.fn(),
   stripe: {},
   acquireGrantLock: vi.fn(),
+  after: vi.fn<(task: () => Promise<void>) => void>(),
+  sendEmail: vi.fn(),
 }));
 
+vi.mock("next/server", async importOriginal => ({
+  ...await importOriginal<typeof import("next/server")>(),
+  after: accessState.after,
+}));
+vi.mock("resend", () => ({ Resend: class { emails = { send: accessState.sendEmail }; } }));
 vi.mock("@/lib/environment", () => ({
   getMarketRuntimeConfig: () => accessState.config,
 }));
@@ -64,6 +72,8 @@ beforeEach(() => {
   accessState.thresholdBilling.mockReset().mockResolvedValue(undefined);
   accessState.recordPaymentFailure.mockReset().mockResolvedValue(undefined);
   accessState.acquireGrantLock.mockReset();
+  accessState.after.mockReset();
+  accessState.sendEmail.mockReset();
 });
 
 describe("exclusive Market API actors", () => {
@@ -521,6 +531,48 @@ describe("exclusive Market API actors", () => {
     expect(handler).toHaveBeenCalledTimes(invalid.status === 403 ? 0 : 1);
   });
 
+  it.each([true, false])("keeps threshold email delivery in the post-response callback (paid %s)", async (paid) => {
+    accessState.config = { ...accessState.config,
+      billing: { enabled: true, usdPer1000Reads: "20000", requestNanoUsd: 20_000_000_000n },
+      appUrl: "https://market.example.com", betterAuth: { secret: "test" }, resend: { apiKey: "test", fromEmail: "sender@example.com" },
+    };
+    accessState.provider.verifyKey = vi.fn().mockResolvedValue({ valid: true, code: "VALID", keyId: "provider_public" });
+    accessState.database = publicAdmissionDatabase({ emailVerified: true, ownerUserId: "user_1", paid });
+    let finishDelivery!: () => void;
+    const delivery = new Promise<void>(resolve => { finishDelivery = resolve; });
+    accessState.sendEmail.mockImplementation(async () => { await delivery; return { error: null }; });
+    const received = vi.fn((response: Response) => response);
+    const handler = vi.fn(async () => Response.json({ ok: true }));
+    const request = handleKeyedMarketRoute(
+      new Request("https://market.example.com/api/search/cities?version=v1", { headers: { "x-api-key": "tg_public" } }),
+      resolveKeyedMarketRoute("/api/search/cities")!,
+      handler,
+    ).then(received);
+    try {
+      await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
+      const response = await request;
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(handler).toHaveBeenCalledOnce();
+      expect(accessState.thresholdBilling).toHaveBeenCalledTimes(paid ? 1 : 0);
+      expect(accessState.after).toHaveBeenCalledOnce();
+      expect(accessState.sendEmail).not.toHaveBeenCalled();
+
+      const [deliver] = accessState.after.mock.calls[0];
+      const finished = vi.fn();
+      const lifetime = deliver().then(finished);
+      await vi.waitFor(() => expect(accessState.sendEmail).toHaveBeenCalledOnce());
+      expect(accessState.sendEmail.mock.calls[0][0].text).toContain("80% of this month's budget");
+      expect(finished).not.toHaveBeenCalled();
+      finishDelivery();
+      await lifetime;
+      expect(finished).toHaveBeenCalledOnce();
+    } finally {
+      finishDelivery();
+      await request;
+    }
+  });
+
   it("preserves the committed handler response when threshold billing fails and retries later", async () => {
     accessState.config = {
       billing: { enabled: true, usdPer1000Reads: "1", requestNanoUsd: 1_000_000n },
@@ -808,6 +860,7 @@ function privateAdmissionDatabase(input: { emailVerified?: boolean; grantStatus?
 function publicAdmissionDatabase(input: {
   emailVerified: boolean;
   ownerUserId: string;
+  paid?: boolean;
   spendLimitUsd?: string;
   spendWindowDays?: number;
   now?: Date;
@@ -845,17 +898,17 @@ function publicAdmissionDatabase(input: {
               return [key];
             }
             if (table === subscription) {
+              const binding = input.paid === false
+                ? { status: null, stripeCustomerId: null, stripeSubscriptionId: null }
+                : { status: "active", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_provider" };
               return [{
-                id: "sub_local",
-                referenceType: "user",
-                referenceId: "user_1",
-                plan: "payg",
-                status: "active",
-                stripeCustomerId: "cus_1",
-                stripeSubscriptionId: "sub_provider",
-                billingBlocked: input.billingBlocked?.value ?? false,
+                subscription: { id: "sub_default_user_1", referenceType: "user", referenceId: "user_1", plan: "payg", ...binding },
+                customerId: "cus_1",
+                stats: { usageOwnerId: "owner_1", currentPeriodCost: "0", customUsageLimit: "25", grantedOnboardingAllowanceUsd: "25",
+                  billingBlocked: input.billingBlocked?.value ?? false },
               }];
             }
+            if (table === user) return [{ email: "reader@example.com", name: "Reader", enabled: true, preferences: {} }];
             if (table === userStats) {
               return [{
                 id: "stats_1",

@@ -4,18 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type BillingFixture = {
-  billingEnabled: boolean;
-  plan: "payg";
-  rateUsdPer1000Reads: string;
-  currentPeriodRequestQuantity: number;
-  currentPeriodCostUsd: string;
-  status: "active";
-  cancelAtPeriodEnd: boolean;
-  customerRecoveryState: "ready";
-  activationAvailable: boolean;
-  portalAvailable: boolean;
-};
+import { baseSummary, queryClient, wrapper } from "../helpers/billing-ui";
+import { subscriptionKeys } from "@/hooks/queries/subscription";
+import type { BillingSummary } from "@/lib/account/contracts";
 
 const shell = vi.hoisted(() => ({
   pathname: "/account/activity",
@@ -23,7 +14,7 @@ const shell = vi.hoisted(() => ({
   signOut: vi.fn(),
   marketApiRequest: vi.fn(),
   resource: {
-    data: null as BillingFixture | null,
+    data: null as BillingSummary | null,
     isLoading: false,
     error: null as string | null,
   },
@@ -41,13 +32,19 @@ vi.mock("@/lib/auth/client", () => ({
 }));
 vi.mock("@/hooks/use-market-resource", () => ({
   useMarketResource: () => shell.resource,
-  marketApiRequest: shell.marketApiRequest,
+  marketApiRequest: (url: string, options?: RequestInit) => {
+    if (url !== "/api/account/billing") return shell.marketApiRequest(url, options);
+    if (shell.resource.error) return Promise.reject(new Error(shell.resource.error));
+    if (shell.resource.isLoading) return new Promise(() => {});
+    return Promise.resolve(shell.resource.data);
+  },
 }));
 
 import { AppSidebar } from "../../components/app-sidebar";
 import { SidebarMenuSkeleton, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar";
 
-const billing: BillingFixture = {
+const billing: BillingSummary = {
+  ...baseSummary,
   billingEnabled: true,
   plan: "payg",
   rateUsdPer1000Reads: "1",
@@ -76,11 +73,14 @@ function setViewport(width: number) {
 }
 
 function renderSidebar({ defaultOpen = true, withTrigger = false, onOpenSettings = vi.fn() } = {}) {
+  const client = queryClient();
+  if (shell.resource.data) client.setQueryData(subscriptionKeys.user(), shell.resource.data);
   return render(
     <SidebarProvider defaultOpen={defaultOpen}>
       {withTrigger ? <SidebarTrigger /> : null}
       <AppSidebar user={user} mode="account" onOpenSettings={onOpenSettings} />
     </SidebarProvider>,
+    { wrapper: wrapper(client) },
   );
 }
 
@@ -142,8 +142,8 @@ describe("Studio-shaped Market shell", () => {
     usagePreview.focus();
     expect(document.activeElement).toBe(usagePreview);
     await interaction.keyboard("{Enter}");
-
-    expect(openSettings).toHaveBeenCalledWith("subscription");
+    await interaction.keyboard(" ");
+    expect(openSettings.mock.calls).toEqual([["subscription"], ["subscription"]]);
   });
 
   it("keeps the complete profile dropdown in the footer and constrains it to the viewport", async () => {
@@ -203,6 +203,7 @@ describe("Studio-shaped Market shell", () => {
       "/api/account/billing/portal",
       { method: "POST", body: "{}" },
     ));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Failed to open billing portal");
     expect(screen.getByRole("menuitem", { name: "Manage Billing" }).hasAttribute("data-disabled")).toBe(false);
   });
 
@@ -298,6 +299,7 @@ describe("Studio-shaped Market shell", () => {
       <SidebarProvider defaultOpen={false} defaultWidth="20rem">
         <AppSidebar user={user} mode="admin" onOpenSettings={vi.fn()} />
       </SidebarProvider>,
+      { wrapper: wrapper(queryClient()) },
     );
 
     const data = within(screen.getByRole("group", { name: "Data" }));

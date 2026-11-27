@@ -25,7 +25,9 @@ vi.mock("@/lib/auth/protocol", () => ({
 }));
 
 vi.mock("@/lib/market-api/core/manifest", () => ({
-  getMarketRouteDescriptorByTemplate: (template: string) => template === "/api/account/api-keys"
+  getMarketRouteDescriptorByTemplate: (template: string) => template === "/api/account/billing/usage-limit" ? { methods: ["GET", "PUT"] }
+    : template === "/api/account/billing/notifications" ? { methods: ["GET", "PATCH"] }
+    : template === "/api/account/api-keys"
     ? { methods: ["GET", "POST"], access: "customer-session" }
     : template === "/api/admin/api-keys"
       ? { methods: ["GET", "POST"], access: "system-admin-session" }
@@ -36,7 +38,7 @@ vi.mock("@tradinggoose/db", () => ({
   schema: { marketHours: { id: "id" } },
 }));
 
-vi.mock("drizzle-orm", () => ({ eq: vi.fn(() => true) }));
+vi.mock("drizzle-orm", async original => ({ ...await original<typeof import("drizzle-orm")>(), eq: vi.fn(() => true) }));
 
 vi.mock("@/lib/auth/server", () => ({
   auth: { api: { getSession: state.getSession }, handler: state.authHandler },
@@ -69,6 +71,8 @@ import {
   apiRequireCustomerSession,
   apiRequireSystemAdmin,
 } from "../../lib/auth/session";
+import { PUT as updateLimit } from "../../app/api/account/billing/usage-limit/route";
+import { PATCH as updateNotifications } from "../../app/api/account/billing/notifications/route";
 import { POST as createCustomerKey } from "../../app/api/account/api-keys/route";
 import { POST as createAdminKey } from "../../app/api/admin/api-keys/route";
 import { DELETE as deleteMarketHour } from "../../app/api/market-hours/[id]/route";
@@ -163,6 +167,16 @@ describe("same-origin browser mutation guard", () => {
     expect(result.user).toEqual(user);
     expect(state.getSession).toHaveBeenCalledOnce();
     expect(state.ensureCustomer).toHaveBeenCalledWith(user.id);
+  });
+
+  it.each([["PUT", updateLimit], ["PATCH", updateNotifications]] as const)("guards billing %s before reading JSON", async (method, handler) => {
+    for (const [origin, verified, expected] of [["https://other.test", true, 403], ["https://market.example.com", false, 401]] as const) {
+      state.getSession.mockResolvedValue({ user: { ...user, emailVerified: verified } });
+      const request = new Request("https://market.example.com/api/account/billing", { method, headers: { origin }, body: "invalid" });
+      const parse = vi.spyOn(request, "json");
+      expect((await handler(request)).status).toBe(expected);
+      expect(parse).not.toHaveBeenCalled();
+    }
   });
 
   it("protects a customer route before its body and provider work", async () => {

@@ -18,7 +18,10 @@ describe("Market standalone authored schema", () => {
     expect("billingTierId" in schema.subscription).toBe(false);
     expect(schema.userStats.usageOwnerId).toBeDefined();
     expect(schema.userStats.billingReferenceId).toBeDefined();
-    expect("customUsageLimit" in schema.userStats).toBe(false);
+    expect(schema.userStats.customUsageLimit).toBeDefined();
+    expect(schema.userStats.grantedOnboardingAllowanceUsd.default).toBe("0");
+    expect(schema.userStats.billingUsageNotificationsEnabled.default).toBe(true);
+    expect(schema.userStats.emailPreferences.default).toEqual({});
     expect(schema.userStats.billingBlocked.notNull).toBe(true);
     expect(schema.userStats.billingBlocked.default).toBe(false);
 
@@ -55,6 +58,7 @@ describe("Market standalone authored schema", () => {
     );
     expect(eventChecks).toContain("market_api_usage_events_resource_check");
     expect(eventChecks).toContain("market_api_usage_events_billable_check");
+    expect(eventChecks).toContain("market_api_usage_events_funding_snapshot_check");
     expect(eventChecks).toContain("market_api_usage_events_attribution_check");
   });
 });

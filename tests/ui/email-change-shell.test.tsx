@@ -3,6 +3,8 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { billingFixture, billingPath, wrapper } from "../helpers/billing-ui";
+
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/account/api-keys" }));
@@ -49,6 +51,7 @@ const originalUser = {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
@@ -74,7 +77,7 @@ describe("email-change account-shell consumption", () => {
       error: null,
     });
 
-    render(<AppShell mode="account" user={originalUser}>content</AppShell>);
+    render(<AppShell mode="account" user={originalUser}>content</AppShell>, { wrapper: wrapper(billingFixture().client) });
 
     expect(window.location.pathname + window.location.search + window.location.hash).toBe(
       "/account/api-keys?range=30d&key=key_1#usage",
@@ -105,7 +108,7 @@ describe("email-change account-shell consumption", () => {
         error: null,
       });
 
-    render(<AppShell mode="account" user={originalUser}>content</AppShell>);
+    render(<AppShell mode="account" user={originalUser}>content</AppShell>, { wrapper: wrapper(billingFixture().client) });
 
     await waitFor(() => {
       expect(screen.getByTestId("settings").textContent).toContain("refresh-error");
@@ -124,6 +127,21 @@ describe("email-change account-shell consumption", () => {
     expect(getSession).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["updated", "usage", "upgrade"])("opens billing=%s, refreshes financial state and preserves unrelated URL data", async action => {
+    const f = billingFixture();
+    window.history.replaceState({ keep: 1 }, "", "/account/api-keys?range=7d&billing=" + action + "#chart");
+    render(<AppShell mode="account" user={originalUser}>content</AppShell>, { wrapper: wrapper(f.client) });
+    await waitFor(() => expect(screen.getByTestId("settings").textContent).toContain("true|subscription"));
+    expect(f.count("GET", billingPath)).toBe(1);
+    expect(window.location.search + window.location.hash).toBe("?range=7d#chart");
+    expect(window.history.state).toEqual({ keep: 1 });
+  });
+  it("resolves a disabled billing link to Profile", async () => {
+    const f = billingFixture({ billingEnabled: false });
+    window.history.replaceState({}, "", "/account/api-keys?billing=updated");
+    render(<AppShell mode="account" user={originalUser}>content</AppShell>, { wrapper: wrapper(f.client) });
+    await waitFor(() => expect(screen.getByTestId("settings").textContent).toContain("true|profile"));
+  });
   it("shows a provider error without refreshing the session", async () => {
     window.history.replaceState(
       {},
@@ -131,7 +149,7 @@ describe("email-change account-shell consumption", () => {
       "/account/activity?range=7d&emailChange=verified&error=token_expired#chart",
     );
 
-    render(<AppShell mode="account" user={originalUser}>content</AppShell>);
+    render(<AppShell mode="account" user={originalUser}>content</AppShell>, { wrapper: wrapper(billingFixture().client) });
 
     await waitFor(() => {
       expect(screen.getByTestId("settings").textContent).toContain(

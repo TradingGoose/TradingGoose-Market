@@ -23,6 +23,7 @@ const APPLICATION_ENVIRONMENT = {
   BETTER_AUTH_SECRET: "e68ad965b50e6c301b5ae37a80b8196934237ae718548b83c098e4609786808e",
   REGISTRATION_MODE: "open",
   BILLING_ENABLED: "false",
+  ONBOARDING_ALLOWANCE_USD: "25",
   PAYG_USD_PER_1000_READS: "1.00",
   RESEND_API_KEY: "re_fresh_database_test",
   EMAIL_VERIFICATION_ENABLED: "true",
@@ -135,9 +136,9 @@ function installApplicationEnvironment(databaseUrl: string): EnvironmentSnapshot
   return snapshot;
 }
 
-async function runStandardMigration(databaseUrl: string): Promise<void> {
+async function prepareSchema(databaseUrl: string, command: "db:migrate" | "db:push"): Promise<void> {
   await new Promise<void>((resolveMigration, rejectMigration) => {
-    const child = spawn("bun", ["run", "db:migrate"], {
+    const child = spawn("bun", ["run", command, ...(command === "db:push" ? ["--force"] : [])], {
       cwd: PROJECT_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: ["ignore", "pipe", "pipe"],
@@ -155,7 +156,7 @@ async function runStandardMigration(databaseUrl: string): Promise<void> {
       else {
         rejectMigration(
           new Error(
-            `bun run db:migrate failed with ${signal ? `signal ${signal}` : `exit code ${code}`}.\n${output}`,
+            `bun run ${command} failed with ${signal ? `signal ${signal}` : `exit code ${code}`}.\n${output}`,
           ),
         );
       }
@@ -587,7 +588,57 @@ async function assertRealSignupCreatesCanonicalCustomer(
   expect(bridge.subscription_status).toBeNull();
   expect(bridge.stripe_customer_id).toBeNull();
   expect(bridge.stripe_subscription_id).toBeNull();
+  const [seed] = await targetSql`select granted_onboarding_allowance_usd, custom_usage_limit,
+      billing_usage_notifications_enabled, email_preferences from user_stats where user_id = ${customer.id}`;
+  expect(seed).toEqual({ granted_onboarding_allowance_usd: "25", custom_usage_limit: "25",
+    billing_usage_notifications_enabled: true, email_preferences: {} });
+  for (const invalid of ["NaN", "Infinity", "-1", "0.0000000001"]) {
+    await expect(targetSql`update user_stats set custom_usage_limit = ${invalid} where user_id = ${customer.id}`)
+      .rejects.toMatchObject({ code: "23514", constraint_name: "user_stats_allowance_check" });
+    await expect(targetSql`update user_stats set granted_onboarding_allowance_usd = ${invalid} where user_id = ${customer.id}`)
+      .rejects.toMatchObject({ code: "23514", constraint_name: "user_stats_allowance_check" });
+  }
+  await assertFundingConstraint(targetSql, bridge.owner_id, customer.id);
   return applicationClient;
+}
+
+async function assertFundingConstraint(sql: DirectSql, ownerId: string, userId: string) {
+  const constraints = await sql`select conname from pg_constraint where conrelid = 'market_api_usage_events'::regclass`;
+  expect(constraints.map(row => row.conname)).toEqual(expect.arrayContaining([
+    "market_api_usage_events_billable_check", "market_api_usage_events_funding_snapshot_check",
+  ]));
+  const [pub, priv] = await sql`
+    insert into market_api_keys (usage_owner_id, user_id, unkey_key_id, key_class, name, display_value,
+        spend_limit_revision, spend_limit_updated_at, admin_grant_id)
+    values (${ownerId}, ${userId}, 'check_public', 'public', 'Test', 'test', 1, now(), null),
+           (${ownerId}, ${userId}, 'check_private', 'private', 'Test', 'test', null, null, 'grant_check')
+    returning id`;
+  const insert = (funding: string | null, mode: string, quantity: number, isPrivate = false,
+    cost = quantity ? "0.001" : null) => sql`
+      insert into market_api_usage_events (usage_owner_id, market_api_key_id, key_class, route_id,
+        category, resource_id, method, api_version, billing_mode, billable_quantity, rate_usd_per_1000_reads,
+        billable_cost_usd, stripe_subscription_id)
+      values (${ownerId}, ${isPrivate ? priv.id : pub.id}, ${isPrivate ? "private" : "public"}, 'search', 'search',
+        'market_instrument', ${isPrivate ? "POST" : "GET"}, 'v1', ${mode}, ${quantity}, ${quantity ? 1 : null}, ${cost}, ${funding})`;
+  try {
+    for (const invalid of [
+      insert("sub_test", "disabled", 0), insert("sub_test", "enabled", 0, true),
+      insert("sub_test", "enabled", 0), insert("", "enabled", 1), insert("   ", "enabled", 1),
+    ]) {
+      await expect(invalid).rejects.toMatchObject({ code: "23514", constraint_name: "market_api_usage_events_funding_snapshot_check" });
+    }
+    await expect(insert(null, "enabled", 1, false, "0.5")).rejects.toMatchObject({
+      code: "23514", constraint_name: "market_api_usage_events_billable_check",
+    });
+    await insert(null, "enabled", 1);
+    await insert("sub_test", "enabled", 1);
+    await insert(null, "disabled", 0);
+    await insert(null, "enabled", 0, true);
+    expect(await sql`select id from market_api_usage_events where market_api_key_id in (${pub.id}, ${priv.id})`).toHaveLength(4);
+  } finally {
+    await sql`delete from market_api_usage_events where market_api_key_id in (${pub.id}, ${priv.id})`;
+    await sql`delete from market_api_keys where id in (${pub.id}, ${priv.id})`;
+  }
 }
 
 describe.sequential("fresh database migration", () => {
@@ -621,13 +672,14 @@ describe.sequential("fresh database migration", () => {
 
         try {
           await assertInitiallyEmpty(targetSql);
-          await runStandardMigration(targetUrl);
+          await prepareSchema(targetUrl, "db:migrate");
           const snapshot = JSON.parse(await readFile(SNAPSHOT_PATH, "utf8")) as DrizzleSnapshot;
           await assertCatalogMatchesGeneratedSnapshot(targetSql, snapshot);
+          await prepareSchema(targetUrl, "db:push");
 
           environmentSnapshot = installApplicationEnvironment(targetUrl);
           applicationClient = await assertRealSignupCreatesCanonicalCustomer(targetSql, databaseName);
-          const { assertCustomerRowLockOrder } = await import("../helpers/customer-row-locks");
+          const { assertCustomerRowLockOrder, assertBillingDateDoesNotBlockAdmission } = await import("../helpers/customer-row-locks");
           await assertCustomerRowLockOrder(targetSql, applicationClient);
           const { assertPrivateRankOrdering } = await import("../helpers/private-rank-order");
           await assertPrivateRankOrdering(targetSql);
@@ -641,6 +693,7 @@ describe.sequential("fresh database migration", () => {
           await assertAuthChallengeSecurity(targetSql);
           const { assertUsageBucketGaps } = await import("../helpers/usage-bucket-gaps");
           await assertUsageBucketGaps(targetSql);
+          await assertBillingDateDoesNotBlockAdmission(targetSql);
         } finally {
           try {
             if (applicationClient) await applicationClient.end({ timeout: 5 });

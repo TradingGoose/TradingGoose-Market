@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
+  stats: { grantedOnboardingAllowanceUsd: "25", customUsageLimit: "25", currentPeriodCost: "7", currentPeriodRequestQuantity: "7" },
   local: null as Record<string, unknown> | null,
   userCustomerId: "cus_market",
   paymentMethodId: "pm_market" as string | null,
@@ -63,6 +64,7 @@ import {
 } from "../../lib/billing/subscription";
 
 beforeEach(() => {
+  Object.assign(state.stats, { grantedOnboardingAllowanceUsd: "25", currentPeriodCost: "7", currentPeriodRequestQuantity: "7" });
   state.local = localSubscription();
   state.userCustomerId = "cus_market";
   state.paymentMethodId = "pm_market";
@@ -126,6 +128,7 @@ describe("PAYG activation lifecycle", () => {
         metadata: { retained: "value" },
       }),
     );
+    expect(state.stats).toMatchObject({ grantedOnboardingAllowanceUsd: "18", currentPeriodCost: "0", lastPeriodCost: "7" });
     expect(state.create).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: "cus_market",
@@ -598,10 +601,11 @@ function transactionFixture() {
   const lockedRows = (joined: boolean) => {
     if (!state.local) return [];
     return joined
-      ? [{ subscription: state.local, stripeCustomerId: state.userCustomerId }]
+      ? [{ subscription: state.local, stats: state.stats, stripeCustomerId: state.userCustomerId }]
       : [state.local];
   };
   const selectionChain = (joined: boolean) => ({
+    innerJoin: () => selectionChain(true),
     where: () => ({
       for: () => ({ limit: async () => lockedRows(joined) }),
     }),
@@ -618,6 +622,7 @@ function transactionFixture() {
     update: () => ({
       set: (values: Record<string, unknown>) => ({
         where: () => ({
+          then(resolve: () => void) { Object.assign(state.stats, values); resolve(); },
           returning: async (selection?: unknown) => {
             if (!state.local) return [];
             Object.assign(state.local, values);

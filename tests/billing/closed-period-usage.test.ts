@@ -11,7 +11,9 @@ describe("closed PAYG accumulator slice", () => {
       // Settled old subscription and new activation share Stripe's whole second.
       { admittedAt: new Date("2026-08-01T00:00:00.100Z"), cents: 100n },
       { admittedAt: new Date("2026-08-01T00:00:00.800Z"), cents: 100n },
-      { admittedAt: end, cents: 1n },
+      { admittedAt: end, cents: 1n, subscriptionId: "sub_new" },
+      { admittedAt: end, cents: 90n, subscriptionId: "sub_old" },
+      { admittedAt: end, cents: 100n, subscriptionId: null },
     ];
     const tx = {
       select: () => ({
@@ -21,8 +23,9 @@ describe("closed PAYG accumulator slice", () => {
             // Only unswept next-period admissions are read. Old settled events
             // before this boundary must never be replayed into the accumulator.
             expect(query.sql).toContain('"admitted_at" >=');
-            expect(query.params).toEqual(["owner_1", 1, end.toISOString()]);
-            const selected = history.filter(event => event.admittedAt >= new Date(query.params[2] as string));
+            expect(query.params).toEqual(["owner_1", 1, "sub_new", end.toISOString()]);
+            expect(query.sql).toContain('"stripe_subscription_id" =');
+            const selected = history.filter(event => event.subscriptionId === query.params[2] && event.admittedAt >= new Date(query.params[3] as string));
             return [{ requestQuantity: String(selected.length),
               costUsd: `0.${selected.reduce((sum, event) => sum + event.cents, 0n).toString().padStart(2, "0")}` }];
           },
@@ -31,7 +34,7 @@ describe("closed PAYG accumulator slice", () => {
     } as unknown as MarketTransaction;
     const closed = await getClosedPeriodUsage(tx, {
       usageOwnerId: "owner_1", currentPeriodRequestQuantity: "2", currentPeriodCost: "1.01",
-    }, end);
+    }, end, "sub_new");
     expect(closed).toEqual({ requestQuantity: "1", costUsd: "1" });
   });
 
@@ -39,6 +42,6 @@ describe("closed PAYG accumulator slice", () => {
     const tx = { select: () => ({ from: () => ({ where: async () => [{ requestQuantity: "2", costUsd: "2" }] }) }) } as unknown as MarketTransaction;
     await expect(getClosedPeriodUsage(tx, {
       usageOwnerId: "owner_1", currentPeriodRequestQuantity: "1", currentPeriodCost: "1",
-    }, new Date("2026-09-01T00:00:00.000Z"))).rejects.toThrow("exceeds its accumulator");
+    }, new Date("2026-09-01T00:00:00.000Z"), "sub_new")).rejects.toThrow("exceeds its accumulator");
   });
 });

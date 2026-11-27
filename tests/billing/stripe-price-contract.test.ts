@@ -86,7 +86,7 @@ describe("Market PAYG Stripe Price boundary contract", () => {
   it("dispatches failed invoices through the canonical usage payment owner", async () => {
     const invoice = { id: "in_declined", status: "open", metadata: { type: "overage_threshold_billing" } };
     await dispatchMarketStripeEvent({ type: "invoice.payment_failed", data: { object: invoice } } as never);
-    expect(state.projectUsagePayment).toHaveBeenCalledWith(expect.anything(), invoice);
+    expect(state.projectUsagePayment).toHaveBeenCalledWith(expect.anything(), invoice, true);
   });
 
   it("persists a definitive cycle decline outside its failed owner transaction and rethrows for retry", async () => {

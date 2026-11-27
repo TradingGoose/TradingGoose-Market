@@ -74,6 +74,7 @@ describe("release workflow contract", () => {
       "bun install --frozen-lockfile",
       "bun run db:build",
       "bun run db:migrate",
+      "bun run db:push",
       "bun run test:release",
     ]);
     expect(occurrences(validation, "bun run db:migrate")).toBe(1);
@@ -81,7 +82,7 @@ describe("release workflow contract", () => {
     expect(validation).not.toMatch(/- run: bun run test$/mu);
     expect(validation).not.toContain("tests/db/");
     expect(validation).not.toContain("vitest");
-    expect(occurrences(validation, "postgres://market:market@127.0.0.1:5432/market_release")).toBe(2);
+    expect(occurrences(validation, "postgres://market:market@127.0.0.1:5432/market_release")).toBe(3);
   });
 
   it("supplies only the shared release base and gates publication on both jobs", () => {
@@ -157,6 +158,7 @@ describe("release workflow contract", () => {
 
   it("pins the canonical package commands", () => {
     expect(packageJson.scripts.test).toBe("bun run db:build && vitest run");
+    expect(packageJson.scripts["db:push"]).toBe("bun run --cwd ./packages/db db:push");
     expect(packageJson.scripts["db:migrate"]).toBe("bun run --cwd ./packages/db db:migrate");
     expect(packageJson.scripts["test:release"]).toBe(
       "bun run tests/release/production-server-smoke.ts",
@@ -171,6 +173,7 @@ describe("release workflow contract", () => {
     expect(databasePackage.scripts.build).toBe(
       "rm -rf ./dist && tsc -p tsconfig.build.json",
     );
+    expect(databasePackage.scripts["db:push"]).toBe("bunx drizzle-kit push --config=./drizzle.config.ts");
     expect(databasePackage.scripts["db:migrate"]).toBe(
       "bunx drizzle-kit migrate --config=./drizzle.config.ts",
     );
@@ -223,7 +226,7 @@ describe("release workflow contract", () => {
     expect(harness).toContain('mode.registrationMode === "open" ? 200 : 404');
     expect(harness).toContain("await smokeRetainedOwners(target, mode)");
     expect(harness).toContain("async function smokeRegistrationPolicy");
-    expect(harness).toContain("await smokeRegistrationPolicy(target, mode)");
+    expect(harness).toContain("await smokeRegistrationPolicy(target, environment, mode)");
     expect(harness).toContain('mode.registrationMode === "open" && mode.billingEnabled');
     expect(harness).toContain('body: JSON.stringify(RELEASE_SIGNUP)');
     expect(harness).toContain('origin: target.publicOrigin.origin');
@@ -245,13 +248,16 @@ describe("release workflow contract", () => {
     expect(harness).toContain("if (!startupRecoveryOnly) await runMode(target, environment, mode)");
     expect(harness).toMatch(/if \(mode\.registrationMode === "close" && !mode\.billingEnabled\) \{\s+await smokeStartupRecovery\(target, environment\)/u);
     expect(harness).not.toContain("db:migrate");
+    expect(harness).not.toContain("db:push");
+    expect(harness).toContain('ONBOARDING_ALLOWANCE_USD: "25"');
+    expect(harness).toContain("join user_stats u on u.usage_owner_id = o.id");
   });
 
   it("keeps fresh migration validation on the exact root command and generated database", () => {
     expect(freshDatabaseTest).toContain('const REQUIRED_CONTROL_DATABASE = "market_quality"');
     expect(freshDatabaseTest).toContain('const GENERATED_DATABASE_PREFIX = "market_fresh_"');
-    expect(freshDatabaseTest).toContain('spawn("bun", ["run", "db:migrate"]');
-    expect(occurrences(freshDatabaseTest, 'spawn("bun", ["run", "db:migrate"]')).toBe(1);
+    expect(freshDatabaseTest).toContain('await prepareSchema(targetUrl, "db:migrate")');
+    expect(occurrences(freshDatabaseTest, 'await prepareSchema(targetUrl, "db:migrate")')).toBe(1);
     expect(freshDatabaseTest).toContain("vi.resetModules()");
     expect(freshDatabaseTest).toContain('await import("../../lib/db/runtime")');
     expect(freshDatabaseTest).toContain("databaseRuntime.requireDatabase()");
@@ -272,6 +278,7 @@ describe("release workflow contract", () => {
     }
     for (const required of [
       "bun run db:migrate",
+      "bun run db:push",
       "bun run test:release",
       "RESEND_API_KEY",
       "RESEND_FROM_EMAIL",
