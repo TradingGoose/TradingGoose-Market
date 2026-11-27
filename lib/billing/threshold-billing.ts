@@ -1,3 +1,4 @@
+import { isFreeBinding } from "./user-stats";
 import { subscription, userStats } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq } from "drizzle-orm";
@@ -309,14 +310,16 @@ export async function checkAndBillMarketThreshold(
     .for("update")
     .limit(1);
   const localSubscription = subscriptions[0];
+  if (localSubscription && isFreeBinding(localSubscription)) return;
   if (
     !localSubscription ||
-    localSubscription.status !== "active" ||
     !localSubscription.stripeCustomerId ||
     !localSubscription.stripeSubscriptionId
   ) {
     throw new Error("Active PAYG binding disappeared during threshold billing");
   }
+
+  if (localSubscription.status !== "active") return;
 
   const statsRows = await tx
     .select()

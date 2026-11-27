@@ -2,6 +2,7 @@ import { subscription, userStats } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
+import { sendMarketPaymentFailureEmail } from "../notifications";
 import { acquireBillingSubjectLock } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
 import { getPaygSubscriptionByStripeId } from "../subscription";
@@ -24,6 +25,7 @@ import {
 export async function handleMarketUsageInvoicePayment(
   stripe: Stripe,
   invoice: Stripe.Invoice,
+  signedFailure = false,
 ) {
   if (!isUsageInvoiceType(invoice.metadata?.type)) return;
   const stripeSubscriptionId = invoice.metadata?.subscriptionId;
@@ -36,10 +38,15 @@ export async function handleMarketUsageInvoicePayment(
   if (!invoiceCustomerId || invoiceCustomerId !== current.stripeCustomerId) {
     throw new Error("Current PAYG usage invoice Customer does not match its binding");
   }
-  const canceled = await requireDatabase().transaction(async tx => {
+  const projection = await requireDatabase().transaction(async tx => {
     await acquireBillingSubjectLock(tx, current.referenceId);
-    return projectMarketUsageInvoicePayment(tx, stripe, invoice, current.referenceId);
+    return projectMarketUsageInvoicePayment(tx, stripe, invoice, current.referenceId, signedFailure);
   });
+  if (!projection) return;
+  const { fresh, canceled } = projection;
+  if (signedFailure && fresh.status !== "paid" && (fresh.attempt_count ?? 1) === 1) {
+    await sendMarketPaymentFailureEmail(stripe, current.referenceId, fresh);
+  }
   if (canceled) await handleMarketSubscriptionDeleted(stripe, canceled);
 }
 
@@ -48,6 +55,7 @@ export async function projectMarketUsageInvoicePayment(
   stripe: Stripe,
   invoice: Stripe.Invoice,
   userId: string,
+  includePaymentDetails = false,
 ) {
   const stripeSubscriptionId = invoice.metadata?.subscriptionId;
   if (!stripeSubscriptionId) return;
@@ -56,7 +64,7 @@ export async function projectMarketUsageInvoicePayment(
   if (!local || local.referenceId !== userId || local.stripeSubscriptionId !== stripeSubscriptionId) return;
   // Delivery order is not payment truth. In particular a delayed failure
   // must not reinstate a block after Portal payment has already succeeded.
-  const fresh = await stripe.invoices.retrieve(invoice.id);
+  const fresh = await stripe.invoices.retrieve(invoice.id, includePaymentDetails ? { expand: ["payments"] } : {});
   const customerId = typeof fresh.customer === "string" ? fresh.customer : fresh.customer?.id;
   if (fresh.id !== invoice.id || customerId !== local.stripeCustomerId ||
     fresh.metadata?.subscriptionId !== local.stripeSubscriptionId ||
@@ -68,7 +76,7 @@ export async function projectMarketUsageInvoicePayment(
   // Portal payment can outlive retries of the original deletion event. The
   // existing final-settlement owner rechecks and clears that retained binding.
   if (fresh.status === "paid" && local.status === "canceled") {
-    return stripe.subscriptions.retrieve(stripeSubscriptionId);
+    return { fresh, canceled: await stripe.subscriptions.retrieve(stripeSubscriptionId) };
   }
   let blocked = fresh.status !== "paid";
   if (!blocked) {
@@ -85,6 +93,7 @@ export async function projectMarketUsageInvoicePayment(
   const stats = await resolveRetainedUserStatsForSubscription(local, tx);
   await tx.update(userStats).set({ billingBlocked: blocked, updatedAt: new Date() })
     .where(eq(userStats.id, stats.id));
+  return { fresh, canceled: null };
 }
 
 export async function handleMarketCycleInvoiceFinalized(

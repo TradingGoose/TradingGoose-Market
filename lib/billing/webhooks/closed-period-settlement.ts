@@ -21,7 +21,7 @@ export async function settleClosedMarketUsagePeriods(
   let periodEnd = local.periodEnd!;
   const deletedSubscriptionSnapshot = provider.status === "canceled" ? provider : undefined;
   for (const period of periods) {
-    const closedUsage = await getClosedPeriodUsage(tx, stats, new Date(period.end));
+    const closedUsage = await getClosedPeriodUsage(tx, stats, new Date(period.end), provider.id);
     const currentNano = decimalUsdToNanoUsd(closedUsage.costUsd);
     const accumulatorNano = decimalUsdToNanoUsd(stats.currentPeriodCost);
     const nextQuantity = BigInt(stats.currentPeriodRequestQuantity) - BigInt(closedUsage.requestQuantity);

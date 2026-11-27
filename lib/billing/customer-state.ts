@@ -6,6 +6,7 @@ import {
 } from "@tradinggoose/db";
 import { withBillingSubjectLock } from "@/lib/db/locks";
 import { requireDatabase } from "@/lib/db/runtime";
+import { getMarketRuntimeConfig } from "@/lib/environment";
 import type Stripe from "stripe";
 import { getOptionalStripeClient } from "@/lib/billing/stripe-client";
 import { getPaygActivationAttemptId, withoutPaygActivationAttemptId } from "./subscription";
@@ -51,12 +52,16 @@ export async function ensureMarketCustomerState(
         throw new Error("Market customer usage-owner initialization failed.");
       }
 
+      const grant = getMarketRuntimeConfig().billing.onboardingAllowanceUsd;
       await transaction
         .insert(schema.userStats)
         .values({
           userId,
           usageOwnerId: usageOwner.id,
-          billingReferenceId: userId
+          billingReferenceId: userId,
+          grantedOnboardingAllowanceUsd: grant,
+          customUsageLimit: grant,
+          customUsageLimitUpdatedAt: new Date()
         })
         .onConflictDoNothing({ target: schema.userStats.userId });
 

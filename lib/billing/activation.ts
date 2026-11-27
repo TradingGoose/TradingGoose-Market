@@ -1,8 +1,9 @@
-import { subscription, user } from "@tradinggoose/db/schema";
+import { subscription, user, userStats } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { withBillingSubjectLock } from "@/lib/db/locks";
+import { paidEntryValues, readPersonalBillingState } from "./user-stats";
 import { databaseNow } from "@/lib/db/clock";
 import { getMarketRuntimeConfig } from "@/lib/environment";
 import {
@@ -173,6 +174,8 @@ export async function activateMarketPayg(userId: string) {
     if (bound.length !== 1) {
       throw new PaygActivationError("PAYG activation state changed", 409);
     }
+    const { stats } = await readPersonalBillingState(tx, userId);
+    await tx.update(userStats).set(paidEntryValues(stats)).where(eq(userStats.id, stats.id));
     return { subscriptionId: bound[0].stripeSubscriptionId };
   });
   let result = await execute(prepared);

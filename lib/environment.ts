@@ -18,6 +18,7 @@ export type MarketRuntimeConfig = {
     enabled: boolean;
     usdPer1000Reads: string;
     requestNanoUsd: bigint;
+    onboardingAllowanceUsd: string;
     stripeSecretKey: string | null;
     stripeWebhookSecret: string | null;
     stripePriceId: string | null;
@@ -145,14 +146,15 @@ function rejectPublicCredentialAliases(environment: NodeJS.ProcessEnv): void {
   }
 }
 
-function parsePositiveDecimal(
+function parseDecimal(
   raw: string,
   name: string,
-  maximumFractionDigits?: number
+  maximumFractionDigits?: number,
+  allowZero = false
 ): { canonical: string; whole: string; fraction: string } {
   const match = /^(\d+)(?:\.(\d+))?$/.exec(raw);
   if (!match) {
-    throw new Error(`${name} must be a positive base-10 decimal.`);
+    throw new Error(`${name} must be a non-negative base-10 decimal.`);
   }
 
   const whole = match[1].replace(/^0+(?=\d)/, '');
@@ -170,7 +172,7 @@ function parsePositiveDecimal(
   const canonical = significantFraction
     ? `${whole}.${significantFraction}`
     : whole;
-  if (BigInt(whole) === 0n && !/[1-9]/.test(fraction)) {
+  if (!allowZero && canonical === "0") {
     throw new Error(`${name} must be greater than zero.`);
   }
 
@@ -269,7 +271,7 @@ function parseRuntimeConfig(environment: NodeJS.ProcessEnv): MarketRuntimeConfig
     throw new Error('EMAIL_DOMAIN must be a valid email domain without a scheme, address, port, or path.');
   }
 
-  const rate = parsePositiveDecimal(
+  const rate = parseDecimal(
     requiredNonEmpty(environment, 'PAYG_USD_PER_1000_READS'),
     'PAYG_USD_PER_1000_READS',
     6
@@ -297,7 +299,7 @@ function parseRuntimeConfig(environment: NodeJS.ProcessEnv): MarketRuntimeConfig
     'PAYG_INVOICE_THRESHOLD_USD'
   );
   const invoiceThresholdUsd = thresholdRaw
-    ? parsePositiveDecimal(
+    ? parseDecimal(
         thresholdRaw,
         'PAYG_INVOICE_THRESHOLD_USD'
       ).canonical
@@ -357,6 +359,10 @@ function parseRuntimeConfig(environment: NodeJS.ProcessEnv): MarketRuntimeConfig
     billing: {
       enabled: billingEnabled,
       usdPer1000Reads: rate.canonical,
+      onboardingAllowanceUsd: parseDecimal(
+        optionalNonEmpty(environment, "ONBOARDING_ALLOWANCE_USD") ?? "0",
+        "ONBOARDING_ALLOWANCE_USD", 9, true
+      ).canonical,
       requestNanoUsd,
       stripeSecretKey,
       stripeWebhookSecret,
