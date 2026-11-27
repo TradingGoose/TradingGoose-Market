@@ -37,6 +37,7 @@ import, backfill, or preserve an earlier Market schema.
 cp .env.example .env
 bun install
 bun run db:migrate
+bun run db:push
 bun run dev
 ```
 
@@ -47,7 +48,7 @@ and serializes one-time redemption and OTP attempt limits in Better Auth's
 existing routes. CI installs it with `bun install --frozen-lockfile`.
 
 `db:migrate` is the sole migration command. It applies the checked-in Drizzle
-chain to the configured empty database before the application starts. Drizzle
+chain to the configured empty database. Apply the current authored schema with `bun run db:push` before starting the matching build. Drizzle
 migrations are generated from `packages/db/schema.ts`; migration SQL is never
 hand-edited and there is no legacy cutover or compatibility path.
 
@@ -103,7 +104,11 @@ Enabled billing also requires:
 - `PAYG_STRIPE_PRICE_ID`
 - positive `PAYG_INVOICE_THRESHOLD_USD`
 
-Enabled customer-key access requires an active subscription and no failed-usage-payment block, mirroring Studio's `userStats.billingBlocked`. A confirmed decline preserves the already-admitted request but pauses later billable requests until invoice payment recovery. Key management remains available. Threshold billing waits for at least one full cent of unbilled usage, even when the configured threshold is smaller; cycle/final settlement retains nearest-cent rounding.
+`ONBOARDING_ALLOWANCE_USD` defaults to `0` and accepts a non-negative USD amount with up to nine fractional digits. Signup seeds this grant and the initial personal spending limit once. Enabled public reads can use the remaining allowance before PAYG activation. Market admits a whole read while current usage is below the account cap, so one read can cross it. A key’s rolling limit still checks the full projected cost. Activated PAYG bills every rated paid read and reserves unused onboarding allowance for return to free after final settlement.
+
+Usage warning and upgrade emails start enabled. The personal Usage notifications switch and signed notification or all-email unsubscribe choices govern these optional emails. Mail uses the configured Resend sender. First-attempt payment-recovery and authentication messages are transactional.
+
+Market checks the payment block before authorizing either funding source. A confirmed decline preserves the already-admitted request but pauses later billable requests until invoice payment recovery. Key management remains available. Threshold billing waits for at least one full cent of unbilled usage, even when the configured threshold is smaller; cycle/final settlement retains nearest-cent rounding.
 
 Before switching an existing deployment to transaction pooling, pause traffic, webhook delivery and the admin CLI. Drain in-flight writers and reconcile outstanding key creations on the old build. Inspect each unbound PAYG subscription with a pending activation UUID. An older Stripe POST can lack `paygActivationAttemptId`, and the local row can lack a candidate ID. Find the original POST in Stripe request logs using `payg-activate:<local subscription ID>:<attempt UUID>:<canonical Customer ID>`. List **all pages and statuses** for that Customer and retrieve the identified subscription. Verify its ID, Customer, ownership metadata (`userId`, `referenceId`, `subscriptionId`), single configured Price, quantity one and valid billing period.
 
@@ -168,7 +173,7 @@ There are no short-path aliases, wildcard endpoint families, logo-update API ali
 
 Private requests buffer up to 64 KiB before taking a grant lock. A 10-second read deadline returns `408` for slow bodies, `413` for oversized bodies and `400` for aborted or failed reads. Admission acquires the grant lock and then the key lock. After admission commits, the mutation acquires both locks again in the same order and rechecks authorization. Each acquisition has its own five-second timeout and returns `503 ADMISSION_UNAVAILABLE` on expiry. A revocation committed between the two transactions returns `403` before the mutation runs.
 
-Public-key use requires literal active PAYG only while billing is enabled. Key creation, listing, limit editing, and revocation remain billing-independent. Each admitted keyed request is recorded before its data handler runs; completion is stored separately as success, client error, server error, or visibly pending after a crash.
+Enabled public-key usage requires available account headroom with either onboarding allowance or active PAYG. Key creation, listing, limit editing, and revocation remain billing-independent. Each admitted keyed request is recorded before its data handler runs; completion is stored separately as success, client error, server error, or visibly pending after a crash.
 
 Clients may identify the calling application with `HTTP-Referer` and optional `X-Title`. Market normalizes and stores safe attribution snapshots for Activity and Logs; these headers never affect access, billing, spend enforcement, caching, or handler input.
 
@@ -185,20 +190,32 @@ Clients may identify the calling application with `HTTP-Referer` and optional `X
 | `bun run test:watch` | Run Vitest in watch mode |
 | `bun run db:generate` | Generate the structural Drizzle migration |
 | `bun run db:migrate` | Apply the checked-in Drizzle chain to the configured empty database |
+| `bun run db:push` | Apply the current authored schema after baseline migration |
 | `bun run test:release` | Sequentially clean-build, start, readiness-check, and exact-route-smoke all four registration/billing modes |
 | `bun run admin:manage …` | Add or remove database-owned admin membership |
 
 ## Release validation
 
-The release workflow runs two independent PostgreSQL 17 gates. `quality` owns
-the unfiltered test suite through a transaction-mode PgBouncer serving `market_quality` and its disposable child databases. The
-`release-validation` job applies `db:migrate` exactly once to its separate
-`market_release` database, then invokes `test:release` exactly once. The harness
-owns all four `REGISTRATION_MODE=open|close` ×
-`BILLING_ENABLED=true|false` production builds and servers, performs
-exact route and registration-policy probes—including two rejected
-closed-registration POSTs and one successful local signup in
-open-registration/billing-disabled mode—and always terminates each server.
+The release workflow runs two independent PostgreSQL 17 gates. `quality` runs
+the full test suite through a transaction-mode PgBouncer serving `market_quality` and its disposable child databases.
+The local release check uses the same base environment and starts with a separate, empty `market_release` database. [Release workflow](.github/workflows/release.yml)
+
+```bash
+(
+  set -e
+  createdb -h 127.0.0.1 -p 5432 -U market market_release
+  export DATABASE_URL=postgres://market:market@127.0.0.1:5432/market_release
+  export NEXT_PUBLIC_APP_URL=https://market.example.test:3000 BETTER_AUTH_URL=https://market.example.test:3000
+  bun run db:migrate
+  bun run db:push
+  bun run test:release
+)
+```
+
+This prepares the schema once. The harness builds and starts all four registration/billing modes,
+checks their routes and registration policies, and terminates each server. After open signup with billing disabled,
+it reads PostgreSQL directly to verify one personal owner, stats row, and PAYG subscription, the configured $25 grant
+and spending limit, zero usage, enabled usage notifications, empty unsubscribe preferences, and no Stripe binding.
 The shared public/auth origin is `https://market.example.test:3000`; transport
 binds to `http://127.0.0.1:3000` and sends the canonical Host and forwarded headers.
 The distinct public hostname proves reverse-proxied UI requests render instead
