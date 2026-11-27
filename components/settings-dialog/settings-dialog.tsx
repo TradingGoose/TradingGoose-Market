@@ -41,7 +41,7 @@ export function SettingsDialog({ open, section, onOpenChange, user, emailChangeS
           onRetryEmailChange={onRetryEmailChange}
           onRefreshUser={onRefreshUser}
         />
-      ) : <SubscriptionSettings onOpenChange={onOpenChange} />}
+      ) : <SubscriptionSettings userId={user.id} onOpenChange={onOpenChange} />}
     </SettingsModal>
   );
 }

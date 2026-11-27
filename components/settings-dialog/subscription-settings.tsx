@@ -1,180 +1,129 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowUpRight, CreditCard, Gauge, Loader2, ReceiptText } from "lucide-react";
-
+import { useEffect, useId, useRef, useState } from "react";
+import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
+import { CreditCard, Gauge, ReceiptText } from "lucide-react";
+import { UsageHeader } from "@/components/billing/usage-header";
+import { UsageLimit, type UsageLimitRef } from "@/components/billing/usage-limit";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { marketApiRequest, useMarketResource } from "@/hooks/use-market-resource";
-import type { BillingSummary } from "@/lib/account/contracts";
-import { formatCount, formatUsd } from "@/lib/account/format";
+import { Switch } from "@/components/ui/switch";
+import { billingSettingsKeys, notificationMutationOptions, useBillingPreferences } from "@/hooks/queries/billing-settings";
+import { subscriptionKeys, useSubscriptionData, useUsageLimitData } from "@/hooks/queries/subscription";
+import { MarketApiError, marketApiRequest } from "@/hooks/use-market-resource";
+import { billingCopy, formatBillingUsd, getPersonalPaygAction } from "@/lib/account/billing-presentation";
+import { formatCount } from "@/lib/account/format";
+import { useBillingPortal } from "@/lib/billing/billing-portal";
 
-export function SubscriptionSettings({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
-  const { data, error, isLoading, refresh } = useMarketResource<BillingSummary>("/api/account/billing");
-  const [pending, setPending] = useState<"activate" | "portal" | null>(null);
+function BillingUsageNotificationsToggle({ userId }: { userId: string }) {
+  const client = useQueryClient();
+  const title = useId(), description = useId(), feedbackId = useId();
+  const writeLock = useRef(false);
+  const prefs = useBillingPreferences(userId);
+  const mutationKey = billingSettingsKeys.settings(userId);
+  const mutation = useMutation({ ...notificationMutationOptions(client, userId), onSettled: () => { writeLock.current = false; } });
+  const sharedPending = useIsMutating({ mutationKey }) > 0;
+  const busy = mutation.isPending || sharedPending;
+  const enabled = prefs.data?.billingUsageNotificationsEnabled;
+  const feedback = busy ? "Saving usage notification preference…" : mutation.isError ? "Couldn’t update usage notifications. Try the switch again."
+    : prefs.isError ? "Failed to load billing data." : null;
+  function change(value: boolean) {
+    if (enabled === undefined || value === enabled || writeLock.current || client.isMutating({ mutationKey })) return;
+    writeLock.current = true;
+    mutation.reset();
+    mutation.mutate(value);
+  }
+  return <div className="mt-4 flex items-start justify-between gap-4">
+    <div className="flex flex-col"><span id={title} className="text-sm font-medium">Usage notifications</span>
+      <span id={description} className="text-xs text-muted-foreground">Email me when usage reaches the billing warning threshold</span>
+      {feedback && <span id={feedbackId} aria-atomic="true" role={busy ? "status" : "alert"} className={busy ? "text-xs text-muted-foreground" : "text-xs text-destructive"}>{feedback}</span>}
+    </div>
+    <Switch checked={enabled ?? false} disabled={busy || enabled === undefined} aria-busy={busy || undefined}
+      aria-labelledby={title} aria-describedby={feedback ? `${description} ${feedbackId}` : description} onCheckedChange={change} />
+  </div>;
+}
+
+export function SubscriptionSettings({ onOpenChange, userId }: { onOpenChange: (open: boolean) => void; userId: string }) {
+  const client = useQueryClient();
+  const subscription = useSubscriptionData(), limits = useUsageLimitData();
+  const data = subscription.data, info = limits.data?.usageLimit;
+  const editor = useRef<UsageLimitRef>(null);
+  const activating = useRef(false);
+  const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  async function activate() {
-    setPending("activate");
+  const portal = useBillingPortal();
+  const limitPending = useIsMutating({ mutationKey: subscriptionKeys.usage() }) > 0;
+  const shouldClose = subscription.isError || (data?.billingEnabled && limits.isError);
+  useEffect(() => { if (shouldClose) onOpenChange(false); }, [onOpenChange, shouldClose]);
+  if (shouldClose) return null;
+  if (data?.billingEnabled === false) return <Alert variant="info" appearance="light"><AlertDescription>
+    {billingCopy.disabled}
+  </AlertDescription></Alert>;
+  if (!data || !info) return <div role="status" aria-label="Loading subscription" className="space-y-3">
+    <div className="space-y-2 rounded-md border bg-background p-3 shadow-sm">
+      <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Skeleton className="h-5 w-16" />
+        <Skeleton className="h-[1.125rem] w-14 rounded-sm" /></div><div className="flex items-center gap-1 text-xs text-muted-foreground">
+        <Skeleton className="h-4 w-8" />/<Skeleton className="h-4 w-8" /></div></div>
+      <Skeleton className="h-2 w-full rounded" />
+    </div>
+    <div className="flex flex-col rounded-md border p-4"><div className="mb-4"><Skeleton className="mb-2 h-5 w-8" />
+      <div className="flex items-baseline"><Skeleton className="h-6 w-10" /><Skeleton className="ml-1 h-3 w-12" /></div></div>
+      <div className="mb-4 space-y-2">{[0, 1, 2].map(i => <div key={i} className="flex items-start gap-2">
+        <Skeleton className="mt-0.5 h-3 w-3" /><Skeleton className="h-3 w-20" /></div>)}</div>
+      <Skeleton className="h-9 w-full rounded-sm" />
+    </div>
+  </div>;
+  const action = getPersonalPaygAction(data, info.canEdit);
+  const isEdit = action === "Increase Limit";
+  const busy = pending || portal.pending;
+  const available = !data.hasStripeSubscription && !data.billingBlocked && (data.status === null || data.status === "canceled");
+  const openPortal = () => { void portal.open().catch(() => {}); };
+  async function primaryAction() {
+    if (busy || activating.current) return;
+    if (isEdit) return editor.current?.startEdit();
+    if (action !== "Activate PAYG") return openPortal();
+    activating.current = true;
+    setPending(true);
     setActionError(null);
     try {
       await marketApiRequest("/api/account/billing/payg/activate", { method: "POST", body: "{}" });
-      await refresh();
-    } catch {
-      setActionError("PAYG could not be activated. If billing is already bound, use Manage Billing for payment recovery.");
-    } finally {
-      setPending(null);
-    }
+      await Promise.all([client.invalidateQueries({ queryKey: subscriptionKeys.user() }), client.invalidateQueries({ queryKey: subscriptionKeys.usage() })]);
+    } catch (error) {
+      if (data?.portalAvailable && error instanceof MarketApiError && (error.status === 402 || error.responseCode === "PAYMENT_METHOD_REQUIRED")) {
+        await portal.open().catch(() => {});
+      } else { setActionError("Failed to activate PAYG"); }
+    } finally { activating.current = false; setPending(false); }
   }
-
-  async function openPortal() {
-    setPending("portal");
-    setActionError(null);
-    try {
-      const result = await marketApiRequest<{ url: string }>("/api/account/billing/portal", { method: "POST", body: "{}" });
-      onOpenChange(false);
-      window.location.assign(result.url);
-    } catch {
-      setActionError("The billing portal is unavailable right now.");
-      setPending(null);
-    }
-  }
-
-  if (isLoading) {
-    return (
-      <div className="space-y-3" role="status" aria-label="Loading subscription">
-        <Card className="rounded-md bg-background shadow-xs">
-          <CardContent className="p-3">
-            <div className="flex items-center justify-between gap-3">
-              <Skeleton className="h-5 w-24" />
-              <Skeleton className="h-5 w-16 rounded-sm" />
-            </div>
-            <Skeleton className="mt-3 h-4 w-2/3" />
-          </CardContent>
-        </Card>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {Array.from({ length: 3 }, (_, index) => (
-            <Card key={index} className="rounded-md shadow-none">
-              <CardContent className="p-4">
-                <Skeleton className="h-3 w-20" />
-                <Skeleton className="mt-3 h-6 w-28" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <span className="sr-only">Loading subscription information…</span>
-      </div>
-    );
-  }
-  if (error || !data) {
-    return (
-      <Alert variant="destructive" appearance="light">
-        <AlertDescription>
-          <span className="font-medium">Subscription information is unavailable.</span>{" "}
-          Try reopening this panel. Your keys and recorded usage are unchanged.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (!data.billingEnabled) {
-    return (
-      <div className="space-y-3">
-        <Alert variant="info" appearance="light">
-          <AlertDescription>
-            <span className="font-medium">Billing is disabled for this Market deployment.</span>{" "}
-            API keys and non-billable usage remain available.
-          </AlertDescription>
-        </Alert>
-        <Card className="rounded-md shadow-none">
-          <CardHeader className="p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <CardTitle className="text-sm font-semibold">PAYG</CardTitle>
-                <CardDescription>Billing actions will appear here when this deployment enables billing.</CardDescription>
-              </div>
-              <Badge variant="secondary">Unavailable</Badge>
-            </div>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
-
-  const normalizedStatus = data.status?.replaceAll("_", " ") ?? "inactive";
-  const hasBillingAction = data.activationAvailable || data.portalAvailable;
-
-  return (
-    <div className="flex flex-col gap-3" aria-busy={pending !== null}>
-      <Card className="rounded-md shadow-xs">
-        <CardHeader className="p-4 pb-3">
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <CardTitle className="text-base font-semibold">PAYG</CardTitle>
-              <CardDescription>One uniform rate for all billable customer-key public reads.</CardDescription>
-            </div>
-            <Badge variant={data.status === "active" ? "default" : "secondary"} className="shrink-0 capitalize">
-              {normalizedStatus}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="grid border-t sm:grid-cols-3">
-            <div className="space-y-1 p-4 sm:border-r">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                <ReceiptText className="size-3.5" aria-hidden="true" />Rate
-              </div>
-              <p className="font-medium">${data.rateUsdPer1000Reads} / 1,000 reads</p>
-            </div>
-            <div className="space-y-1 border-t p-4 sm:border-r sm:border-t-0">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                <Gauge className="size-3.5" aria-hidden="true" />Current requests
-              </div>
-              <p className="font-medium tabular-nums">{formatCount(data.currentPeriodRequestQuantity)}</p>
-            </div>
-            <div className="space-y-1 border-t p-4 sm:border-t-0">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">Accrued usage</p>
-              <p className="font-medium tabular-nums">{formatUsd(data.currentPeriodCostUsd)}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      {data.billingBlocked ? <Alert variant="destructive"><AlertDescription>API access is paused because a usage payment failed. Use Manage Billing to resolve outstanding invoices; your API keys and usage history are retained.</AlertDescription></Alert> : null}
-      {data.customerRecoveryState === "settlement_pending" ? <Alert variant="warning" appearance="light"><AlertDescription>The prior billing Customer remains locked until subscription settlement completes. Activation and Billing stay unavailable until Stripe retries the final settlement event.</AlertDescription></Alert> : null}
-      {data.customerRecoveryState === "unavailable" ? <Alert variant="destructive"><AlertDescription>Billing Customer recovery is temporarily unavailable. Your existing Market usage and keys are unchanged.</AlertDescription></Alert> : null}
-      {data.cancelAtPeriodEnd ? <Alert variant="warning" appearance="light"><AlertDescription>Your subscription is scheduled to cancel at period end. Restore it through Manage Billing while it remains active.</AlertDescription></Alert> : null}
-      {actionError ? <Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert> : null}
-      <Card className="rounded-md shadow-none">
-        <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-sm font-medium">
-              {data.billingBlocked ? "Payment recovery required" : data.cancelAtPeriodEnd ? "Cancellation scheduled" : data.status === "active" ? "Subscription active" : "Activate usage billing"}
-            </p>
-            <p className="max-w-xl text-xs text-muted-foreground">
-              Stripe Customer Portal is the sole place to view invoices, payments, payment methods, cancellation, and restoration.
-            </p>
-          </div>
-          {hasBillingAction ? (
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-              {data.activationAvailable ? (
-                <Button className="w-full sm:w-auto" onClick={activate} disabled={pending !== null}>
-                  {pending === "activate" ? <><Loader2 className="animate-spin" />Activating…</> : "Activate PAYG"}
-                </Button>
-              ) : null}
-              {data.portalAvailable ? (
-                <Button className="w-full sm:w-auto" variant="outline" onClick={openPortal} disabled={pending !== null}>
-                  {pending === "portal" ? <><Loader2 className="animate-spin" />Opening…</> : <><CreditCard />Manage Billing<ArrowUpRight /></>}
-                </Button>
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">No billing action is currently available.</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
+  const disabled = busy || (isEdit ? limitPending : action === "Activate PAYG" ? !data.activationAvailable : !data.portalAvailable);
+  return <div className="flex flex-col gap-2">
+    <div className="mb-2"><UsageHeader data={data}
+      badge={<button type="button" className="h-[1.125rem] rounded-sm border border-primary bg-background px-2 text-xs font-bold text-primary disabled:opacity-50"
+        disabled={disabled} aria-busy={busy || (isEdit && limitPending) || undefined} onClick={primaryAction}>
+        {action}</button>}
+      limitEditor={isEdit ? <UsageLimit ref={editor} currentLimit={Number(info.currentLimitUsd)} currentUsage={Number(data.currentPeriodCostUsd)}
+        canEdit={info.canEdit} minimumLimit={Number(info.minimumLimitUsd)} /> : undefined}
+      onResolvePayment={data.portalAvailable && !busy ? openPortal : undefined} /></div>
+    <article aria-current="true" className="relative flex flex-col rounded-md border border-primary p-4">
+      <header className="mb-4"><h3 className="mb-2 text-sm font-semibold">PAYG</h3>
+        <div className="flex items-baseline"><span className="text-xl font-semibold">$0.00</span><span className="ml-1 text-xs text-muted-foreground">/mo</span></div>
+      </header>
+      <ul className="mb-4 flex-1 space-y-2 text-xs text-muted-foreground">
+        <li className="flex items-start gap-2"><CreditCard className="mt-0.5 size-3 shrink-0" />${data.rateUsdPer1000Reads} / 1,000 reads</li>
+        <li className="flex items-start gap-2"><ReceiptText className="mt-0.5 size-3 shrink-0" />{formatCount(data.currentPeriodRequestQuantity)} reads this period</li>
+        <li className="flex items-start gap-2"><Gauge className="mt-0.5 size-3 shrink-0" /><span>
+          {available ? "Available onboarding allowance" : "Reserved onboarding allowance"} {formatBillingUsd(available ? data.availableOnboardingAllowanceUsd : data.grantedOnboardingAllowanceUsd)}
+        </span></li>
+      </ul>
+      <div className="flex h-9 items-center justify-center rounded-sm bg-primary/10 px-4 text-xs font-medium text-primary">Current</div>
+    </article>
+    {data.nextBillingDate && <div className="mt-4 flex items-center justify-between text-sm"><span className="font-medium">Next Billing Date</span>
+      <span className="text-muted-foreground">{new Date(data.nextBillingDate).toLocaleDateString("en-US")}</span></div>}
+    {data.hasStripeSubscription && <><BillingUsageNotificationsToggle userId={userId} />
+      <div className="mt-2 flex items-center justify-between gap-2"><div>
+        <span className="text-sm font-medium">{data.cancelAtPeriodEnd ? "Restore Subscription" : "Manage Subscription"}</span>
+        <p className="mt-1 text-xs text-muted-foreground">Open Stripe Billing Portal to cancel, restore, or update your subscription.</p>
+      </div><Button variant="outline" className="h-8 rounded-sm text-xs" disabled={!data.portalAvailable || busy} onClick={openPortal}>Manage</Button></div></>}
+    {(actionError || portal.error) && <p role="alert" className="text-xs text-destructive">{actionError || portal.error}</p>}
+  </div>;
 }

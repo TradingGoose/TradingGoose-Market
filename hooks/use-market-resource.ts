@@ -6,7 +6,7 @@ export class MarketApiError extends Error {
   readonly status: number;
   readonly code: string;
 
-  constructor(status: number, code: string) {
+  constructor(status: number, code: string, readonly responseCode?: string) {
     super(code);
     this.name = "MarketApiError";
     this.status = status;
@@ -22,9 +22,9 @@ export async function marketApiRequest<T>(url: string, init?: RequestInit): Prom
       ...init?.headers
     }
   });
-  const payload = await response.json().catch(() => ({})) as { error?: string };
+  const payload = await response.json().catch(() => ({})) as { error?: string; code?: string };
   if (!response.ok) {
-    throw new MarketApiError(response.status, payload.error ?? "REQUEST_FAILED");
+    throw new MarketApiError(response.status, payload.error ?? "REQUEST_FAILED", payload.code);
   }
   return payload as T;
 }

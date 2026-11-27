@@ -19,13 +19,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSubscriptionData } from "@/hooks/queries/subscription";
 import { marketApiRequest, useMarketResource } from "@/hooks/use-market-resource";
 import type {
   AdminApiKeySummary,
   ApiKeyRevocationOutcome,
-  BillingSummary,
   MarketApiKeySummary,
 } from "@/lib/account/contracts";
+import { billingCopy } from "@/lib/account/billing-presentation";
 import { formatCount, formatUsd, formatUtc } from "@/lib/account/format";
 
 function statusBadge(status: MarketApiKeySummary["status"]) {
@@ -35,11 +36,12 @@ function statusBadge(status: MarketApiKeySummary["status"]) {
 }
 
 function CustomerBillingNotice() {
-  const billing = useMarketResource<BillingSummary>("/api/account/billing");
-  return <>
-    {!billing.isLoading && billing.data && !billing.data.billingEnabled ? <Alert variant="info" appearance="light"><AlertDescription>Billing is disabled. Saved per-key spend limits remain editable but are not enforced or consumed while requests are non-billable.</AlertDescription></Alert> : null}
-    {billing.data?.billingEnabled && billing.data.billingBlocked ? <Alert variant="destructive"><AlertDescription>API access is paused because a usage payment failed. Use Manage Billing in your profile menu to resolve outstanding invoices. You can still create, edit, and revoke keys.</AlertDescription></Alert> : null}
-  </>;
+  const { data } = useSubscriptionData();
+  if (!data) return null;
+  if (!data.billingEnabled) return <Alert variant="info" appearance="light"><AlertDescription>{billingCopy.disabled}</AlertDescription></Alert>;
+  if (data.billingBlocked) return <Alert variant="destructive"><AlertDescription>{billingCopy.paymentFailed}</AlertDescription></Alert>;
+  if (data.usageLimit.isExceeded) return <Alert variant="warning" appearance="light"><AlertDescription>{billingCopy.limitExceeded}</AlertDescription></Alert>;
+  return null;
 }
 
 type ApiKeySummary = MarketApiKeySummary | AdminApiKeySummary;
@@ -124,7 +126,7 @@ export function ApiKeysPage({ scope }: { scope: "account" | "admin" }) {
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6">
-      <PageHeader title="API Keys" description={privateKeys ? "Create private update credentials bound to your current admin grant, or revoke any admin's private key system-wide. Private keys have no PAYG charges or spend limits." : "Create and manage Market public API keys. Keys can be minted even before PAYG is active; billing gates use when enabled."} actions={<Button onClick={() => setCreateOpen(true)}><Plus />New Key</Button>} />
+      <PageHeader title="API Keys" actions={<Button onClick={() => setCreateOpen(true)}><Plus />New Key</Button>} />
       {!privateKeys ? <CustomerBillingNotice /> : null}
       {pageMessage ? <Alert variant={pageMessage.kind === "error" ? "destructive" : pageMessage.kind}><AlertDescription>{pageMessage.text}</AlertDescription></Alert> : null}
       <div className="flex items-center gap-3"><div className="relative w-full max-w-sm"><Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search API keys" placeholder="Search API keys" className="pl-9" /></div><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label="About API keys"><Info /></Button></TooltipTrigger><TooltipContent>Secrets are shown once. Market stores only safe display metadata.</TooltipContent></Tooltip></div>
@@ -144,7 +146,7 @@ export function ApiKeysPage({ scope }: { scope: "account" | "admin" }) {
         {!resource.isLoading && !resource.error ? <CardFooter className="border-t px-4 py-3 text-xs text-muted-foreground">{filtered.length} of {keys.length} keys</CardFooter> : null}
       </Card>
 
-      <Dialog open={createOpen} onOpenChange={(open) => { if (!pending) { setCreateOpen(open); setFormError(null); } }}><DialogContent><DialogHeader><DialogTitle>{privateKeys ? "New private API key" : "New API key"}</DialogTitle><DialogDescription>{privateKeys ? "This key can access only Market private update endpoints and has no PAYG or spend limit." : "Create an unlimited key or configure one whole-dollar budget over the preceding X × 24 hours."}</DialogDescription></DialogHeader><form className="space-y-4" onSubmit={createKey}><div className="space-y-2"><Label htmlFor="key-name">Name</Label><Input id="key-name" value={name} onChange={(event) => setName(event.target.value)} disabled={pending} autoFocus /></div>{!privateKeys ? <><div className="flex items-center justify-between rounded-md border p-3"><div><Label htmlFor="key-limit">Spend limit</Label><p className="text-xs text-muted-foreground">Optional per-key PAYG guardrail</p></div><Switch id="key-limit" checked={limited} onCheckedChange={setLimited} disabled={pending} /></div>{limited ? <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="limit-usd">Spend limit (whole USD)</Label><Input id="limit-usd" inputMode="numeric" pattern="[1-9][0-9]*" value={limitUsd} onChange={(event) => setLimitUsd(event.target.value)} placeholder="5" disabled={pending} /></div><div className="space-y-2"><Label htmlFor="window-days">Rolling window (days)</Label><Input id="window-days" inputMode="numeric" pattern="[0-9]*" value={windowDays} onChange={(event) => setWindowDays(event.target.value)} placeholder="7" disabled={pending} /><p className="text-xs text-muted-foreground">1–30 days; not a calendar reset.</p></div></div> : null}</> : null}{formError ? <Alert variant="destructive"><AlertDescription>{formError}</AlertDescription></Alert> : null}<DialogFooter><Button type="button" variant="outline" onClick={() => setCreateOpen(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending}>{pending ? <><Loader2 className="animate-spin" />Creating…</> : "Create key"}</Button></DialogFooter></form></DialogContent></Dialog>
+      <Dialog open={createOpen} onOpenChange={(open) => { if (!pending) { setCreateOpen(open); setFormError(null); } }}><DialogContent><DialogHeader><DialogTitle>{privateKeys ? "New private API key" : "New API key"}</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={createKey}><div className="space-y-2"><Label htmlFor="key-name">Name</Label><Input id="key-name" value={name} onChange={(event) => setName(event.target.value)} disabled={pending} autoFocus /></div>{!privateKeys ? <><div className="flex items-center justify-between rounded-md border p-3"><div><Label htmlFor="key-limit">Spend limit</Label><p id="key-limit-description" className="text-xs text-muted-foreground">Caps this key’s spending over 1–30 rolling days, separately from your account limit.</p></div><Switch id="key-limit" aria-describedby="key-limit-description" checked={limited} onCheckedChange={setLimited} disabled={pending} /></div>{limited ? <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="limit-usd">Spend limit (whole USD)</Label><Input id="limit-usd" inputMode="numeric" pattern="[1-9][0-9]*" value={limitUsd} onChange={(event) => setLimitUsd(event.target.value)} placeholder="5" disabled={pending} /></div><div className="space-y-2"><Label htmlFor="window-days">Rolling window (days)</Label><Input id="window-days" inputMode="numeric" pattern="[0-9]*" value={windowDays} onChange={(event) => setWindowDays(event.target.value)} placeholder="7" disabled={pending} /></div></div> : null}</> : null}{formError ? <Alert variant="destructive"><AlertDescription>{formError}</AlertDescription></Alert> : null}<DialogFooter><Button type="button" variant="outline" onClick={() => setCreateOpen(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending}>{pending ? <><Loader2 className="animate-spin" />Creating…</> : "Create key"}</Button></DialogFooter></form></DialogContent></Dialog>
 
       <Dialog open={Boolean(secret)} onOpenChange={(open) => { if (!open) { setSecret(null); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>Copy {secret?.name} now</DialogTitle><DialogDescription>This secret is shown once and cannot be recovered later.</DialogDescription></DialogHeader><Card className="rounded-md bg-muted/50 shadow-none"><CardContent className="p-3 font-mono text-sm break-all">{secret?.value}</CardContent></Card><DialogFooter><Button onClick={() => { if (secret) void navigator.clipboard.writeText(secret.value).then(() => setCopied(true)); }}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy secret"}</Button><Button variant="outline" onClick={() => { setSecret(null); setCopied(false); }}>I saved it</Button></DialogFooter></DialogContent></Dialog>
 
