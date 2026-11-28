@@ -1,6 +1,7 @@
 import { user, marketApiUsageEvent, marketUsageOwner, subscription, userStats } from "@tradinggoose/db/schema";
 import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
 import { and, eq, gte, sql } from "drizzle-orm";
+import { usageLimitSummary } from "@/lib/account/billing-presentation";
 import { requireDatabase } from "@/lib/db/runtime";
 import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd } from "./money";
 
@@ -55,15 +56,7 @@ export function freeEntryValues(configuredGrant: string, remainingGrant: string)
 }
 
 export function personalUsageLimit(stats: Balance & { billingBlocked: boolean }, enabled: boolean) {
-  const current = decimalUsdToNanoUsd(stats.currentPeriodCost);
-  const limit = effectiveLimitNano(stats);
-  const isExceeded = enabled && current >= limit;
-  const status = !enabled ? "ok" : stats.billingBlocked ? "blocked" : isExceeded ? "exceeded"
-    : current * 100n >= limit * 80n ? "warning" : "ok";
-  return {
-    currentLimitUsd: enabled ? nanoUsdToDecimalUsd(limit) : null, isExceeded,
-    percentUsed: enabled && limit > 0n ? Number(current) / Number(limit) * 100 : 0, status,
-  } as const;
+  return usageLimitSummary(stats.currentPeriodCost, enabled ? effectiveLimitNano(stats) : null, stats.billingBlocked);
 }
 
 // The caller owns the billing subject lock. Match the retained ledger to its live personal identity.

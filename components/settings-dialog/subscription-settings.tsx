@@ -19,19 +19,15 @@ import { useBillingPortal } from "@/lib/billing/billing-portal";
 function BillingUsageNotificationsToggle({ userId }: { userId: string }) {
   const client = useQueryClient();
   const title = useId(), description = useId(), feedbackId = useId();
-  const writeLock = useRef(false);
   const prefs = useBillingPreferences(userId);
   const mutationKey = billingSettingsKeys.settings(userId);
-  const mutation = useMutation({ ...notificationMutationOptions(client, userId), onSettled: () => { writeLock.current = false; } });
-  const sharedPending = useIsMutating({ mutationKey }) > 0;
-  const busy = mutation.isPending || sharedPending;
+  const mutation = useMutation(notificationMutationOptions(client, userId));
+  const busy = useIsMutating({ mutationKey }) > 0;
   const enabled = prefs.data?.billingUsageNotificationsEnabled;
-  const feedback = busy ? "Saving usage notification preference…" : mutation.isError ? "Couldn’t update usage notifications. Try the switch again."
+  const feedback = busy ? "Saving usage notification preference…" : mutation.isError && enabled !== mutation.variables ? "Couldn’t update usage notifications. Try the switch again."
     : prefs.isError ? "Failed to load billing data." : null;
   function change(value: boolean) {
-    if (enabled === undefined || value === enabled || writeLock.current || client.isMutating({ mutationKey })) return;
-    writeLock.current = true;
-    mutation.reset();
+    if (enabled === undefined || value === enabled || client.isMutating({ mutationKey })) return;
     mutation.mutate(value);
   }
   return <div className="mt-4 flex items-start justify-between gap-4">
@@ -102,7 +98,7 @@ export function SubscriptionSettings({ onOpenChange, userId }: { onOpenChange: (
         disabled={disabled} aria-busy={busy || (isEdit && limitPending) || undefined} onClick={primaryAction}>
         {action}</button>}
       limitEditor={isEdit && info.currentLimitUsd !== null ? <UsageLimit ref={editor} currentLimit={info.currentLimitUsd} currentUsage={data.currentPeriodCostUsd}
-        canEdit={info.canEdit} minimumLimit={info.minimumLimitUsd} /> : undefined}
+        minimumLimit={info.minimumLimitUsd} /> : undefined}
       onResolvePayment={data.portalAvailable && !busy ? openPortal : undefined} /></div>
     <article aria-current="true" className="relative flex flex-col rounded-md border border-primary p-4">
       <header className="mb-4"><h3 className="mb-2 text-sm font-semibold">PAYG</h3>

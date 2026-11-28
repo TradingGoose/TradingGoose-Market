@@ -7,17 +7,17 @@ export type BillingEmailMessage =
 
 export const billingSubjects = {
   usage: "You're nearing your monthly budget on TradingGoose Market",
-  upgrade: "Your current tier is nearing its included usage on TradingGoose Market",
+  upgrade: "You're nearing your spending limit on TradingGoose Market",
   payment: "TradingGoose Market payment failed - action required",
 };
 
 export function BillingEmail({ message: m }: { message: BillingEmailMessage }) {
   const payment = m.kind === "payment";
-  const title = payment ? "We were unable to process your payment." : m.kind === "usage"
-    ? `You're at ${m.percent}% of your budget` : "Your included usage is almost used";
+  const title = payment ? "We were unable to process your payment."
+    : `You're at ${m.percent}% of your ${m.kind === "usage" ? "budget" : "spending limit"}`;
   const preview = payment ? billingSubjects.payment : m.kind === "usage"
     ? `TradingGoose Market: You're at ${m.percent}% of your PAYG monthly budget`
-    : "TradingGoose Market: PAYG is nearing its included usage";
+    : `TradingGoose Market: ${title}`;
   return <Html lang="en"><Head /><Preview>{preview}</Preview>
     <Body style={{ fontFamily: "Arial, sans-serif", color: "#18181b" }}>
       <Container style={{ maxWidth: 560, padding: 28 }}>
@@ -36,15 +36,15 @@ export function BillingEmail({ message: m }: { message: BillingEmailMessage }) {
           <Text>{m.percent}% of this month&apos;s budget</Text>
         </> : <>
           <Text>Hi {m.name || "there"},</Text>
-          <Text>You&apos;ve used {formatBillingUsd(m.current)} of the {formatBillingUsd(m.limit)} included in PAYG ({m.percent}%).</Text>
+          <Text>You&apos;ve used {formatBillingUsd(m.current)} of your {formatBillingUsd(m.limit)} spending limit ({m.percent}%).</Text>
         </>}
         <Button href={m.url} style={{ backgroundColor: "#18181b", color: "white", padding: "12px 18px", borderRadius: 6 }}>
-          {payment ? "Pay Invoice" : m.kind === "usage" ? "Review limits" : "Review Billing Tiers"}
+          {payment ? "Pay Invoice" : "Review limits"}
         </Button>
         {payment ? (
           <Text>Common reasons for payment failures include expired cards, insufficient funds, or incorrect billing information. If you continue to experience issues, contact support.</Text>
         ) : <>
-          <Text>{m.kind === "usage" ? "We send this once when your usage reaches the configured billing warning threshold so you have time to adjust your tier or limit." : "This is a one-time notification after your default tier crosses its upgrade threshold."}</Text>
+          <Text>{m.kind === "usage" ? "We send this once when your usage reaches the configured billing warning threshold so you have time to adjust your tier or limit." : "We send this once when your usage reaches 90% of your spending limit."}</Text>
           <Link href={m.unsubscribe}>Unsubscribe</Link>
         </>}
       </Container>

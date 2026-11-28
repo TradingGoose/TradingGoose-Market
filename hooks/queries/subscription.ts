@@ -2,7 +2,9 @@
 
 import { keepPreviousData, mutationOptions, useIsMutating, useQuery, type QueryClient } from "@tanstack/react-query";
 import { marketApiRequest } from "@/hooks/use-market-resource";
+import { usageLimitSummary } from "@/lib/account/billing-presentation";
 import type { BillingSummary, UsageLimitInfo } from "@/lib/account/contracts";
+import { decimalUsdToNanoUsd } from "@/lib/billing/money";
 
 const billing = "/api/account/billing";
 export const subscriptionKeys = {
@@ -43,10 +45,10 @@ export const subscriptionMutationOptions = {
         await Promise.all([client.cancelQueries({ queryKey: user }), client.cancelQueries({ queryKey: usage })]);
         const previousSubscription = client.getQueryData<BillingSummary>(user);
         const previousLimit = client.getQueryData<LimitResponse>(usage);
-        client.setQueryData<BillingSummary>(user, old => old && ({ ...old, usageLimit: {
-          ...old.usageLimit, currentLimitUsd: limitUsd,
-          percentUsed: Number(limitUsd) > 0 ? Number(old.currentPeriodCostUsd) / Number(limitUsd) * 100 : 0,
-        } }));
+        client.setQueryData<BillingSummary>(user, old => old && ({ ...old,
+          usageLimit: usageLimitSummary(old.currentPeriodCostUsd,
+            old.billingEnabled ? decimalUsdToNanoUsd(limitUsd) : null, old.billingBlocked),
+        }));
         client.setQueryData<LimitResponse>(usage, old => old && ({ usageLimit: { ...old.usageLimit, currentLimitUsd: limitUsd } }));
         return { previousSubscription, previousLimit };
       },

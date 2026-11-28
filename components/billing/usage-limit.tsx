@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, LoaderCircle, Pencil, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { decimalUsdToNanoUsd } from '@/lib/billing/money'
+import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd, usdDecimalPattern } from '@/lib/billing/money'
 import { cn } from '@/lib/ui/utils'
 import { subscriptionKeys, subscriptionMutationOptions } from '@/hooks/queries/subscription'
 
@@ -12,7 +12,6 @@ import { subscriptionKeys, subscriptionMutationOptions } from '@/hooks/queries/s
 interface UsageLimitProps {
   currentLimit: string
   currentUsage: string
-  canEdit: boolean
   minimumLimit: string
 }
 
@@ -22,7 +21,7 @@ export interface UsageLimitRef {
 
 export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
   (
-    { currentLimit, currentUsage, canEdit, minimumLimit },
+    { currentLimit, currentUsage, minimumLimit },
     ref
   ) => {
     const [draft, setDraft] = useState<string | null>(null)
@@ -31,18 +30,16 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
     const hasError = errorType !== null
     const [isEditing, setIsEditing] = useState(false)
     const inputRef = useRef<HTMLInputElement>(null)
-    const submitLockRef = useRef(false)
     const queryClient = useQueryClient()
 
     const updateUserLimitMutation = useMutation(
       subscriptionMutationOptions.updateUsageLimit(queryClient)
     )
-    const sharedPending = useIsMutating({ mutationKey: subscriptionKeys.usage() }) > 0
-    const isPending = updateUserLimitMutation.isPending || sharedPending
+    const isPending = useIsMutating({ mutationKey: subscriptionKeys.usage() }) > 0
     const saving = () => queryClient.isMutating({ mutationKey: subscriptionKeys.usage() }) > 0
 
     const handleStartEdit = () => {
-      if (!canEdit || isPending || saving()) return
+      if (saving()) return
       setDraft(null)
       setErrorType(null)
       setIsEditing(true)
@@ -64,16 +61,12 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
     }
 
     const handleSubmit = async () => {
-      if (submitLockRef.current || isPending || saving()) return
+      if (saving()) return
 
-      const decimal = draft?.match(/^(\d+)(?:\.(\d*))?$/)
-      if (!decimal) return finishEditing()
-
-      const newLimit = BigInt(decimal[1]).toString()
-      const fraction = decimal[2]?.replace(/0+$/, '')
-      const enteredLimit = fraction ? `${newLimit}.${fraction}` : newLimit
-      const newLimitNano = decimalUsdToNanoUsd(newLimit)
-      if (enteredLimit === currentLimit || newLimitNano < decimalUsdToNanoUsd(minimumLimit)) {
+      const amount = draft?.replace(/^0+(?=\d)/, '').replace(/^\.(?=\d)/, '0.').replace(/\.$/, '')
+      if (!amount || !usdDecimalPattern.test(amount)) return finishEditing()
+      const newLimitNano = decimalUsdToNanoUsd(amount)
+      if (newLimitNano === decimalUsdToNanoUsd(currentLimit) || newLimitNano < decimalUsdToNanoUsd(minimumLimit)) {
         return finishEditing()
       }
 
@@ -82,18 +75,13 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
         return
       }
 
-      if (newLimit === currentLimit) return finishEditing()
-
-      submitLockRef.current = true
       try {
-        await updateUserLimitMutation.mutateAsync(newLimit)
+        await updateUserLimitMutation.mutateAsync(nanoUsdToDecimalUsd(newLimitNano))
         finishEditing()
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         setErrorType(message.includes('below current usage') ? 'belowUsage' : 'general')
         setDraft(null)
-      } finally {
-        submitLockRef.current = false
       }
     }
 
@@ -135,7 +123,7 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
                   hasError && 'text-red-500'
                 )}
                 min={minimumLimit}
-                step='1'
+                step='0.000000001'
                 disabled={isPending}
                 autoComplete='off'
                 autoCorrect='off'
@@ -147,36 +135,28 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
           ) : (
             <span className='text-muted-foreground text-xs tabular-nums'>${currentLimit}</span>
           )}
-          {canEdit && (
-            <Button
-              variant='ghost'
-              size='icon'
-              className={cn(
-                'ml-1 h-4 w-4 p-0 transition-colors hover:bg-transparent',
-                hasError
-                  ? 'text-red-500 hover:text-red-600'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              onClick={isEditing ? handleSubmit : handleStartEdit}
-              disabled={isPending}
-              aria-busy={isPending || undefined}
-            >
-              {isPending ? (
-                <LoaderCircle className='!h-3 !w-3 animate-spin' />
-              ) : isEditing ? (
-                hasError ? (
-                  <X className='!h-3 !w-3' />
-                ) : (
-                  <Check className='!h-3 !w-3' />
-                )
-              ) : (
-                <Pencil className='!h-3 !w-3' />
-              )}
-              <span className='sr-only'>
-                {isPending ? 'Saving limit' : isEditing ? 'Save limit' : 'Edit limit'}
-              </span>
-            </Button>
-          )}
+          <Button
+            variant='ghost'
+            size='icon'
+            className={cn(
+              'ml-1 h-4 w-4 p-0 transition-colors hover:bg-transparent',
+              hasError ? 'text-red-500 hover:text-red-600' : 'text-muted-foreground hover:text-foreground'
+            )}
+            onClick={isEditing ? handleSubmit : handleStartEdit}
+            disabled={isPending}
+            aria-busy={isPending || undefined}
+          >
+            {isPending ? (
+              <LoaderCircle className='!h-3 !w-3 animate-spin' />
+            ) : isEditing ? (
+              hasError ? <X className='!h-3 !w-3' /> : <Check className='!h-3 !w-3' />
+            ) : (
+              <Pencil className='!h-3 !w-3' />
+            )}
+            <span className='sr-only'>
+              {isPending ? 'Saving limit' : isEditing ? 'Save limit' : 'Edit limit'}
+            </span>
+          </Button>
         </div>
         {hasError ? (
           <p role='alert' className='text-destructive text-xs'>

@@ -27,6 +27,7 @@ export function Unsubscribe({ email, token }: { email: string; token: string }) 
   async function unsubscribe(type: "all" | "notifications") {
     if (pending) return;
     setPending(type);
+    setError(null);
     try {
       const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, token, type }) });
@@ -37,13 +38,14 @@ export function Unsubscribe({ email, token }: { email: string; token: string }) 
   }
   return <main className="flex min-h-screen items-center justify-center bg-background p-4">
     <Card className="w-full max-w-md text-center">
-      {error ? <CardHeader role="alert"><XCircle className="mx-auto text-destructive" /><CardTitle>{error}</CardTitle></CardHeader>
+      {error && !preferences ? <CardHeader role="alert"><XCircle className="mx-auto text-destructive" /><CardTitle>{error}</CardTitle></CardHeader>
         : success ? <CardHeader role="status"><CheckCircle className="mx-auto text-green-600" /><CardTitle>Successfully Unsubscribed</CardTitle></CardHeader>
         : !preferences ? <CardContent role="status" className="p-8"><LoaderCircle aria-hidden="true" className="mx-auto animate-spin" /><span className="sr-only">Loading email preferences...</span></CardContent>
         : <><CardHeader><CardTitle>We&apos;re sorry to see you go!</CardTitle>
           <p>Choose which emails you&apos;d like to stop receiving from TradingGoose.</p></CardHeader>
           <CardContent className="flex flex-col gap-4">
             <p>{email}</p>
+            {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             <Button disabled={pending !== null || preferences.unsubscribeAll} aria-busy={pending === "all"} onClick={() => unsubscribe("all")}>
               {pending === "all" && <LoaderCircle aria-hidden="true" className="animate-spin" />}
               {preferences.unsubscribeAll ? "Unsubscribed from All Emails" : "Unsubscribe from All Marketing Emails"}

@@ -1,7 +1,8 @@
 export const NANO_USD_PER_USD = 1_000_000_000n;
+export const usdDecimalPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/;
 
 export function decimalUsdToNanoUsd(value: string): bigint {
-  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/.test(value)) {
+  if (!usdDecimalPattern.test(value)) {
     throw new TypeError("USD value must be a non-negative decimal with at most 9 places");
   }
   const [whole, fractional = ""] = value.split(".");

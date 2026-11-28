@@ -4,7 +4,7 @@ import { userStats } from "@tradinggoose/db/schema";
 import { apiRequireCustomerSession } from "@/lib/auth/session";
 import { withBillingSubjectLock } from "@/lib/db/locks";
 import { getMarketRuntimeConfig } from "@/lib/environment";
-import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd } from "@/lib/billing/money";
+import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd, usdDecimalPattern } from "@/lib/billing/money";
 import { effectiveLimitNano, isPaidBinding, readPersonalBillingState } from "@/lib/billing/user-stats";
 import type { UsageLimitInfo } from "@/lib/account/contracts";
 import { browserRouteDescriptor, rejectBrowserHead, rejectBrowserMethod, rejectBrowserOptions } from "@/lib/market-api/core/browser-route";
@@ -13,7 +13,7 @@ const TEMPLATE = "/api/account/billing/usage-limit";
 browserRouteDescriptor(TEMPLATE, "GET");
 browserRouteDescriptor(TEMPLATE, "PUT");
 
-const input = z.object({ limitUsd: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/) }).strict();
+const input = z.object({ limitUsd: z.string().regex(usdDecimalPattern) }).strict();
 
 async function usageLimit(request: Request, editing: boolean) {
   const guard = await apiRequireCustomerSession(request);

@@ -35,6 +35,6 @@ export function notificationMutationOptions(client: QueryClient, userId: string)
     onError: (_error, _value, context) => {
       if (context?.previous) client.setQueryData(queryKey, context.previous);
     },
-    onSuccess: () => client.invalidateQueries({ queryKey }),
+    onSettled: () => client.invalidateQueries({ queryKey }),
   });
 }

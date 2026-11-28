@@ -61,37 +61,32 @@ export function scheduleUsageThresholdEmail(userId: string, usageBefore: bigint,
   }
 }
 
-async function cardLastFour(stripe: Stripe, method: string | Stripe.PaymentMethod | null | undefined) {
-  const paymentMethod = typeof method === "string" ? await stripe.paymentMethods.retrieve(method) : method;
-  return paymentMethod?.card?.last4;
-}
-
 async function paymentDetails(stripe: Stripe, invoice: Stripe.Invoice) {
+  const payments = invoice.payments;
+  const payment = (payments?.data.find(p => p.is_default) ??
+    (payments?.data.length === 1 && !payments.has_more ? payments.data[0] : undefined))?.payment;
+  let reason = invoice.last_finalization_error?.message;
   let lastFour: string | undefined;
   try {
-    lastFour = await cardLastFour(stripe, invoice.default_payment_method);
-    if (!lastFour && invoice.customer) {
-      const customer = typeof invoice.customer === "string" ? await stripe.customers.retrieve(invoice.customer) : invoice.customer;
-      if (!customer.deleted) lastFour = await cardLastFour(stripe, customer.invoice_settings?.default_payment_method);
+    let chargeRef: string | Stripe.Charge | null | undefined;
+    if (payment?.type === "payment_intent" && payment.payment_intent) {
+      const ref = payment.payment_intent;
+      const intent = typeof ref === "string" ? await stripe.paymentIntents.retrieve(ref) : ref;
+      const failure = intent.last_payment_error;
+      reason ??= failure?.message;
+      if (failure?.payment_method) lastFour = failure.payment_method.card?.last4;
+      else chargeRef = failure?.charge ?? intent.latest_charge;
+    } else if (payment?.type === "charge") {
+      chargeRef = payment.charge;
     }
-  } catch { console.warn("Invoice card details unavailable", { invoiceId: invoice.id }); }
-
-  let reason = invoice.last_finalization_error?.message;
-  const payments = invoice.payments?.data;
-  const payment = (payments?.find(p => p.is_default) ?? payments?.[0])?.payment;
-  if (!reason && payment) {
-    try {
-      if (payment.type === "payment_intent" && payment.payment_intent) {
-        const pi = payment.payment_intent;
-        const intent = typeof pi === "string" ? await stripe.paymentIntents.retrieve(pi) : pi;
-        reason = intent.last_payment_error?.message;
-      } else if (payment.type === "charge" && payment.charge) {
-        const item = payment.charge;
-        const charge = typeof item === "string" ? await stripe.charges.retrieve(item) : item;
-        reason = charge.failure_message ?? undefined;
+    if (chargeRef) {
+      const charge = typeof chargeRef === "string" ? await stripe.charges.retrieve(chargeRef) : chargeRef;
+      if (charge.status === "failed") {
+        lastFour = charge.payment_method_details?.card?.last4 ?? undefined;
+        reason ??= charge.failure_message ?? undefined;
       }
-    } catch { console.warn("Invoice failure details unavailable", { invoiceId: invoice.id }); }
-  }
+    }
+  } catch { console.warn("Invoice failure details unavailable", { invoiceId: invoice.id }); }
   return { lastFour, reason };
 }
 

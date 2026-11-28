@@ -1,3 +1,4 @@
+import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd } from "@/lib/billing/money";
 import type { BillingSummary } from "./contracts";
 
 export const billingCopy = {
@@ -8,6 +9,17 @@ export const billingCopy = {
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 export const formatBillingUsd = (amount: number | string) => currency.format(Number(amount));
+
+export function usageLimitSummary(currentUsd: string, limit: bigint | null, billingBlocked: boolean): BillingSummary["usageLimit"] {
+  if (limit === null) return { currentLimitUsd: null, isExceeded: false, percentUsed: 0, status: "ok" };
+  const current = decimalUsdToNanoUsd(currentUsd);
+  const isExceeded = current >= limit;
+  return {
+    currentLimitUsd: nanoUsdToDecimalUsd(limit), isExceeded,
+    percentUsed: limit > 0n ? Number(current) / Number(limit) * 100 : 0,
+    status: billingBlocked ? "blocked" : isExceeded ? "exceeded" : current * 100n >= limit * 80n ? "warning" : "ok",
+  };
+}
 
 export function usagePills(percentUsed: number) {
   const rounded = Math.min(100, Math.max(0, Math.round(percentUsed)));
