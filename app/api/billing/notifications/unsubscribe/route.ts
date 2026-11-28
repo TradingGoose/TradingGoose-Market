@@ -4,7 +4,7 @@ import { z } from "zod";
 import { user, userStats } from "@tradinggoose/db/schema";
 import type { MarketDatabase, MarketTransaction } from "@tradinggoose/db";
 import { getMarketRuntimeConfig } from "@/lib/environment";
-import { validNotificationToken } from "@/lib/billing/notification-token";
+import { notificationTokenPattern, validNotificationToken } from "@/lib/billing/notification-token";
 import { requireDatabase } from "@/lib/db/runtime";
 import { withBillingSubjectLock } from "@/lib/db/locks";
 import { browserRouteDescriptor, rejectBrowserHead, rejectBrowserMethod, rejectBrowserOptions } from "@/lib/market-api/core/browser-route";
@@ -13,7 +13,7 @@ const TEMPLATE = "/api/billing/notifications/unsubscribe";
 browserRouteDescriptor(TEMPLATE, "GET");
 browserRouteDescriptor(TEMPLATE, "POST");
 
-const identity = z.object({ email: z.string().email(), token: z.string() }).strict();
+const identity = z.object({ email: z.string().email(), token: z.string().regex(notificationTokenPattern) }).strict();
 const confirmation = identity.extend({ type: z.enum(["notifications", "all"]) });
 const invalid = () => Response.json({ success: false, code: "invalid-link" }, { status: 400 });
 
@@ -22,11 +22,16 @@ function recipient(email: string, db: MarketDatabase | MarketTransaction = requi
     .innerJoin(userStats, eq(userStats.userId, user.id)).where(eq(user.email, email)).limit(1);
 }
 
+async function verifiedRecipient({ email, token }: z.infer<typeof identity>) {
+  const [row] = await recipient(email);
+  return row && validNotificationToken(row.id, email, token) ? row : null;
+}
+
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const parsed = identity.safeParse(Object.fromEntries(params));
-  if (!parsed.success || !validNotificationToken(parsed.data.email, parsed.data.token)) return invalid();
-  const [row] = await recipient(parsed.data.email);
+  if (!parsed.success) return invalid();
+  const row = await verifiedRecipient(parsed.data);
   if (!row) return invalid();
   if (request.headers.get("accept")?.includes("text/html")) {
     const page = new URL("/unsubscribe", getMarketRuntimeConfig().appUrl);
@@ -49,9 +54,9 @@ export async function POST(request: Request) {
     payload = await request.json().catch(() => null);
   }
   const parsed = confirmation.safeParse(payload);
-  if (!parsed.success || !validNotificationToken(parsed.data.email, parsed.data.token)) return invalid();
+  if (!parsed.success) return invalid();
   const { email, type } = parsed.data;
-  const [owner] = await recipient(email);
+  const owner = await verifiedRecipient(parsed.data);
   if (!owner) return invalid();
   return withBillingSubjectLock(owner.id, async tx => {
     const [current] = await recipient(email, tx).for("update", { of: user });

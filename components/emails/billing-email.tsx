@@ -24,7 +24,7 @@ export function BillingEmail({ message: m }: { message: BillingEmailMessage }) {
         <Heading>{title}</Heading>
         {payment ? <>
           <Text>Hi {m.name || "there"},</Text>
-          <Text>Your TradingGoose Market account has been temporarily blocked to prevent service interruptions and unexpected charges. To restore access immediately, please update your payment method.</Text>
+          <Text>Your TradingGoose Market account has been temporarily blocked to prevent service interruptions and unexpected charges. To restore access, please pay all outstanding usage invoices.</Text>
           <Heading as="h2">Payment Details</Heading>
           <Text>Amount due: {formatBillingUsd(m.amount)}</Text>
           {m.lastFour && <Text>Payment method: **** {m.lastFour}</Text>}
@@ -39,12 +39,11 @@ export function BillingEmail({ message: m }: { message: BillingEmailMessage }) {
           <Text>You&apos;ve used {formatBillingUsd(m.current)} of the {formatBillingUsd(m.limit)} included in PAYG ({m.percent}%).</Text>
         </>}
         <Button href={m.url} style={{ backgroundColor: "#18181b", color: "white", padding: "12px 18px", borderRadius: 6 }}>
-          {payment ? "Update Payment Method" : m.kind === "usage" ? "Review limits" : "Review Billing Tiers"}
+          {payment ? "Pay Invoice" : m.kind === "usage" ? "Review limits" : "Review Billing Tiers"}
         </Button>
-        {payment ? <>
-          <Text>Update your payment method to restore service immediately. Stripe will automatically retry the charge once payment is updated.</Text>
+        {payment ? (
           <Text>Common reasons for payment failures include expired cards, insufficient funds, or incorrect billing information. If you continue to experience issues, contact support.</Text>
-        </> : <>
+        ) : <>
           <Text>{m.kind === "usage" ? "We send this once when your usage reaches the configured billing warning threshold so you have time to adjust your tier or limit." : "This is a one-time notification after your default tier crosses its upgrade threshold."}</Text>
           <Link href={m.unsubscribe}>Unsubscribe</Link>
         </>}

@@ -43,7 +43,7 @@ export function scheduleUsageThresholdEmail(userId: string, usageBefore: bigint,
           email: user.email, name: user.name, enabled: userStats.billingUsageNotificationsEnabled, preferences: userStats.emailPreferences,
         }).from(user).innerJoin(userStats, eq(userStats.userId, user.id)).where(eq(user.id, userId)).limit(1);
         if (!recipient?.enabled || recipient.preferences.unsubscribeAll || recipient.preferences.unsubscribeNotifications) return;
-        const params = new URLSearchParams({ email: recipient.email, token: notificationToken(recipient.email) });
+        const params = new URLSearchParams({ email: recipient.email, token: notificationToken(userId, recipient.email) });
         for (const kind of ["usage", "upgrade"] as const) {
           if (kind === "usage" ? !warning : !upgrade) continue;
           await send(recipient.email, {
