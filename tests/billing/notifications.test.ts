@@ -34,7 +34,10 @@ it.each([[79, 80, 1], [89, 90, 1], [79, 95, 2], [80, 89, 0], [90, 99, 0]])("send
     expect(mail.html).toContain("/account/api-keys?billing=");
     const url = new URL(mail.headers["List-Unsubscribe"].slice(1, -1));
     expect(url.pathname).toBe("/api/billing/notifications/unsubscribe");
-    expect(validNotificationToken(recipient.email, url.searchParams.get("token")!)).toBe(true);
+    expect([...url.searchParams.keys()]).toEqual(["email", "token"]);
+    expect(url.searchParams.get("email")).toBe(recipient.email);
+    expect(validNotificationToken("user", recipient.email, url.searchParams.get("token")!)).toBe(true);
+    expect(mail.text).toContain(`/unsubscribe?${url.searchParams}`);
     expect(mail.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
   }
 });
@@ -52,9 +55,13 @@ it("skips disabled and zero limits before scheduling delivery", () => {
   expect(state.after).not.toHaveBeenCalled();
   expect(state.recipients).not.toHaveBeenCalled();
 });
-it("binds the three-part token to the email and category", () => {
-  const token = notificationToken(recipient.email);
-  expect(validNotificationToken("other@example.com", token)).toBe(false);
-  for (const bad of [token.slice(1), token + ":more", token.replace(":notifications", ""), token.replace("notifications", "all")])
-    expect(validNotificationToken(recipient.email, bad)).toBe(false);
+it("binds the three-part notification token to the account and email", () => {
+  const token = notificationToken("user", recipient.email);
+  expect(token).toMatch(/^[a-f0-9]{32}:[a-f0-9]{64}:notifications$/);
+  expect(validNotificationToken("user", recipient.email, token)).toBe(true);
+  expect(validNotificationToken("other", recipient.email, token)).toBe(false);
+  expect(validNotificationToken("user", "other@example.com", token)).toBe(false);
+  const emailOnlyToken = "00000000000000000000000000000000:f924372ccf916b7184b256658951ec55982fa191b6bfde9f8c5391b1ebede9e3:notifications";
+  for (const bad of [emailOnlyToken, token.slice(1), token + ":more", token.replace(":notifications", ""), token.replace("notifications", "all")])
+    expect(validNotificationToken("user", recipient.email, bad)).toBe(false);
 });

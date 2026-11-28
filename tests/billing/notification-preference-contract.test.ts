@@ -1,12 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   stats: { billingUsageNotificationsEnabled: true, emailPreferences: {} as Record<string, boolean> },
-  write: vi.fn(), owner: true,
+  write: vi.fn(), beforeLock: vi.fn(), ownerId: "own" as string | null,
 }));
 function database() {
   let fields: Record<string, unknown>;
-  const rows = () => !state.owner ? [] : fields && "currentPreferences" in fields
-    ? [{ id: "own", currentPreferences: state.stats.emailPreferences }]
+  const rows = () => !state.ownerId ? [] : fields && "currentPreferences" in fields
+    ? [{ id: state.ownerId, currentPreferences: state.stats.emailPreferences }]
     : [{ billingUsageNotificationsEnabled: state.stats.billingUsageNotificationsEnabled }];
   const read = { innerJoin: () => read, where: () => read, limit: () => read, from: () => read,
     for: () => read, then: (resolve: (v: unknown) => unknown) => resolve(rows()) };
@@ -19,7 +19,10 @@ function database() {
   };
 }
 vi.mock("@/lib/db/runtime", () => ({ requireDatabase: () => database() }));
-vi.mock("@/lib/db/locks", () => ({ withBillingSubjectLock: (_id: string, fn: (db: unknown) => unknown) => fn(database()) }));
+vi.mock("@/lib/db/locks", () => ({ withBillingSubjectLock: (id: string, fn: (db: unknown) => unknown) => {
+  state.beforeLock(id);
+  return fn(database());
+} }));
 vi.mock("@/lib/environment", () => ({ getMarketRuntimeConfig: () => ({ appUrl: "http://market.test", betterAuth: { secret: "secret" } }) }));
 vi.mock("@/lib/auth/session", () => ({ apiRequireCustomerSession: () => ({ user: { id: "own" } }) }));
 import { GET, PATCH } from "@/app/api/account/billing/notifications/route";
@@ -27,11 +30,11 @@ import { GET as preview, POST as unsubscribe } from "@/app/api/billing/notificat
 import { notificationToken } from "@/lib/billing/notification-token";
 const url = "http://market.test/api/billing/notifications/unsubscribe";
 const email = "amy@example.com";
-const link = () => `${url}?${new URLSearchParams({ email, token: notificationToken(email) })}`;
+const link = (token = notificationToken("own", email)) => `${url}?${new URLSearchParams({ email, token })}`;
 const json = (body: unknown) => new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 beforeEach(() => {
-  state.owner = true; state.stats.billingUsageNotificationsEnabled = true; state.stats.emailPreferences = {};
-  state.write.mockClear();
+  state.ownerId = "own"; state.stats.billingUsageNotificationsEnabled = true; state.stats.emailPreferences = {};
+  state.write.mockClear(); state.beforeLock.mockReset();
 });
 it("persists the own-session switch independently of unsubscribe flags", async () => {
   state.stats.emailPreferences = { unsubscribeAll: true };
@@ -60,11 +63,38 @@ it.each(["form", "multipart"])("accepts signed %s one-click and replay without c
   expect(state.stats).toMatchObject({ billingUsageNotificationsEnabled: true, emailPreferences: { unsubscribeAll: true, unsubscribeNotifications: true } });
 });
 it("validates JSON confirmation and rejects token substitution or missing state", async () => {
-  const token = notificationToken(email);
+  const token = notificationToken("own", email);
   expect((await unsubscribe(json({ email: "other@example.com", token, type: "all" }))).status).toBe(400);
   expect((await unsubscribe(json({ email, token, type: "marketing" }))).status).toBe(400);
   expect(state.write).not.toHaveBeenCalled();
   expect(await (await unsubscribe(json({ email, token, type: "all" }))).json()).toMatchObject({ success: true, type: "all" });
-  state.owner = false;
+  state.ownerId = null;
   expect((await unsubscribe(json({ email, token, type: "all" }))).status).toBe(400);
+});
+it("restricts previews, confirmation and one-click to the account that received the link", async () => {
+  const token = notificationToken("own", email);
+  state.ownerId = "new-owner";
+  const responses = [
+    await preview(new Request(link(token))),
+    await preview(new Request(link(token), { headers: { accept: "text/html" } })),
+    await unsubscribe(json({ email, token, type: "all" })),
+    await unsubscribe(new Request(link(token), { method: "POST", body: new URLSearchParams({ "List-Unsubscribe": "One-Click" }) })),
+  ];
+  for (const response of responses) {
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ success: false, code: "invalid-link" });
+  }
+  expect(state.beforeLock).not.toHaveBeenCalled();
+  expect(state.write).not.toHaveBeenCalled();
+  const currentToken = notificationToken(state.ownerId, email);
+  expect((await preview(new Request(link(currentToken)))).status).toBe(200);
+  expect((await unsubscribe(json({ email, token: currentToken, type: "notifications" }))).status).toBe(200);
+  expect(state.stats.emailPreferences).toEqual({ unsubscribeNotifications: true });
+});
+it("rechecks address ownership under the billing lock before a preference write", async () => {
+  const token = notificationToken("own", email);
+  state.beforeLock.mockImplementationOnce(() => { state.ownerId = "new-owner"; });
+  expect((await unsubscribe(json({ email, token, type: "notifications" }))).status).toBe(400);
+  expect(state.beforeLock).toHaveBeenCalledWith("own");
+  expect(state.write).not.toHaveBeenCalled();
 });

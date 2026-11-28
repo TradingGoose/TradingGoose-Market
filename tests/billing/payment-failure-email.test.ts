@@ -29,6 +29,12 @@ it("includes amount, hosted URL, invoice card and finalization error despite all
   expect(mail.subject).toBe("TradingGoose Market payment failed - action required");
   expect(mail.headers).toBeUndefined();
   for (const text of ["Amy", "$12.34", "1234", "Payment refused", invoice.hosted_invoice_url]) expect(mail.html).toContain(text);
+  expect(mail.html).toMatch(/<a[^>]*href="https:\/\/invoice\.stripe\.com\/payment"[^>]*>.*?Pay Invoice.*?<\/a>/s);
+  for (const body of [mail.html, mail.text]) {
+    expect(body).toContain("To restore access, please pay all outstanding usage invoices.");
+    expect(body).not.toMatch(/immediately|automatically retry|update payment method/i);
+  }
+  expect(mail.text).toContain(`Pay Invoice ${invoice.hosted_invoice_url}`);
   expect(mail.text).not.toMatch(/unsubscribe/i);
   expect(provider.customers.retrieve).not.toHaveBeenCalled();
 });
