@@ -19,6 +19,11 @@ export interface UsageLimitRef {
   startEdit: () => void
 }
 
+function parseLimitInput(value: string) {
+  const amount = value.replace(/^0+(?=\d)/, '').replace(/^\.(?=\d)/, '0.').replace(/\.$/, '')
+  return usdDecimalPattern.test(amount) ? decimalUsdToNanoUsd(amount) : null
+}
+
 export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
   (
     { currentLimit, currentUsage, minimumLimit },
@@ -63,10 +68,9 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
     const handleSubmit = async () => {
       if (saving()) return
 
-      const amount = draft?.replace(/^0+(?=\d)/, '').replace(/^\.(?=\d)/, '0.').replace(/\.$/, '')
-      if (!amount || !usdDecimalPattern.test(amount)) return finishEditing()
-      const newLimitNano = decimalUsdToNanoUsd(amount)
-      if (newLimitNano === decimalUsdToNanoUsd(currentLimit) || newLimitNano < decimalUsdToNanoUsd(minimumLimit)) {
+      const newLimitNano = parseLimitInput(inputValue)
+      if (newLimitNano === null || newLimitNano === decimalUsdToNanoUsd(currentLimit) ||
+          newLimitNano < decimalUsdToNanoUsd(minimumLimit)) {
         return finishEditing()
       }
 
@@ -92,6 +96,15 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
       } else if (e.key === 'Escape') {
         e.preventDefault()
         finishEditing()
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        const current = parseLimitInput(inputValue || '0')
+        if (current === null) return
+        const minimum = decimalUsdToNanoUsd(minimumLimit)
+        const steppingDown = e.key === 'ArrowDown'
+        if (steppingDown && inputValue !== '' && current <= minimum) return
+        const next = steppingDown ? current - 1n : current + 1n
+        setDraft(nanoUsdToDecimalUsd(next < minimum ? minimum : next))
       }
     }
 

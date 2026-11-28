@@ -51,6 +51,9 @@ it("selects the denominator and handles Escape, invalid edits, usage floors, blu
   expect(screen.getByRole("alert").textContent).toContain("Limit cannot be below current usage");
   const input = screen.getByRole("spinbutton");
   expect(input.getAttribute("step")).toBe("0.000000001");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input).toHaveProperty("value", "11.000000001");
+  expect(screen.getByRole("alert").textContent).toContain("Limit cannot be below current usage");
   fireEvent.change(input, { target: { value: "40.9" } });
   expect(screen.getByRole("alert").textContent).toContain("Limit cannot be below current usage");
   const check = screen.getByRole("button", { name: "Save limit" });
@@ -97,6 +100,25 @@ it.each([
   await screen.findByRole("button", { name: "Edit limit" });
   expect(f.server.limit.currentLimitUsd).toBe(expected);
   expect(f.count("PUT", limitPath)).toBe(1);
+});
+it.each([
+  { initial: "0", draft: null, key: "ArrowUp", minimum: "0", expected: "0.000000001" },
+  { initial: "0.000000002", draft: null, key: "ArrowDown", minimum: "0", expected: "0.000000001" },
+  { initial: "25", draft: "9007199254740993.123456789", key: "ArrowUp", minimum: "0", expected: "9007199254740993.12345679" },
+  { initial: "0.125", draft: null, key: "ArrowDown", minimum: "0.125", expected: "0.125" },
+  { initial: "25", draft: "", key: "ArrowUp", minimum: "0.125", expected: "0.125" },
+])("saves an exact keyboard step from $initial (draft $draft, $key, minimum $minimum)", async ({ initial, draft, key, minimum, expected }) => {
+  const f = billingFixture({ currentPeriodCostUsd: "0" }, { currentLimitUsd: initial, minimumLimitUsd: minimum });
+  renderSettings(f.client);
+  fireEvent.click(screen.getByRole("button", { name: "Increase Limit" }));
+  const input = screen.getByRole("spinbutton");
+  if (draft !== null) fireEvent.change(input, { target: { value: draft } });
+  expect(fireEvent.keyDown(input, { key })).toBe(false);
+  expect(input).toHaveProperty("value", expected);
+  fireEvent.keyDown(input, { key: "Enter" });
+  await screen.findByRole("button", { name: "Edit limit" });
+  expect(f.server.limit.currentLimitUsd).toBe(expected);
+  expect(f.count("PUT", limitPath)).toBe(expected === initial ? 0 : 1);
 });
 it("restores the confirmed input on a server error and rejects pre-render duplicate submits", async () => {
   const f = billingFixture();
