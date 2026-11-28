@@ -12,7 +12,7 @@ import {
   withoutPaygActivationAttemptId,
 } from "../subscription";
 import { createAndSettleUsageInvoice, reconcileUsageInvoices } from "../threshold-billing";
-import { resolveRetainedUserStatsForSubscription } from "../user-stats";
+import { freeEntryValues, resolveRetainedUserStatsForSubscription } from "../user-stats";
 import { isExactMarketSubscription } from "../activation";
 import { settleClosedMarketUsagePeriods } from "./closed-period-settlement";
 
@@ -309,25 +309,10 @@ export async function handleMarketSubscriptionDeleted(
         throw new Error("Stripe final invoice snapshot differs from canceled usage");
       }
     }
-    if (hasCurrentUsage) {
-      await tx
-        .update(userStats)
-        .set({
-          lastPeriodRequestQuantity: stats.currentPeriodRequestQuantity,
-          lastPeriodCost: stats.currentPeriodCost,
-          currentPeriodRequestQuantity: "0",
-          currentPeriodCost: "0",
-          billedOverageThisPeriod: "0",
-          updatedAt: new Date(),
-        })
-        .where(eq(userStats.id, stats.id));
-    }
-    // This binding can be removed only after every retained usage slice has
-    // settled, so its payment block must not leak into a later activation.
-    if (stats.billingBlocked) {
-      await tx.update(userStats).set({ billingBlocked: false, updatedAt: new Date() })
-        .where(eq(userStats.id, stats.id));
-    }
+    await tx.update(userStats).set({
+      ...freeEntryValues(getMarketRuntimeConfig().billing.onboardingAllowanceUsd, stats.grantedOnboardingAllowanceUsd),
+      ...(hasCurrentUsage && { lastPeriodRequestQuantity: stats.currentPeriodRequestQuantity, lastPeriodCost: stats.currentPeriodCost }),
+    }).where(eq(userStats.id, stats.id));
     const cleared = await tx
       .update(subscription)
       .set({

@@ -16,6 +16,7 @@ export async function insertMarketUsageAdmission(input: {
   descriptor: KeyedMarketRouteDescriptor;
   method: "GET" | "HEAD" | "POST";
   billingMode: "enabled" | "disabled";
+  stripeSubscriptionId: string | null;
   rateUsdPer1000Reads: string | null;
   billableCostUsd: string | null;
   attribution: MarketAppAttribution;
@@ -39,6 +40,7 @@ export async function insertMarketUsageAdmission(input: {
     method: input.method,
     apiVersion: "v1",
     billingMode: input.billingMode,
+    stripeSubscriptionId: input.stripeSubscriptionId,
     billableQuantity: billable ? 1 : 0,
     rateUsdPer1000Reads: billable ? input.rateUsdPer1000Reads : null,
     billableCostUsd: billable ? input.billableCostUsd : null,

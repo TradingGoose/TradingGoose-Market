@@ -4,6 +4,9 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { baseSummary, queryClient, wrapper } from "../helpers/billing-ui";
+import { subscriptionKeys } from "@/hooks/queries/subscription";
+
 const market = vi.hoisted(() => ({
   resources: new Map<string, Record<string, unknown>>(),
   resourceUrls: [] as string[],
@@ -89,6 +92,7 @@ const detail: MarketApiKeyDetail = {
 
 function billing(enabled: boolean) {
   return {
+    ...baseSummary,
     billingEnabled: enabled,
     billingBlocked: false,
     plan: "payg",
@@ -104,9 +108,12 @@ function billing(enabled: boolean) {
 }
 
 function renderPage(page: React.ReactElement) {
+  const client = queryClient();
+  client.setQueryData(subscriptionKeys.user(), market.resources.get("/api/account/billing")?.data ?? baseSummary);
+  const BillingProvider = wrapper(client);
   return render(page, {
     wrapper: ({ children }) => (
-      <TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+      <BillingProvider><TooltipProvider delayDuration={0}>{children}</TooltipProvider></BillingProvider>
     ),
   });
 }
@@ -117,10 +124,19 @@ describe("OpenRouter-shaped Market API-key canvases", () => {
     market.resources.set("/api/account/api-keys", { data: { keys: [summary] }, error: null, isLoading: false });
     market.resources.set("/api/account/billing", { data: { ...billing(true), billingBlocked: true }, error: null, isLoading: false });
     renderPage(<AccountKeysPage />);
-    expect(screen.getByText(/API access is paused because a usage payment failed/)).toBeTruthy();
+    expect(screen.getByText("Payment failed. Please update your payment method.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Studio client" })).toBeTruthy();
     await interaction.click(screen.getByRole("button", { name: "New Key" }));
     expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create key" })).toBeTruthy();
+  });
+  it("shows an account cap while keeping the independent rolling-key controls available", async () => {
+    market.resources.set("/api/account/api-keys", { data: { keys: [summary] } });
+    market.resources.set("/api/account/billing", { data: { ...billing(true),
+      usageLimit: { currentLimitUsd: "25", isExceeded: true, percentUsed: 100, status: "exceeded" } } });
+    renderPage(<AccountKeysPage />);
+    expect(screen.getByText("Usage limit exceeded. Increase your limit to continue.")).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole("button", { name: "New Key" }));
     expect(screen.getByRole("button", { name: "Create key" })).toBeTruthy();
   });
   it("renders real key fields, search/count hierarchy, and disabled-billing notice", () => {
@@ -142,7 +158,7 @@ describe("OpenRouter-shaped Market API-key canvases", () => {
     expect(screen.getByText("$5")).toBeTruthy();
     expect(screen.getByText("7 rolling days")).toBeTruthy();
     expect(screen.getByText("1 of 1 keys")).toBeTruthy();
-    expect(screen.getByText(/Saved per-key spend limits remain editable/i)).toBeTruthy();
+    expect(screen.getByText("Billing is not enabled.")).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/models|tokens|provider credits|guardrails/iu);
   });
 
@@ -229,7 +245,10 @@ describe("OpenRouter-shaped Market API-key canvases", () => {
 
     await interaction.click(screen.getByRole("button", { name: "New Key" }));
     await interaction.type(screen.getByLabelText("Name"), "Studio client");
-    await interaction.click(screen.getByRole("switch", { name: "Spend limit" }));
+    await interaction.click(screen.getByRole("switch", {
+      name: "Spend limit",
+      description: "Caps this key’s spending over 1–30 rolling days, separately from your account limit.",
+    }));
     await interaction.type(screen.getByLabelText("Spend limit (whole USD)"), "5");
     await interaction.type(screen.getByLabelText("Rolling window (days)"), "31");
     await interaction.click(screen.getByRole("button", { name: "Create key" }));

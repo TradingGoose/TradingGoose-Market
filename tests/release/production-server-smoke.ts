@@ -1,3 +1,4 @@
+import postgres from "postgres";
 import { deepStrictEqual } from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { rm } from "node:fs/promises";
@@ -115,6 +116,7 @@ function createModeEnvironment(
     ...base,
     NODE_ENV: "production",
     EMAIL_VERIFICATION_ENABLED: "true",
+    ONBOARDING_ALLOWANCE_USD: "25",
     EMAIL_DOMAIN: "example.com",
   };
   for (const key of RELEASE_CLEARED_ENV_KEYS) delete environment[key];
@@ -382,8 +384,10 @@ async function smokeAllowedOwners(target: SmokeTarget): Promise<void> {
   }
 
   await smokePrivateWithoutKey(target);
+  const unsigned = await request(target, "/api/billing/notifications/unsubscribe", "GET");
+  invariant(unsigned.status === 400, "Unsigned unsubscribe link was accepted.");
 
-  for (const path of ["/api/account/billing", "/api/admin/api-keys"]) {
+  for (const path of ["/api/account/billing", "/api/account/billing/usage-limit", "/api/account/billing/notifications", "/api/admin/api-keys"]) {
     const response = await request(target, path, "GET");
     invariant(response.status === 401, `Unauthenticated owner ${path} returned ${response.status}.`);
   }
@@ -461,6 +465,7 @@ async function smokeRetainedOwners(
 
 async function smokeRegistrationPolicy(
   target: SmokeTarget,
+  environment: NodeJS.ProcessEnv,
   mode: (typeof MARKET_RELEASE_MODES)[number],
 ): Promise<void> {
   if (mode.registrationMode === "open" && mode.billingEnabled) return;
@@ -489,6 +494,7 @@ async function smokeRegistrationPolicy(
   const payload = (await response.json()) as {
     token?: unknown;
     user?: {
+      id?: string;
       name?: unknown;
       email?: unknown;
       emailVerified?: unknown;
@@ -500,6 +506,26 @@ async function smokeRegistrationPolicy(
   invariant(payload.user.email === RELEASE_SIGNUP.email, "Open registration returned the wrong email.");
   invariant(payload.user.emailVerified === false, "Open registration returned a verified user.");
   invariant(payload.user.image === null, "Open registration returned an unexpected image.");
+  const userId = payload.user.id;
+  invariant(userId && environment.DATABASE_URL, "Missing release signup identity or database.");
+  const sql = postgres(environment.DATABASE_URL, { max: 1, prepare: false });
+  try {
+    const rows = await sql`
+      select s.id
+      from market_usage_owner o
+      join user_stats u on u.usage_owner_id = o.id and u.user_id = o.user_id and u.billing_reference_id = o.user_id
+      join subscription s on s.reference_id = u.billing_reference_id and s.reference_type = 'user' and s.plan = 'payg'
+      where o.user_id = ${userId} and s.id = ${`sub_default_${userId}`}
+        and s.stripe_customer_id is null and s.stripe_subscription_id is null
+        and u.granted_onboarding_allowance_usd = ${environment.ONBOARDING_ALLOWANCE_USD!}
+        and u.custom_usage_limit = u.granted_onboarding_allowance_usd and u.custom_usage_limit_updated_at is not null
+        and u.billing_usage_notifications_enabled and u.email_preferences = '{}'::jsonb
+        and u.total_cost = 0 and u.current_period_cost = 0 and u.last_period_cost = 0 and u.billed_overage_this_period = 0
+        and u.total_request_quantity = 0 and u.current_period_request_quantity = 0 and u.last_period_request_quantity = 0`;
+    invariant(rows.length === 1, "Signup did not persist its canonical personal billing graph and configured grant.");
+  } finally {
+    await sql.end();
+  }
 }
 
 async function smokeRemovedOwners(target: SmokeTarget): Promise<void> {
@@ -602,7 +628,7 @@ async function runMode(
     await smokeExactManifest(target);
     await smokeAllowedOwners(target);
     await smokeRetainedOwners(target, mode);
-    await smokeRegistrationPolicy(target, mode);
+    await smokeRegistrationPolicy(target, environment, mode);
     await smokeRemovedOwners(target);
   } finally {
     await terminateServer(server);

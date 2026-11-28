@@ -30,8 +30,10 @@ export async function dispatchMarketStripeEvent(event: Stripe.Event) {
       case "invoice.finalized":
         await handleMarketCycleInvoiceFinalized(client, event.data.object);
         return;
-      case "invoice.paid":
       case "invoice.payment_failed":
+        await handleMarketUsageInvoicePayment(client, event.data.object, true);
+        return;
+      case "invoice.paid":
         await handleMarketUsageInvoicePayment(client, event.data.object);
         return;
       default:

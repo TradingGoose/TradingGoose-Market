@@ -305,6 +305,17 @@ describe("Studio-parity PAYG threshold settlement", () => {
     expect(transaction.updates).toEqual([]);
   });
 
+  it.each([
+    { status: null, stripeCustomerId: null, stripeSubscriptionId: null },
+    { status: "canceled", stripeCustomerId: null, stripeSubscriptionId: null },
+    { status: "canceled", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_retained" },
+  ])("skips a direct threshold check for an unbound or inactive ledger ($status, $stripeSubscriptionId)", async binding => {
+    const tx = transactionFixture({ currentPeriodCost: "40", billedOverageThisPeriod: "0" }, binding);
+    await checkAndBillMarketThreshold(tx.client, "user_1");
+    expect(tx.selectCount()).toBe(1);
+    expect(state.stripeClient).not.toHaveBeenCalled();
+    expect(tx.updates).toEqual([]);
+  });
   it("skips threshold payment when a prior settlement blocked the locked accumulator", async () => {
     const transaction = transactionFixture({ currentPeriodCost: "2", billedOverageThisPeriod: "0", billingBlocked: true });
     await checkAndBillMarketThreshold(transaction.client, "user_1");
@@ -318,7 +329,7 @@ function transactionFixture(costs: {
   currentPeriodCost: string;
   billedOverageThisPeriod: string;
   billingBlocked?: boolean;
-}) {
+}, binding?: { status: string | null; stripeCustomerId: string | null; stripeSubscriptionId: string | null }) {
   let selects = 0;
   const updates: Array<Record<string, unknown>> = [];
   const localSubscription = {
@@ -330,6 +341,7 @@ function transactionFixture(costs: {
     stripeCustomerId: "cus_1",
     stripeSubscriptionId: "sub_provider",
     periodEnd: new Date("2026-08-31T00:00:00.000Z"),
+    ...binding,
   };
   const stats = {
     id: "stats_1",

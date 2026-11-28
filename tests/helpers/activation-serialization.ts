@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 import type Stripe from "stripe";
+import { usageStripeFixture } from "../billing/stripe-usage-fixture";
 import { expect, vi } from "vitest";
 
 /** Exercises the real activation owner and advisory locks in the migrated fixture. */
@@ -22,7 +23,7 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
   const baseConfig = environment.getMarketRuntimeConfig();
   const configSpy = vi.spyOn(environment, "getMarketRuntimeConfig").mockReturnValue({
     ...baseConfig,
-    billing: { ...baseConfig.billing, enabled: true, stripePriceId: priceId },
+    billing: { ...baseConfig.billing, enabled: true, onboardingAllowanceUsd: "25", stripePriceId: priceId },
   });
   const providers = new Map<string, Stripe.Subscription>();
   const idempotentCreates = new Map<string, Stripe.Subscription>();
@@ -77,7 +78,9 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     idempotentCreates.set(options.idempotencyKey, provider);
     return provider;
   });
+  const settlement = usageStripeFixture();
   const provider = {
+    ...settlement.client,
     customers: { retrieve: retrieveCustomer, create: createCustomer },
     subscriptions: { list, retrieve, create },
   } as unknown as Stripe;
@@ -322,6 +325,58 @@ export async function assertActivationSerialization(monitor: ReturnType<typeof p
     expect(active[0].customer).toBe(nextCustomer);
     expect(final).toMatchObject({ value: { stripeSubscriptionId: active[0].id } });
     expect(create).toHaveBeenCalledTimes(postsBeforeReplacement + 2);
+
+    // Drive the allowance checkpoint through the normal admission, activation and final invoice owners.
+    const [access, manifest, keyRuntime] = await Promise.all([import("../../lib/market-api/core/access"),
+      import("../../lib/market-api/core/manifest"), import("../../lib/unkey/runtime")]);
+    const keyId = "allowance_lifecycle_key";
+    await monitor`insert into market_api_keys (id, usage_owner_id, user_id, unkey_key_id, key_class, name, display_value,
+      spend_limit_revision, spend_limit_updated_at) select ${keyId}, usage_owner_id, user_id, ${keyId}, 'public',
+      'Lifecycle', 'tg_lifecycle_masked', 1, now() from user_stats where user_id = ${userId}`;
+    const keySpy = vi.spyOn(keyRuntime, "getMarketKeyProvider").mockReturnValue({
+      verifyKey: async () => ({ valid: true, code: "VALID", keyId, permissions: ["market.public"], ratelimits: [] }),
+    } as unknown as ReturnType<typeof keyRuntime.getMarketKeyProvider>);
+    const route = manifest.resolveKeyedMarketRoute("/api/search/countries")!;
+    const readAt = async (cost: number) => {
+      configSpy.mockReturnValue({ ...baseConfig, billing: { ...baseConfig.billing, enabled: true, stripePriceId: priceId,
+        onboardingAllowanceUsd: "25", invoiceThresholdUsd: "100", usdPer1000Reads: String(cost * 1000), requestNanoUsd: BigInt(cost) * 1_000_000_000n } });
+      const request = new Request("http://market.test/api/search/countries?version=v1", { headers: { "x-api-key": "tg_lifecycle_test" } });
+      expect((await access.handleKeyedMarketRoute(request, route, async () => Response.json({}))).status).toBe(200);
+    };
+    const cancel = async (id: string | null) => {
+      if (!id) throw new Error("Expected a bound provider subscription");
+      const sub = providers.get(id)!;
+      sub.status = "canceled";
+      await webhooks.handleMarketSubscriptionDeleted(provider, sub);
+    };
+    const balance = async () => (await monitor`select trim_scale(granted_onboarding_allowance_usd)::text as grant,
+      trim_scale(custom_usage_limit)::text as cap, trim_scale(current_period_cost)::text as used,
+      trim_scale(last_period_cost)::text as last from user_stats where user_id = ${userId}`)[0];
+    try {
+      await cancel(active[0].id);
+      await readAt(7);
+      expect(await balance()).toMatchObject({ grant: "25", cap: "25", used: "7" });
+      const first = await activation.activateMarketPayg(userId);
+      expect(await balance()).toMatchObject({ grant: "18", cap: "25", used: "0", last: "7" });
+      await readAt(4);
+      await cancel(first.stripeSubscriptionId);
+      expect(settlement.charges).toEqual([400]);
+      expect(await balance()).toEqual({ grant: "18", cap: "25", used: "7", last: "4" });
+      const immediate = await activation.activateMarketPayg(userId);
+      expect(await balance()).toEqual({ grant: "18", cap: "25", used: "0", last: "4" });
+      await cancel(immediate.stripeSubscriptionId);
+      await readAt(3);
+      expect(await balance()).toMatchObject({ grant: "18", cap: "25", used: "10" });
+      const afterNewUsage = await activation.activateMarketPayg(userId);
+      expect(await balance()).toMatchObject({ grant: "15", used: "0", last: "3" });
+      await cancel(afterNewUsage.stripeSubscriptionId);
+      await activation.activateMarketPayg(userId);
+      expect(await balance()).toMatchObject({ grant: "15", used: "0", last: "3" });
+      expect(settlement.charges).toEqual([400]);
+      const events = await monitor`select stripe_subscription_id as funding, trim_scale(billable_cost_usd)::text as cost
+        from market_api_usage_events where market_api_key_id = ${keyId} order by admitted_at`;
+      expect(events).toEqual([{ funding: null, cost: "7" }, { funding: first.stripeSubscriptionId, cost: "4" }, { funding: null, cost: "3" }]);
+    } finally { keySpy.mockRestore(); }
 
     // A lost Customer creation response and profile edits must reuse exactly
     // the original create request, for initial and deleted-Customer recovery.

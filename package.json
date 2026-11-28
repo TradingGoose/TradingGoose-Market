@@ -18,6 +18,7 @@
     "test:watch": "bun run db:build && vitest",
     "db:build": "bun run --cwd ./packages/db build",
     "db:generate": "bun run --cwd ./packages/db db:generate",
+    "db:push": "bun run --cwd ./packages/db db:push",
     "db:migrate": "bun run --cwd ./packages/db db:migrate",
     "admin:manage": "bun run scripts/manage-market-admin.ts"
   },
@@ -37,6 +38,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@react-email/components": "1.0.12",
     "@react-email/render": "2.0.4",
+    "@tanstack/react-query": "5.90.8",
     "@tanstack/react-table": "^8.20.5",
     "@unkey/api": "2.4.0",
     "@unkey/ratelimit": "2.1.4",

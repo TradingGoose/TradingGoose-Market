@@ -207,6 +207,8 @@ const privateRoutes = [
 
 const accountRoutes = [
   nonKeyed("account.billing", "/api/account/billing", ["GET"], "customer-session", "browser"),
+  nonKeyed("account.billing.usage-limit", "/api/account/billing/usage-limit", ["GET", "PUT"], "customer-session", "browser"),
+  nonKeyed("account.billing.notifications", "/api/account/billing/notifications", ["GET", "PATCH"], "customer-session", "browser"),
   nonKeyed("account.billing.activate", "/api/account/billing/payg/activate", ["POST"], "customer-session", "browser"),
   nonKeyed("account.billing.portal", "/api/account/billing/portal", ["POST"], "customer-session", "browser"),
   nonKeyed("account.api-keys", "/api/account/api-keys", ["GET", "POST"], "customer-session", "browser"),
@@ -298,6 +300,7 @@ const authRoutes = [
 
 const supportRoutes = [
   nonKeyed("billing.stripe.webhook", "/api/billing/stripe/webhook", ["POST"], "stripe-webhook", "protocol"),
+  nonKeyed("billing.notifications.unsubscribe", "/api/billing/notifications/unsubscribe", ["GET", "POST"], "public-support", "support"),
   nonKeyed("support.health", "/api/health", ["GET", "HEAD"], "public-support", "support"),
   nonKeyed("support.files", "/api/files/serve/[...key]", ["GET", "HEAD"], "public-support", "support"),
   nonKeyed("support.github-stars", "/api/github-stars", ["GET", "HEAD"], "public-support", "support"),

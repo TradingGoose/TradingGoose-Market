@@ -97,9 +97,9 @@ function restoreEnvironment(snapshot: EnvironmentSnapshot): void {
   }
 }
 
-async function runStandardMigration(databaseUrl: string): Promise<void> {
+async function prepareSchema(databaseUrl: string, command: "db:migrate" | "db:push"): Promise<void> {
   await new Promise<void>((resolveMigration, rejectMigration) => {
-    const child = spawn("bun", ["run", "db:migrate"], {
+    const child = spawn("bun", ["run", command, ...(command === "db:push" ? ["--force"] : [])], {
       cwd: PROJECT_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: ["ignore", "pipe", "pipe"],
@@ -117,7 +117,7 @@ async function runStandardMigration(databaseUrl: string): Promise<void> {
       else {
         rejectMigration(
           new Error(
-            `bun run db:migrate failed with ${signal ? `signal ${signal}` : `exit code ${code}`}.\n${output}`,
+            `bun run ${command} failed with ${signal ? `signal ${signal}` : `exit code ${code}`}.\n${output}`,
           ),
         );
       }
@@ -155,7 +155,8 @@ describe.sequential("v1 retained customer usage", () => {
         targetSql = postgres(targetUrl, { max: 2, prepare: false });
 
         try {
-          await runStandardMigration(targetUrl);
+          await prepareSchema(targetUrl, "db:migrate");
+          await prepareSchema(targetUrl, "db:push");
           environmentSnapshot = installApplicationEnvironment(targetUrl);
           vi.resetModules();
 

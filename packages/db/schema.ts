@@ -214,6 +214,14 @@ export const userStats = pgTable(
     currentPeriodCost: numeric("current_period_cost").notNull().default("0"),
     lastPeriodCost: numeric("last_period_cost").notNull().default("0"),
     billedOverageThisPeriod: numeric("billed_overage_this_period").notNull().default("0"),
+    grantedOnboardingAllowanceUsd: numeric("granted_onboarding_allowance_usd").notNull().default("0"),
+    customUsageLimit: numeric("custom_usage_limit"),
+    customUsageLimitUpdatedAt: timestamp("custom_usage_limit_updated_at", { withTimezone: true }).notNull().defaultNow(),
+    billingUsageNotificationsEnabled: boolean("billing_usage_notifications_enabled").notNull().default(true),
+    emailPreferences: jsonb("email_preferences").$type<{
+      unsubscribeAll?: boolean;
+      unsubscribeNotifications?: boolean;
+    }>().notNull().default({}),
     billingBlocked: boolean("billing_blocked").notNull().default(false),
     lastActive: timestamp("last_active", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
@@ -226,6 +234,11 @@ export const userStats = pgTable(
     billingReferenceIdUnique: uniqueIndex(
       "user_stats_billing_reference_id_unique"
     ).on(table.billingReferenceId),
+    allowanceCheck: check(
+      "user_stats_allowance_check",
+      sql`${table.grantedOnboardingAllowanceUsd} >= 0 and ${table.grantedOnboardingAllowanceUsd} < 'Infinity'::numeric and scale(${table.grantedOnboardingAllowanceUsd}) <= 9
+          and (${table.customUsageLimit} is null or (${table.customUsageLimit} >= 0 and ${table.customUsageLimit} < 'Infinity'::numeric and scale(${table.customUsageLimit}) <= 9))`
+    ),
     quantitiesCheck: check(
       "user_stats_quantities_check",
       sql`
@@ -487,6 +500,7 @@ export const marketApiUsageEvent = pgTable(
     billingMode: text("billing_mode").notNull(),
     billableQuantity: integer("billable_quantity").notNull(),
     rateUsdPer1000Reads: numeric("rate_usd_per_1000_reads"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
     billableCostUsd: numeric("billable_cost_usd"),
     applicationUrl: text("application_url"),
     applicationTitle: text("application_title")
@@ -529,6 +543,11 @@ export const marketApiUsageEvent = pgTable(
     billingModeCheck: check(
       "market_api_usage_events_billing_mode_check",
       sql`${table.billingMode} in ('enabled', 'disabled')`
+    ),
+    fundingSnapshotCheck: check(
+      "market_api_usage_events_funding_snapshot_check",
+      sql`${table.stripeSubscriptionId} is null or (length(btrim(${table.stripeSubscriptionId})) > 0
+          and ${table.keyClass} = 'public' and ${table.billingMode} = 'enabled' and ${table.billableQuantity} = 1)`
     ),
     billableCheck: check(
       "market_api_usage_events_billable_check",
@@ -583,7 +602,7 @@ export const timeZones = pgTable(
   "time_zones",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_TZ_' || upper(substr(md5(random()::text), 1, 6))`),
     name: text("name").notNull(),
     offset: text("offset").notNull(),
@@ -592,7 +611,6 @@ export const timeZones = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "time_zones_pkey" }),
     idPattern: check("time_zones_id_pattern", sql`${table.id} ~ '^TG_TZ_[0-9A-F]{6}$'`),
     uniqueNameIdx: uniqueIndex("time_zones_name_idx").on(table.name)
   })
@@ -602,7 +620,7 @@ export const countries = pgTable(
   "countries",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_CTRY_' || upper(substr(md5(random()::text), 1, 6))`),
     code: text("code").notNull(),
     name: text("name").notNull(),
@@ -611,7 +629,6 @@ export const countries = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "countries_pkey" }),
     idPattern: check("countries_id_pattern", sql`${table.id} ~ '^TG_CTRY_[0-9A-F]{6}$'`),
     codePattern: check("countries_code_pattern", sql`${table.code} ~ '^[A-Z]{2}$'`),
     uniqueCodeIdx: uniqueIndex("countries_code_idx").on(table.code),
@@ -623,7 +640,7 @@ export const currencies = pgTable(
   "currencies",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_CURR_' || upper(substr(md5(random()::text), 1, 6))`),
     code: text("code").notNull(),
     name: text("name").notNull(),
@@ -632,7 +649,6 @@ export const currencies = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "currencies_pkey" }),
     // Allow alphanumeric currency codes up to 16 chars
     codePattern: check("currencies_code_pattern", sql`${table.code} ~ '^[A-Z0-9]{1,16}$'`),
     uniqueCodeIdx: uniqueIndex("currencies_code_idx").on(table.code),
@@ -693,7 +709,7 @@ export const cities = pgTable(
   "cities",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_CITY_' || upper(substr(md5(random()::text), 1, 6))`),
     countryId: text("country_id")
       .notNull()
@@ -704,7 +720,6 @@ export const cities = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "cities_pkey" }),
     idPattern: check("cities_id_pattern", sql`${table.id} ~ '^TG_CITY_[0-9A-F]{6}$'`),
     uniqueCountryCityIdx: uniqueIndex("cities_country_code_name_idx").on(table.countryId, table.name)
   })
@@ -714,7 +729,7 @@ export const markets = pgTable(
   "markets",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_MKT_' || upper(substr(md5(random()::text), 1, 6))`),
     name: text("name").notNull(),
     code: text("code").notNull().unique(),
@@ -727,7 +742,6 @@ export const markets = pgTable(
     url: text("url")
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "markets_pkey" }),
     idPattern: check("markets_id_pattern", sql`${table.id} ~ '^TG_MKT_[0-9A-F]{6}$'`),
     codePattern: check("markets_code_pattern", sql`${table.code} ~ '^[A-Z0-9]{1,16}$'`),
     uniqueCodeIdx: uniqueIndex("markets_code_idx").on(table.code),
@@ -740,7 +754,7 @@ export const exchanges = pgTable(
   "exchanges",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_EXCH_' || upper(substr(md5(random()::text), 1, 6))`),
     mic: text("mic").notNull(),
     name: text("name"),
@@ -757,7 +771,6 @@ export const exchanges = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "exchanges_pkey" }),
     idPattern: check("exchanges_id_pattern", sql`${table.id} ~ '^TG_EXCH_[0-9A-F]{6}$'`),
     micIdx: uniqueIndex("exchanges_exch_idx").on(table.mic),
     countryIdIdx: index("exchanges_country_id_idx").on(table.countryId),
@@ -806,7 +819,7 @@ export const listings = pgTable(
   "listings",
   {
     id: text("id")
-      .notNull()
+      .primaryKey()
       .default(sql`'TG_LSTG_' || upper(substr(md5(random()::text), 1, 6))`),
     base: text("base").notNull(), // ticker/root/base leg (e.g., AAPL, GBP, BTC)
     quote: text("quote").references(() => currencies.id, { onDelete: "set null" }), // reference to currencies.id (quote currency/trading currency)
@@ -823,7 +836,6 @@ export const listings = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.id], name: "listings_pkey" }),
     idPattern: check("listings_id_pattern", sql`${table.id} ~ '^TG_LSTG_[0-9A-Fa-f]{6}$'`),
     listingUniqueIdx: uniqueIndex("listings_base_quote_primary_exch_idx").on(
       table.base,

@@ -81,7 +81,8 @@ const DialogContent = React.forwardRef<
           }
         }}
         onEscapeKeyDown={(event) => {
-          if (!isInteractionReady) {
+          const editing = event.target instanceof HTMLElement && event.target.hasAttribute("data-escape-cancels-edit")
+          if (!isInteractionReady || editing) {
             event.preventDefault()
             return
           }

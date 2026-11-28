@@ -9,8 +9,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
-import { useMarketResource, marketApiRequest } from "@/hooks/use-market-resource";
-import type { BillingSummary } from "@/lib/account/contracts";
+import { useSubscriptionData } from "@/hooks/queries/subscription";
+import { useBillingPortal } from "@/lib/billing/billing-portal";
 import { authClient } from "@/lib/auth/client";
 
 export type UserMenuUser = {
@@ -27,9 +27,10 @@ function initials(name: string) {
 
 export function UserMenu({ user, mode, onOpenSettings }: { user: UserMenuUser; mode: "account" | "admin"; onOpenSettings: (section: SettingsSection) => void }) {
   const { theme, setTheme } = useTheme();
-  const { data: billing, isLoading: isBillingLoading } = useMarketResource<BillingSummary>("/api/account/billing");
+  const { data: billing, isLoading: isBillingLoading } = useSubscriptionData();
   const [signingOut, setSigningOut] = useState(false);
-  const [openingPortal, setOpeningPortal] = useState(false);
+  const portal = useBillingPortal();
+  const openingPortal = portal.pending;
   const billingEnabled = billing?.billingEnabled !== false;
   const portalUnavailable = billing?.portalAvailable === false;
 
@@ -43,19 +44,6 @@ export function UserMenu({ user, mode, onOpenSettings }: { user: UserMenuUser; m
       // Keep the current shell available when the sign-out request fails.
     } finally {
       setSigningOut(false);
-    }
-  }
-
-  async function openPortal() {
-    if (openingPortal || isBillingLoading || !billingEnabled || portalUnavailable) return;
-    setOpeningPortal(true);
-    try {
-      const result = await marketApiRequest<{ url: string }>("/api/account/billing/portal", { method: "POST", body: "{}" });
-      window.location.assign(result.url);
-    } catch {
-      // Leave the menu usable so a transient portal failure can be retried.
-    } finally {
-      setOpeningPortal(false);
     }
   }
 
@@ -76,7 +64,8 @@ export function UserMenu({ user, mode, onOpenSettings }: { user: UserMenuUser; m
             <DropdownMenuGroup>
               <DropdownMenuItem onSelect={(event) => { event.preventDefault(); onOpenSettings("profile"); }}><UserRound />Profile</DropdownMenuItem>
             </DropdownMenuGroup>
-            {billingEnabled ? <><DropdownMenuSeparator /><DropdownMenuGroup><DropdownMenuItem onSelect={(event) => { event.preventDefault(); onOpenSettings("subscription"); }}><Star />Subscription</DropdownMenuItem><DropdownMenuItem disabled={openingPortal || isBillingLoading || portalUnavailable} onSelect={(event) => { event.preventDefault(); void openPortal(); }}>{openingPortal ? <Loader2 className="animate-spin" /> : <CreditCard />}{openingPortal ? "Opening Billing…" : "Manage Billing"}</DropdownMenuItem></DropdownMenuGroup></> : null}
+            {billingEnabled ? <><DropdownMenuSeparator /><DropdownMenuGroup><DropdownMenuItem onSelect={(event) => { event.preventDefault(); onOpenSettings("subscription"); }}><Star />Subscription</DropdownMenuItem><DropdownMenuItem disabled={openingPortal || isBillingLoading || portalUnavailable} onSelect={(event) => { event.preventDefault(); void portal.open().catch(() => {}); }}>{openingPortal ? <Loader2 className="animate-spin" /> : <CreditCard />}{openingPortal ? "Opening Billing…" : "Manage Billing"}</DropdownMenuItem></DropdownMenuGroup></> : null}
+            {portal.error && <p role="alert" className="px-2 text-xs text-destructive">{portal.error}</p>}
             {user.isAdmin ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => window.location.assign(mode === "admin" ? "/account/api-keys" : "/admin")}><ShieldCheck />{mode === "admin" ? "Customer account" : "Admin"}</DropdownMenuItem></> : null}
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={signingOut} onSelect={(event) => { event.preventDefault(); void signOut(); }}>{signingOut ? <Loader2 className="animate-spin" /> : <LogOut />}{signingOut ? "Signing out…" : "Sign out"}</DropdownMenuItem>

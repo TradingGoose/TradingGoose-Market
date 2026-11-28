@@ -23,6 +23,7 @@ interface SubscriptionState {
 }
 
 interface StatsState {
+  grantedOnboardingAllowanceUsd: string;
   id: string;
   usageOwnerId: string;
   currentPeriodRequestQuantity: string;
@@ -46,6 +47,7 @@ const state = vi.hoisted(() => ({
   liveUsers: [] as Array<{ id: string; stripeCustomerId: string | null }>,
   updates: [] as UpdateRecord[],
   activeTransaction: 0,
+  sendRecovery: vi.fn(),
   clearCasMiss: false,
   settle: vi.fn(async (_stripe: unknown, input: { snapshot: { fromUsd: string; throughUsd: string; requestQuantity: string } }) => input.snapshot),
   reconciledBilledUsd: null as string | null,
@@ -57,6 +59,8 @@ const state = vi.hoisted(() => ({
   transaction: vi.fn(),
 }));
 
+vi.mock("@/lib/billing/notifications", () => ({ sendMarketPaymentFailureEmail: state.sendRecovery }));
+
 vi.mock("@/lib/db/locks", () => ({
   acquireBillingSubjectLock: vi.fn(async () => undefined),
 }));
@@ -67,7 +71,7 @@ vi.mock("@/lib/db/runtime", () => ({
 
 vi.mock("@/lib/environment", () => ({
   getMarketRuntimeConfig: () => ({
-    billing: { stripePriceId: "price_market_payg" },
+    billing: { onboardingAllowanceUsd: "25", stripePriceId: "price_market_payg" },
   }),
 }));
 
@@ -128,6 +132,7 @@ beforeEach(() => {
   state.reconciledBilledUsd = null;
   state.realProvider = false;
   state.failCommitOnce = false;
+  state.sendRecovery.mockReset();
   state.events = null;
   state.beforeTransaction = null;
   state.transaction.mockReset().mockImplementation(
@@ -543,6 +548,28 @@ describe("PAYG final cancellation settlement", () => {
     expect(state.settle).not.toHaveBeenCalled();
   });
 
+  it.each(["overage_threshold_billing", "final_overage_billing", "overage_billing"])("sends first-attempt recovery after committing an already-blocked %s", async type => {
+    const stripe = usageStripeFixture();
+    const invoice = paymentInvoice("in_first", "open");
+    invoice.metadata!.type = type;
+    state.stats!.billingBlocked = true;
+    stripe.invoices.set(invoice.id, invoice);
+    state.failCommitOnce = true;
+    await expect(handleMarketUsageInvoicePayment(stripe.client, invoice, true)).rejects.toThrow("Database commit failed");
+    expect(state.sendRecovery).not.toHaveBeenCalled();
+    await handleMarketUsageInvoicePayment(stripe.client, invoice);
+    expect(state.sendRecovery).not.toHaveBeenCalled();
+    await handleMarketUsageInvoicePayment(stripe.client, invoice, true);
+    expect(state.sendRecovery).toHaveBeenCalledTimes(1);
+    for (const attempt_count of [0, 2]) {
+      stripe.invoices.set(invoice.id, { ...invoice, attempt_count });
+      await handleMarketUsageInvoicePayment(stripe.client, invoice, true);
+    }
+    stripe.invoices.set(invoice.id, { ...invoice, status: "paid", attempt_count: 1 });
+    await handleMarketUsageInvoicePayment(stripe.client, invoice, true);
+    expect(state.sendRecovery).toHaveBeenCalledTimes(1);
+  });
+
   it("durably cancels first, then waives an empty cycle without replacing prior history", async () => {
     state.stats = usageStats({
       currentPeriodRequestQuantity: "0",
@@ -567,6 +594,7 @@ describe("PAYG final cancellation settlement", () => {
         table: "subscription",
         values: { status: "canceled" },
       },
+      expect.objectContaining({ table: "userStats", values: expect.objectContaining({ customUsageLimit: "25", currentPeriodCost: "0" }) }),
       expect.objectContaining({
         transaction: 2,
         table: "subscription",
@@ -883,6 +911,7 @@ function usageStats(overrides: Partial<StatsState> = {}): StatsState {
   return {
     id: "stats_1",
     usageOwnerId: "owner_1",
+    grantedOnboardingAllowanceUsd: "25",
     currentPeriodRequestQuantity: "1",
     currentPeriodCost: "1",
     billedOverageThisPeriod: "0",

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const billing = vi.hoisted(() => ({ enabled: true, onboardingAllowanceUsd: "25" }));
+vi.mock("@/lib/environment", () => ({ getMarketRuntimeConfig: () => ({ billing }) }));
+
 const lockState = vi.hoisted(() => ({
   tails: new Map<string, Promise<void>>(),
   active: 0,
@@ -34,6 +37,7 @@ import { schema } from "@tradinggoose/db";
 import { ensureMarketCustomerState } from "../../lib/billing/customer-state";
 
 beforeEach(() => {
+  billing.onboardingAllowanceUsd = "25";
   lockState.tails.clear();
   lockState.active = 0;
   lockState.maxActive = 0;
@@ -54,6 +58,19 @@ describe("standalone customer lifecycle", () => {
     expect(results.every((state) => state.usageOwner.id === "owner_customer_1")).toBe(true);
     expect(results.every((state) => state.userStats.billingReferenceId === "customer_1")).toBe(true);
     expect(results.every((state) => state.subscription.id === "sub_default_customer_1")).toBe(true);
+  });
+
+  it.each([true, false])("seeds once with billing enabled=%s", async (enabled) => {
+    billing.enabled = enabled;
+    const fixture = customerDatabase("customer_1");
+    const provision = () => ensureMarketCustomerState("customer_1", fixture.database as never);
+    const { userStats } = await provision();
+    expect(userStats).toMatchObject({ grantedOnboardingAllowanceUsd: "25", customUsageLimit: "25", customUsageLimitUpdatedAt: expect.any(Date) });
+    const edited = { ...userStats, grantedOnboardingAllowanceUsd: "18", customUsageLimit: "50", currentPeriodCost: "4",
+      billingUsageNotificationsEnabled: false, emailPreferences: { unsubscribeNotifications: true } };
+    fixture.seedStats(edited);
+    billing.onboardingAllowanceUsd = "100";
+    expect((await provision()).userStats).toEqual(edited);
   });
 
   it("is additive and does not rewrite database-provisioned admin membership", async () => {

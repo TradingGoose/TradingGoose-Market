@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { refreshSubscription, useSubscriptionData } from "@/hooks/queries/subscription";
+import { refreshPreferences } from "@/hooks/queries/billing-settings";
 import { usePathname } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -48,7 +51,25 @@ export function AppShell({ children, defaultOpen, defaultWidth, user, mode }: { 
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("profile");
   const [emailChangeState, setEmailChangeState] = useState<EmailChangeCallbackState>({ kind: "none" });
   const consumedEmailCallback = useRef(false);
-  const openSettings = (section: SettingsSection) => { setSettingsSection(section); setSettingsOpen(true); };
+  const client = useQueryClient();
+  const billing = useSubscriptionData();
+  const openSettings = useCallback((section: SettingsSection) => {
+    if (section === "subscription") {
+      void refreshSubscription(client);
+      void refreshPreferences(client, user.id);
+    }
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  }, [client, user.id]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const action = url.searchParams.get("billing");
+    if (!action || !["usage", "upgrade", "updated"].includes(action)) return;
+    url.searchParams.delete("billing");
+    window.history.replaceState(window.history.state, "", url);
+    queueMicrotask(() => openSettings("subscription"));
+  }, [openSettings]);
 
   const refreshUser = useCallback(async (): Promise<UserMenuUser | null> => {
     try {
@@ -117,7 +138,7 @@ export function AppShell({ children, defaultOpen, defaultWidth, user, mode }: { 
       </div>
       <SettingsDialog
         open={settingsOpen}
-        section={settingsSection}
+        section={settingsSection === "subscription" && billing.data?.billingEnabled === false ? "profile" : settingsSection}
         onOpenChange={setSettingsOpen}
         user={{ id: currentUser.id, name: currentUser.name, email: currentUser.email, image: currentUser.image ?? null }}
         emailChangeState={emailChangeState}

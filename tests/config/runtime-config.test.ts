@@ -87,6 +87,7 @@ describe("getMarketRuntimeConfig", () => {
       audienceId: null
     });
     expect(config.billing).toEqual({
+      onboardingAllowanceUsd: "0",
       enabled: false,
       usdPer1000Reads: "1.25",
       requestNanoUsd: 1_250_000n,
@@ -320,6 +321,16 @@ describe("getMarketRuntimeConfig", () => {
         })
       )
     ).toThrow(/safe-integer/);
+  });
+
+  it.each([[undefined, "0"], ["25", "25"], ["0", "0"], ["000.000001000", "0.000001"]])(
+    "parses onboarding allowance %s", (value, expected) => {
+      expect(getMarketRuntimeConfig(validEnvironment({ ONBOARDING_ALLOWANCE_USD: value })).billing.onboardingAllowanceUsd).toBe(expected);
+    },
+  );
+
+  it.each(["", "-1", "1e2", "0.0000000001"])("rejects invalid grant %s", (value) => {
+    expect(() => getMarketRuntimeConfig(validEnvironment({ ONBOARDING_ALLOWANCE_USD: value }))).toThrow(/ONBOARDING_ALLOWANCE_USD/);
   });
 
   it("requires the complete enabled Stripe matrix", () => {

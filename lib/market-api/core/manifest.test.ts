@@ -35,8 +35,8 @@ const expectedKeyedRoutes = [
 ] as const;
 
 describe("Market route manifest", () => {
-  test("is a unique finite 82-row inventory", () => {
-    assert.equal(MARKET_API_ROUTE_MANIFEST.length, 82);
+  test("is a unique finite 85-row inventory", () => {
+    assert.equal(MARKET_API_ROUTE_MANIFEST.length, 85);
     assert.equal(
       new Set(MARKET_API_ROUTE_MANIFEST.map((descriptor) => descriptor.path)).size,
       MARKET_API_ROUTE_MANIFEST.length,
@@ -69,6 +69,9 @@ describe("Market route manifest", () => {
     const expected = new Map<string, readonly [string, string, string]>([
       ["/api/account/billing", ["GET", "customer-session", "browser"]],
       ["/api/account/billing/payg/activate", ["POST", "customer-session", "browser"]],
+      ["/api/account/billing/usage-limit", ["GET|PUT", "customer-session", "browser"]],
+      ["/api/account/billing/notifications", ["GET|PATCH", "customer-session", "browser"]],
+      ["/api/billing/notifications/unsubscribe", ["GET|POST", "public-support", "support"]],
       ["/api/account/billing/portal", ["POST", "customer-session", "browser"]],
       ["/api/account/api-keys", ["GET|POST", "customer-session", "browser"]],
       ["/api/account/api-keys/[id]", ["GET|PATCH|DELETE", "customer-session", "browser"]],

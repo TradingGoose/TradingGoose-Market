@@ -35,7 +35,26 @@ export type MarketApiKeyDetail = MarketApiKeySummary & {
   providerEnforcement: ProviderEnforcement;
 };
 
+export type UsageLimitInfo = {
+  currentLimitUsd: string | null;
+  minimumLimitUsd: string;
+  canEdit: boolean;
+  updatedAt: string | null;
+};
+
 export type BillingSummary = {
+  grantedOnboardingAllowanceUsd: string;
+  availableOnboardingAllowanceUsd: string;
+  hasPaidSubscription: boolean;
+  hasStripeSubscription: boolean;
+  hasPaymentMethodOnFile: boolean;
+  nextBillingDate: string | null;
+  usageLimit: {
+    currentLimitUsd: string | null;
+    isExceeded: boolean;
+    percentUsed: number;
+    status: "ok" | "warning" | "exceeded" | "blocked";
+  };
   billingEnabled: boolean;
   billingBlocked: boolean;
   plan: "payg";

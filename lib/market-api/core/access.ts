@@ -2,13 +2,13 @@ import {
   marketApiKeys,
   marketApiUsageEvent,
   marketUsageOwner,
-  subscription,
-  userStats,
   systemAdmin,
   user,
 } from "@tradinggoose/db/schema";
 import type { MarketTransaction } from "@tradinggoose/db";
 import { and, eq, gte, sql } from "drizzle-orm";
+import { effectiveLimitNano, isFreeBinding, isPaidBinding, readPersonalBillingState } from "@/lib/billing/user-stats";
+import { scheduleUsageThresholdEmail } from "@/lib/billing/notifications";
 import { nanoUsdToDecimalUsd } from "@/lib/billing/money";
 import {
   checkAndBillMarketThreshold,
@@ -186,6 +186,7 @@ export async function handleKeyedMarketRoute(
         actor,
         descriptor,
         method: "POST",
+        stripeSubscriptionId: null,
         billingMode: "disabled",
         rateUsdPer1000Reads: null,
         billableCostUsd: null,
@@ -273,7 +274,21 @@ async function admitPublicRequest(input: {
       if (billed) await acquireBillingSubjectLock(tx, userId);
       await acquireApiKeyLock(tx, input.keyId);
     });
-    const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId, billed);
+    const row = await reloadAuthorizedPublicKey(tx, input.keyId, userId);
+    const funding = billed ? await readPersonalBillingState(tx, userId) : null;
+    let usage: { before: bigint; limit: bigint } | null = null;
+    if (funding) {
+      const { subscription: local, stats, customerId } = funding;
+      if (stats.usageOwnerId !== row.owner.id || stats.billingBlocked ||
+        !(isFreeBinding(local) || (isPaidBinding(local) && local.stripeCustomerId === customerId))) {
+        return { response: jsonError("Billing is unavailable for this account", 402, "BILLING_REQUIRED") };
+      }
+      usage = { before: decimalUsdToNanoUsd(stats.currentPeriodCost), limit: effectiveLimitNano(stats) };
+      if (usage.before >= usage.limit) {
+        return { response: jsonError("Usage limit exceeded", 402, "USAGE_LIMIT_EXCEEDED") };
+      }
+    }
+    const stripeSubscriptionId = funding?.subscription.stripeSubscriptionId ?? null;
     const cap = billed && row.key.spendLimitUsd && row.key.spendWindowDays
       ? createSpendLimitCodec(row.key.spendLimitUsd, row.key.spendWindowDays) : null;
     if (cap) {
@@ -293,16 +308,21 @@ async function admitPublicRequest(input: {
       actor,
       descriptor: input.descriptor,
       method: input.request.method as "GET" | "HEAD",
+      stripeSubscriptionId,
       billingMode: billed ? "enabled" : "disabled",
       rateUsdPer1000Reads: billed ? config.billing.usdPer1000Reads : null,
       billableCostUsd: billed ? nanoUsdToDecimalUsd(config.billing.requestNanoUsd) : null,
       attribution: input.attribution,
       admittedAt,
     });
-    return { actor, eventId };
+    return { actor, eventId, stripeSubscriptionId, usage };
   });
 
-  if (billed && !admitted.response) {
+  if (admitted.usage) {
+    const { before, limit } = admitted.usage;
+    scheduleUsageThresholdEmail(userId, before, before + config.billing.requestNanoUsd, limit);
+  }
+  if (admitted.stripeSubscriptionId) {
     try {
       await database.transaction(async (tx) => {
         await withBoundedLockAcquisition(tx, () => acquireBillingSubjectLock(tx, userId));
@@ -326,7 +346,6 @@ async function reloadAuthorizedPublicKey(
   tx: MarketTransaction,
   keyId: string,
   expectedUserId: string,
-  requireActiveBilling: boolean,
 ) {
   const rows = await tx
     .select({
@@ -357,37 +376,6 @@ async function reloadAuthorizedPublicKey(
     );
   }
 
-  if (requireActiveBilling) {
-    const [payg] = await tx
-      .select({
-        status: subscription.status,
-        stripeCustomerId: subscription.stripeCustomerId,
-        stripeSubscriptionId: subscription.stripeSubscriptionId,
-        billingBlocked: userStats.billingBlocked,
-      })
-      .from(subscription)
-      .innerJoin(userStats, eq(userStats.userId, subscription.referenceId))
-      .where(
-        and(
-          eq(subscription.referenceType, "user"),
-          eq(subscription.referenceId, row.activeUserId),
-          eq(subscription.plan, "payg"),
-        ),
-      )
-      .for("update", { of: subscription })
-      .limit(1);
-    if (
-      !payg ||
-      payg.status !== "active" ||
-      !payg.stripeCustomerId ||
-      !payg.stripeSubscriptionId ||
-      payg.billingBlocked
-    ) {
-      throw new AccessResponseError(
-        jsonError("Active billing without outstanding payment failures is required", 402, "BILLING_REQUIRED"),
-      );
-    }
-  }
   return row;
 }
 
