@@ -101,8 +101,8 @@ export function SubscriptionSettings({ onOpenChange, userId }: { onOpenChange: (
       badge={<button type="button" className="h-[1.125rem] rounded-sm border border-primary bg-background px-2 text-xs font-bold text-primary disabled:opacity-50"
         disabled={disabled} aria-busy={busy || (isEdit && limitPending) || undefined} onClick={primaryAction}>
         {action}</button>}
-      limitEditor={isEdit ? <UsageLimit ref={editor} currentLimit={Number(info.currentLimitUsd)} currentUsage={Number(data.currentPeriodCostUsd)}
-        canEdit={info.canEdit} minimumLimit={Number(info.minimumLimitUsd)} /> : undefined}
+      limitEditor={isEdit && info.currentLimitUsd !== null ? <UsageLimit ref={editor} currentLimit={info.currentLimitUsd} currentUsage={data.currentPeriodCostUsd}
+        canEdit={info.canEdit} minimumLimit={info.minimumLimitUsd} /> : undefined}
       onResolvePayment={data.portalAvailable && !busy ? openPortal : undefined} /></div>
     <article aria-current="true" className="relative flex flex-col rounded-md border border-primary p-4">
       <header className="mb-4"><h3 className="mb-2 text-sm font-semibold">PAYG</h3>

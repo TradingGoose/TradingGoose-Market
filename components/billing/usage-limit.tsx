@@ -4,15 +4,16 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, LoaderCircle, Pencil, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { decimalUsdToNanoUsd } from '@/lib/billing/money'
 import { cn } from '@/lib/ui/utils'
 import { subscriptionKeys, subscriptionMutationOptions } from '@/hooks/queries/subscription'
 
 
 interface UsageLimitProps {
-  currentLimit: number
-  currentUsage: number
+  currentLimit: string
+  currentUsage: string
   canEdit: boolean
-  minimumLimit: number
+  minimumLimit: string
 }
 
 export interface UsageLimitRef {
@@ -24,7 +25,8 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
     { currentLimit, currentUsage, canEdit, minimumLimit },
     ref
   ) => {
-    const [inputValue, setInputValue] = useState(currentLimit.toString())
+    const [draft, setDraft] = useState<string | null>(null)
+    const inputValue = draft ?? currentLimit
     const [errorType, setErrorType] = useState<'general' | 'belowUsage' | null>(null)
     const hasError = errorType !== null
     const [isEditing, setIsEditing] = useState(false)
@@ -41,9 +43,9 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
 
     const handleStartEdit = () => {
       if (!canEdit || isPending || saving()) return
+      setDraft(null)
       setErrorType(null)
       setIsEditing(true)
-      setInputValue(currentLimit.toString())
     }
 
     useImperativeHandle(ref, () => ({ startEdit: handleStartEdit }))
@@ -55,49 +57,44 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
       }
     }, [isEditing])
 
+    const finishEditing = () => {
+      setIsEditing(false)
+      setDraft(null)
+      setErrorType(null)
+    }
+
     const handleSubmit = async () => {
       if (submitLockRef.current || isPending || saving()) return
 
-      const newLimit = Number.parseInt(inputValue, 10)
+      const decimal = draft?.match(/^(\d+)(?:\.(\d*))?$/)
+      if (!decimal) return finishEditing()
 
-      if (Number.isNaN(newLimit) || newLimit < minimumLimit) {
-        setInputValue(currentLimit.toString())
-        setIsEditing(false)
-        return
+      const newLimit = BigInt(decimal[1]).toString()
+      const fraction = decimal[2]?.replace(/0+$/, '')
+      const enteredLimit = fraction ? `${newLimit}.${fraction}` : newLimit
+      const newLimitNano = decimalUsdToNanoUsd(newLimit)
+      if (enteredLimit === currentLimit || newLimitNano < decimalUsdToNanoUsd(minimumLimit)) {
+        return finishEditing()
       }
 
-      if (newLimit < currentUsage) {
+      if (newLimitNano < decimalUsdToNanoUsd(currentUsage)) {
         setErrorType('belowUsage')
         return
       }
 
-      if (newLimit === currentLimit) {
-        setIsEditing(false)
-        return
-      }
+      if (newLimit === currentLimit) return finishEditing()
 
       submitLockRef.current = true
       try {
-        await updateUserLimitMutation.mutateAsync(String(newLimit))
-
-        setInputValue(newLimit.toString())
-        setIsEditing(false)
-        setErrorType(null)
+        await updateUserLimitMutation.mutateAsync(newLimit)
+        finishEditing()
       } catch (err) {
-
         const message = err instanceof Error ? err.message : String(err)
         setErrorType(message.includes('below current usage') ? 'belowUsage' : 'general')
-
-        setInputValue(currentLimit.toString())
+        setDraft(null)
       } finally {
         submitLockRef.current = false
       }
-    }
-
-    const handleCancelEdit = () => {
-      setIsEditing(false)
-      setInputValue(currentLimit.toString())
-      setErrorType(null)
     }
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -106,7 +103,7 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
         handleSubmit()
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        handleCancelEdit()
+        finishEditing()
       }
     }
 
@@ -122,7 +119,7 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
                 data-escape-cancels-edit=''
                 aria-label='Spending limit in USD'
                 value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
+                onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onBlur={(e) => {
                   const relatedTarget = e.relatedTarget as HTMLElement

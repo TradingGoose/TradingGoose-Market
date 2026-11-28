@@ -68,9 +68,12 @@ export async function GET(request: Request) {
     try {
       const fresh = await requireEnabledStripeClient().subscriptions.retrieve(local.stripeSubscriptionId);
       requireExactCurrentProviderSubscription(fresh, local);
-      if (fresh.status !== "canceled") summary.nextBillingDate = new Date(fresh.items.data[0].current_period_end * 1000).toISOString();
+      if (fresh.status !== "canceled") {
+        summary.nextBillingDate = new Date(fresh.items.data[0].current_period_end * 1000).toISOString();
+        summary.hasPaymentMethodOnFile ||= !!fresh.default_payment_method;
+      }
     } catch {
-      console.warn("Provider billing date unavailable", { subscriptionId: local.id });
+      console.warn("Provider subscription summary unavailable", { subscriptionId: local.id });
     }
   }
   return Response.json(summary);
