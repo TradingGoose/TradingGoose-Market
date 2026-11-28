@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, LoaderCircle, Pencil, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { decimalUsdToNanoUsd, nanoUsdToDecimalUsd, usdDecimalPattern } from '@/lib/billing/money'
+import { decimalUsdToNanoUsd, NANO_USD_PER_USD, nanoUsdToDecimalUsd, usdDecimalPattern } from '@/lib/billing/money'
 import { cn } from '@/lib/ui/utils'
 import { subscriptionKeys, subscriptionMutationOptions } from '@/hooks/queries/subscription'
 
@@ -103,8 +103,8 @@ export const UsageLimit = forwardRef<UsageLimitRef, UsageLimitProps>(
         const minimum = decimalUsdToNanoUsd(minimumLimit)
         const steppingDown = e.key === 'ArrowDown'
         if (steppingDown && inputValue !== '' && current <= minimum) return
-        const next = steppingDown ? current - 1n : current + 1n
-        setDraft(nanoUsdToDecimalUsd(next < minimum ? minimum : next))
+        const next = current + (steppingDown ? -NANO_USD_PER_USD : NANO_USD_PER_USD)
+        setDraft(nanoUsdToDecimalUsd(current < minimum || next < minimum ? minimum : next))
       }
     }
 
