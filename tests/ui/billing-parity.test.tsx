@@ -26,7 +26,7 @@ it("gives blocked feedback priority, even over an exceeded zero limit", () => {
   rerender(<UsageHeader data={{ ...zero, usageLimit: { ...zero.usageLimit, status: "warning", percentUsed: 80.3 } }} />);
   expect(screen.getByText("80% of your limit used.")).toBeTruthy();
 });
-it("selects the denominator, handles Escape, invalid/minimum/no-op, below-usage, blur, check and integer parsing", async () => {
+it("selects the denominator and handles Escape, invalid edits, usage floors, blur and fractional saves", async () => {
   const select = vi.spyOn(HTMLInputElement.prototype, "select");
   const f = billingFixture({ currentPeriodCostUsd: "20" }, { minimumLimitUsd: "10" });
   renderSettings(f.client);
@@ -50,12 +50,14 @@ it("selects the denominator, handles Escape, invalid/minimum/no-op, below-usage,
   fireEvent.keyDown(start("11"), { key: "Enter" });
   expect(screen.getByRole("alert").textContent).toContain("Limit cannot be below current usage");
   const input = screen.getByRole("spinbutton");
+  expect(input.getAttribute("step")).toBe("0.000000001");
   fireEvent.change(input, { target: { value: "40.9" } });
+  expect(screen.getByRole("alert").textContent).toContain("Limit cannot be below current usage");
   const check = screen.getByRole("button", { name: "Save limit" });
   fireEvent.blur(input, { relatedTarget: check });
   expect(f.count("PUT", limitPath)).toBe(0);
   fireEvent.click(check);
-  await screen.findByText("$40");
+  await screen.findByText("$40.9");
   fireEvent.blur(start("42"));
   await screen.findByText("$42");
   expect(f.count("PUT", limitPath)).toBe(2);
@@ -76,7 +78,7 @@ it.each([
   expect(f.count("PUT", limitPath)).toBe(0);
   expect(openedValue).toBe(currentLimitUsd);
 });
-it.each(["1e2", "3E-2"])("discards exponent input %s without changing the limit", async value => {
+it.each(["1e2", "3E-2", "25.1234567891", "-0.01"])("discards invalid decimal input %s without changing the limit", async value => {
   const f = billingFixture({ currentPeriodCostUsd: "0" }, { minimumLimitUsd: "0" });
   renderSettings(f.client);
   editLimit(value);
@@ -84,12 +86,17 @@ it.each(["1e2", "3E-2"])("discards exponent input %s without changing the limit"
   expect(f.count("PUT", limitPath)).toBe(0);
   expect(f.server.limit.currentLimitUsd).toBe("25");
 });
-it("saves the exact whole-dollar part beyond JavaScript's safe integer range", async () => {
-  const f = billingFixture();
+it.each([
+  ["9007199254740993.123456789", "0", "0", "9007199254740993.123456789"],
+  ["0.000000001", "0.000000001", "0.000000001", "0.000000001"],
+  [".1250", "0.124999999", "0.125", "0.125"],
+])("saves %s exactly at or above the usage and allowance floors", async (draft, currentPeriodCostUsd, minimumLimitUsd, expected) => {
+  const f = billingFixture({ currentPeriodCostUsd }, { minimumLimitUsd });
   renderSettings(f.client);
-  editLimit("9007199254740993.9");
+  editLimit(draft);
   await screen.findByRole("button", { name: "Edit limit" });
-  expect(f.server.limit.currentLimitUsd).toBe("9007199254740993");
+  expect(f.server.limit.currentLimitUsd).toBe(expected);
+  expect(f.count("PUT", limitPath)).toBe(1);
 });
 it("restores the confirmed input on a server error and rejects pre-render duplicate submits", async () => {
   const f = billingFixture();

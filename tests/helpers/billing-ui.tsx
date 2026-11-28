@@ -5,7 +5,9 @@ import { expect, vi } from "vitest";
 import { SettingsDialog } from "@/components/settings-dialog/settings-dialog";
 import { billingSettingsKeys, refreshPreferences } from "@/hooks/queries/billing-settings";
 import { refreshSubscription, subscriptionKeys } from "@/hooks/queries/subscription";
+import { usageLimitSummary } from "@/lib/account/billing-presentation";
 import type { BillingSummary, UsageLimitInfo } from "@/lib/account/contracts";
+import { decimalUsdToNanoUsd } from "@/lib/billing/money";
 
 export const account = { id: "user_1", email: "ada@example.test", name: "Ada" };
 export const baseSummary: BillingSummary = {
@@ -58,11 +60,8 @@ export function billingFixture(overrides: Partial<BillingSummary> = {}, info: Pa
     if (method === "PUT" && input === limitPath) {
       const { limitUsd } = JSON.parse(String(init?.body));
       server.limit = { ...server.limit, currentLimitUsd: limitUsd };
-      const percentUsed = Number(server.summary.currentPeriodCostUsd) / Number(limitUsd) * 100;
-      server.summary = { ...server.summary, usageLimit: {
-        currentLimitUsd: limitUsd, percentUsed, isExceeded: percentUsed >= 100,
-        status: percentUsed >= 100 ? "exceeded" : percentUsed >= 80 ? "warning" : "ok",
-      } };
+      server.summary = { ...server.summary, usageLimit: usageLimitSummary(server.summary.currentPeriodCostUsd,
+        server.summary.billingEnabled ? decimalUsdToNanoUsd(limitUsd) : null, server.summary.billingBlocked) };
     }
     if (method === "PATCH" && input === prefPath) {
       server.preference = JSON.parse(String(init?.body)).billingUsageNotificationsEnabled;

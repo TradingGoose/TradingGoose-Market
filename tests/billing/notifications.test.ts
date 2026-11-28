@@ -19,17 +19,28 @@ beforeEach(() => {
   state.recipients.mockReset().mockResolvedValue([recipient]);
 });
 it.each([[79, 80, 1], [89, 90, 1], [79, 95, 2], [80, 89, 0], [90, 99, 0]])("sends on crossing %s to %s", async (before, after, count) => {
-  scheduleUsageThresholdEmail("user", BigInt(before), BigInt(after), 100n);
+  scheduleUsageThresholdEmail("user", BigInt(before) * 1_000_000_000n, BigInt(after) * 1_000_000_000n, 100_000_000_000n);
   expect(state.after).toHaveBeenCalledTimes(count ? 1 : 0);
   expect(state.recipients).not.toHaveBeenCalled();
   if (count) await state.after.mock.calls[0][0]();
   expect(state.send).toHaveBeenCalledTimes(count);
+  if (before < 90 && after >= 90) {
+    expect(state.send.mock.calls.map(([mail]) => mail.subject)).toContain("You're nearing your spending limit on TradingGoose Market");
+  }
   for (const [mail] of state.send.mock.calls) {
     expect(mail.text).toContain("Unsubscribe");
-    if (mail.subject.startsWith("You're nearing")) {
+    if (mail.subject === "You're nearing your monthly budget on TradingGoose Market") {
       expect(mail.html).toContain(`TradingGoose Market: You&#x27;re at ${after}% of your PAYG monthly budget`);
     } else {
-      expect(mail.html).toContain("TradingGoose Market: PAYG is nearing its included usage");
+      expect(mail.subject).toBe("You're nearing your spending limit on TradingGoose Market");
+      expect(mail.html).toContain(`TradingGoose Market: You&#x27;re at ${after}% of your spending limit`);
+      for (const body of [mail.text, mail.html.replaceAll("<!-- -->", "")]) {
+        expect(body).toContain(`$${after}.00 of your $100.00 spending limit (${after}%)`);
+        expect(body).toContain("Review limits");
+        expect(body).toContain("We send this once when your usage reaches 90% of your spending limit.");
+        expect(body).toContain("/account/api-keys?billing=upgrade");
+        expect(body).not.toMatch(/included|billing tiers|upgrade threshold/i);
+      }
     }
     expect(mail.html).toContain("/account/api-keys?billing=");
     const url = new URL(mail.headers["List-Unsubscribe"].slice(1, -1));

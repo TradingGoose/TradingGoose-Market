@@ -87,6 +87,7 @@ for (const first of operations) {
       const additionalObserver = f.mount();
       expect(f.counts()).toEqual([0, 0, 0]);
       expect([f.summary().usageLimit.currentLimitUsd, f.metadata(), f.preference()]).toEqual(["100", "100", false]);
+      expect(f.summary().usageLimit).toMatchObject({ isExceeded: false, status: "ok", percentUsed: 25 });
       await release(gates[first], ok[first]);
       expect(await done[first]).toBe(ok[first]);
       expect(f.client.isMutating({ mutationKey: key(other) })).toBe(1);
@@ -94,13 +95,35 @@ for (const first of operations) {
       expect(f.count("GET", first === "limit" ? prefPath : limitPath)).toBe(0);
       await release(gates[other], ok[other]);
       expect(await done[other]).toBe(ok[other]);
-      await waitFor(() => expect(f.counts()).toEqual([1, 1, prefOk ? 1 : 0]));
-      expect(f.summary().usageLimit.currentLimitUsd).toBe(limitOk ? "100" : "25");
+      await waitFor(() => expect(f.counts()).toEqual([1, 1, 1]));
+      expect(f.summary().usageLimit).toMatchObject(limitOk
+        ? { currentLimitUsd: "100", isExceeded: false, status: "ok" }
+        : { currentLimitUsd: "25", isExceeded: true, status: "exceeded" });
       expect(f.metadata()).toBe(limitOk ? "100" : "25");
       expect(f.preference()).toBe(!prefOk);
       additionalObserver.unmount();
     });
 }
+it.each([
+  { current: "0.8", limit: "1", blocked: false, enabled: true, exceeded: false, status: "warning", percent: 80 },
+  { current: "0.000000001", limit: "0.000000001", blocked: false, enabled: true, exceeded: true, status: "exceeded", percent: 100 },
+  { current: "7999999999999999.999999999", limit: "10000000000000000", blocked: false, enabled: true, exceeded: false, status: "ok", percent: 80 },
+  { current: "0", limit: "0", blocked: false, enabled: true, exceeded: true, status: "exceeded", percent: 0 },
+  { current: "1", limit: "1", blocked: true, enabled: true, exceeded: true, status: "blocked", percent: 100 },
+  { current: "1", limit: "1", blocked: true, enabled: false, exceeded: false, status: "ok", percent: 0 },
+])("previews $current / $limit as $status and rolls back all indicators together", async ({ current, limit, blocked, enabled, exceeded, status, percent }) => {
+  const f = billingFixture({ currentPeriodCostUsd: current, billingEnabled: enabled, billingBlocked: blocked });
+  const cache = () => f.client.getQueryData<BillingSummary>(subscriptionKeys.user())!.usageLimit;
+  const previous = cache();
+  const gate = f.hold("PUT", limitPath);
+  const save = f.client.getMutationCache().build(f.client, subscriptionMutationOptions.updateUsageLimit(f.client)).execute(limit);
+  await gate.entered;
+  expect(cache()).toEqual({ currentLimitUsd: enabled ? limit : null, isExceeded: exceeded, status, percentUsed: expect.closeTo(percent) });
+  const rejected = expect(save).rejects.toThrow();
+  await release(gate, false);
+  await rejected;
+  expect(cache()).toEqual(previous);
+});
 it("shares reads, disables focus refetch and observes the two stale intervals on remount", async () => {
   const f = billingFixture();
   const past = Date.now() - 40_000;
