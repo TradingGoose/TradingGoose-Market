@@ -191,7 +191,7 @@ export async function assertBillingDateDoesNotBlockAdmission(sql: DirectSql) {
     import("../../app/api/account/billing/usage-limit/route"), import("../../lib/db/runtime"),
   ]);
   const id = "customer_date";
-  const customer = { id: "cus_date", name: "Billing date", email: "date@example.com", invoice_settings: { default_payment_method: "pm_date" } };
+  const customer = { id: "cus_date", name: "Billing date", email: "date@example.com", invoice_settings: { default_payment_method: null } };
   const end = Date.parse("2026-06-01Z") / 1000;
   const start = Date.parse("2026-05-01Z") / 1000;
   const base = environment.getMarketRuntimeConfig();
@@ -204,7 +204,7 @@ export async function assertBillingDateDoesNotBlockAdmission(sql: DirectSql) {
     customers: { retrieve: vi.fn(async () => customer) },
     subscriptions: { retrieve: vi.fn(async () => {
       lookingUp.release(); await release.promise;
-      return { id: "sub_date", customer: customer.id, status: "active",
+      return { id: "sub_date", customer: customer.id, status: "active", default_payment_method: "pm_date",
         metadata: { userId: id, referenceId: id, subscriptionId: `sub_default_${id}` },
         items: { data: [{ price: { id: "price_date" }, quantity: 1, current_period_start: start, current_period_end: end }] } };
     }) },
@@ -255,7 +255,9 @@ export async function assertBillingDateDoesNotBlockAdmission(sql: DirectSql) {
     expect(await sql`select billable_cost_usd from market_api_usage_events where stripe_subscription_id = 'sub_date'`)
       .toMatchObject([{ billable_cost_usd: "0.001" }]);
     release.release();
-    expect(await (await summary).json()).toMatchObject({ nextBillingDate: new Date(end*1000).toISOString(), currentPeriodCostUsd: "0" });
+    expect(await (await summary).json()).toMatchObject({
+      nextBillingDate: new Date(end*1000).toISOString(), currentPeriodCostUsd: "0", hasPaymentMethodOnFile: true,
+    });
 
     const beforeCommit = gate(), commit = gate();
     const db = runtime.requireDatabase();

@@ -38,7 +38,10 @@ it("selects the denominator, handles Escape, invalid/minimum/no-op, below-usage,
     fireEvent.change(input, { target: { value } });
     return input;
   };
-  fireEvent.keyDown(start("30"), { key: "Escape" });
+  const draft = start("30");
+  fireEvent.click(screen.getByRole("button", { name: "Increase Limit" }));
+  expect(draft.value).toBe("25");
+  fireEvent.keyDown(draft, { key: "Escape" });
   expect(screen.getByRole("dialog")).toBeTruthy();
   expect(select).toHaveBeenCalled();
   select.mockRestore();
@@ -58,6 +61,35 @@ it("selects the denominator, handles Escape, invalid/minimum/no-op, below-usage,
   expect(f.count("PUT", limitPath)).toBe(2);
   fireEvent.keyDown(document, { key: "Escape" });
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+it.each([
+  ["0.000000001", null], ["25.75", null], ["25.75", "25.7500"],
+])("preserves an unchanged API limit of %s on blur with draft %s", async (currentLimitUsd, draft) => {
+  const f = billingFixture({ currentPeriodCostUsd: "0" }, { currentLimitUsd, minimumLimitUsd: "0" });
+  renderSettings(f.client);
+  fireEvent.click(screen.getByRole("button", { name: "Increase Limit" }));
+  const input = screen.getByRole("spinbutton") as HTMLInputElement;
+  const openedValue = input.value;
+  if (draft) fireEvent.change(input, { target: { value: draft } });
+  fireEvent.blur(input);
+  await screen.findByRole("button", { name: "Edit limit" });
+  expect(f.count("PUT", limitPath)).toBe(0);
+  expect(openedValue).toBe(currentLimitUsd);
+});
+it.each(["1e2", "3E-2"])("discards exponent input %s without changing the limit", async value => {
+  const f = billingFixture({ currentPeriodCostUsd: "0" }, { minimumLimitUsd: "0" });
+  renderSettings(f.client);
+  editLimit(value);
+  await screen.findByRole("button", { name: "Edit limit" });
+  expect(f.count("PUT", limitPath)).toBe(0);
+  expect(f.server.limit.currentLimitUsd).toBe("25");
+});
+it("saves the exact whole-dollar part beyond JavaScript's safe integer range", async () => {
+  const f = billingFixture();
+  renderSettings(f.client);
+  editLimit("9007199254740993.9");
+  await screen.findByRole("button", { name: "Edit limit" });
+  expect(f.server.limit.currentLimitUsd).toBe("9007199254740993");
 });
 it("restores the confirmed input on a server error and rejects pre-render duplicate submits", async () => {
   const f = billingFixture();

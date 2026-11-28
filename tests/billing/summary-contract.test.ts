@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getPersonalPaygAction } from "@/lib/account/billing-presentation";
 
 const summaryState = vi.hoisted(() => ({
   retrieve: vi.fn(),
   snapshotComplete: false,
   billingEnabled: true,
   billingBlocked: false,
+  customerMethod: "pm_test" as string | null,
   recovery: "ready" as "ready" | "settlement_pending" | "unavailable",
   stripeSubscriptionId: null as string | null,
 }));
@@ -27,7 +29,7 @@ vi.mock("@/lib/billing/customer-state", () => {
       if (summaryState.recovery === "unavailable") {
         throw new Error("transport");
       }
-      return { id: "cus_1", invoice_settings: { default_payment_method: "pm_test" } };
+      return { id: "cus_1", invoice_settings: { default_payment_method: summaryState.customerMethod } };
     }),
   };
 });
@@ -43,7 +45,7 @@ vi.mock("@/lib/billing/user-stats", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/billing/user-stats")>(),
   readPersonalBillingState: async () => ({
     customerId: "cus_1",
-    subscription: { id: "sub_default_user_1", referenceId: "user_1", status: null, cancelAtPeriodEnd: false,
+    subscription: { id: "sub_default_user_1", referenceId: "user_1", status: summaryState.stripeSubscriptionId ? "active" : null, cancelAtPeriodEnd: false,
       stripeSubscriptionId: summaryState.stripeSubscriptionId, stripeCustomerId: summaryState.stripeSubscriptionId ? "cus_1" : null,
       periodEnd: new Date("2026-05-01Z") },
     stats: { grantedOnboardingAllowanceUsd: "25", customUsageLimit: "25", currentPeriodCost: "7", currentPeriodRequestQuantity: "7",
@@ -81,6 +83,7 @@ import { GET } from "../../app/api/account/billing/route";
 beforeEach(() => {
   summaryState.billingEnabled = true;
   summaryState.billingBlocked = false;
+  summaryState.customerMethod = "pm_test";
   summaryState.retrieve.mockReset();
   summaryState.snapshotComplete = false;
   summaryState.recovery = "ready";
@@ -95,7 +98,7 @@ describe("billing summary action availability", () => {
     const response = await GET(new Request("http://localhost/api/account/billing"));
     expect(await response.json()).toMatchObject({
       billingBlocked: true,
-      status: null,
+      status: "active",
       activationAvailable: false,
       portalAvailable: true,
     });
@@ -105,26 +108,39 @@ describe("billing summary action availability", () => {
     expect(summary).toMatchObject({ grantedOnboardingAllowanceUsd: "25", availableOnboardingAllowanceUsd: "18",
       hasPaymentMethodOnFile: true, usageLimit: { currentLimitUsd: "25", percentUsed: expect.closeTo(28) } });
   });
-  it.each(["current", "foreign", "canceled", "unavailable"])("reads the %s provider date after the local snapshot commits", async outcome => {
+  it.each([
+    ["current", "pm_subscription", null, true],
+    ["current", { id: "pm_subscription" }, null, true],
+    ["current", null, "pm_customer", true],
+    ["current", null, null, false],
+    ["foreign", "pm_foreign", null, false],
+    ["canceled", "pm_old", null, false],
+    ["unavailable", null, "pm_customer", true],
+  ] as const)("reads the %s provider after commit with subscription method %j and customer method %s", async (outcome, method, customerMethod, hasMethod) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15Z"));
     try {
       summaryState.stripeSubscriptionId = "sub_original";
+      summaryState.customerMethod = customerMethod;
       summaryState.retrieve.mockImplementation(async id => {
         expect(summaryState.snapshotComplete).toBe(true);
         expect(id).toBe("sub_original");
         summaryState.billingBlocked = true;
         summaryState.stripeSubscriptionId = "sub_later";
         if (outcome === "unavailable") throw new Error("date unavailable");
-        return { id, customer: outcome === "foreign" ? "other" : "cus_1", status: outcome === "canceled" ? "canceled" : "active",
+        return { id, customer: outcome === "foreign" ? "other" : "cus_1", status: outcome === "canceled" ? "canceled" : "active", default_payment_method: method,
           metadata: { userId: "user_1", referenceId: "user_1", subscriptionId: "sub_default_user_1" },
           items: { data: [{ price: { id: "price_market" }, quantity: 1,
             current_period_start: Date.parse("2026-05-01Z") / 1000, current_period_end: Date.parse("2026-06-01Z") / 1000 }] } };
       });
       const response = await GET(new Request("http://localhost"));
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ billingBlocked: false, currentPeriodCostUsd: "7", availableOnboardingAllowanceUsd: "0",
+      const summary = await response.json();
+      expect(summary).toMatchObject({ billingBlocked: false, currentPeriodCostUsd: "7", availableOnboardingAllowanceUsd: "0",
+        hasPaidSubscription: true, hasPaymentMethodOnFile: hasMethod,
         nextBillingDate: outcome === "current" ? "2026-06-01T00:00:00.000Z" : null });
+      expect(getPersonalPaygAction(summary, true)).toBe(hasMethod ? "Increase Limit" : "Add Payment Method");
+      expect(summaryState.retrieve).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
   it.each([
